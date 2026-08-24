@@ -1,0 +1,3 @@
+[submodule "kagemusha"]
+	path = kagemusha
+	url = https://github.com/yohey-w/kagemusha.git
