@@ -18,8 +18,13 @@ import { join } from 'node:path';
 import { validate, nearest, explain } from '../src/validate';
 import { openStore } from '../src/store';
 
+// 名乗りは環境から来る値。試験では from と揃えて渡す
+// (揃わない場合は「名乗りの検査」の節で確かめる)。
 const run = (flags: Record<string, string>, stdin?: string, dry = false) =>
-  inboxWrite(':memory:', { flags, stdin }, dry);
+  inboxWrite(':memory:', { flags, stdin }, dry, {
+    insideFormation: true,
+    selfId: flags['from'] ?? 'shogun',
+  });
 
 describe('旗の解き方', () => {
   test('--k v と --k=v の両方を受ける', () => {
@@ -195,6 +200,38 @@ describe('自分宛', () => {
   });
 });
 
+describe('名乗りの検査', () => {
+  // .opencode/tools/mark-as-read.ts の assertCurrentAgent と同じ考え。
+  // あちらは OPENCODE_AGENT_ID を読み、他人の inbox を触ろうとしたら拒む。
+  // 名乗りを引数に任せると、名乗りが検査にならない。
+  const as = (selfId: string | undefined, from: string) =>
+    inboxWrite(
+      ':memory:',
+      { flags: { to: 'karo', from, type: 'cmd_new', body: 'x' } },
+      true,
+      { insideFormation: true, selfId },
+    );
+
+  test('環境と名乗りが一致すれば通る', () => {
+    expect(as('gunshi', 'gunshi').code).toBe(EXIT_OK);
+  });
+
+  test('他人の名は名乗れぬ', () => {
+    const r = as('ashigaru3', 'karo');
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('ashigaru3 が karo を名乗ることはできぬ');
+    expect(r.err).toContain('書き込みは行っておらぬ');
+  });
+
+  // 「誰か分からない」を「たぶん本人だろう」で通すと、検査が消える。
+  test('布陣の中に居て誰か分からぬときは書かせぬ', () => {
+    const r = as(undefined, 'karo');
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('確かめられぬ');
+    expect(r.err).toContain('HONDEN_AGENT_ID');
+  });
+});
+
 describe('布陣の外から送る', () => {
   const outside = (flags: Record<string, string>, dry = false) =>
     inboxWrite(':memory:', { flags }, dry, { insideFormation: false });
@@ -221,7 +258,7 @@ describe('布陣の外から送る', () => {
       ':memory:',
       { flags: { to: 'karo', from: 'gunshi', type: 'report_received', body: 'x' } },
       true,
-      { insideFormation: true },
+      { insideFormation: true, selfId: 'gunshi' },
     );
     expect(r.code).toBe(EXIT_OK);
   });
@@ -256,7 +293,7 @@ describe('読み戻し', () => {
         path,
         { flags: { to: 'karo', from: 'shogun', type: 'cmd_new', body } },
         false,
-        { insideFormation: true },
+        { insideFormation: true, selfId: 'shogun' },
       );
       expect(r.code).toBe(EXIT_OK);
       expect(r.out).toContain('渡した本文と一致');

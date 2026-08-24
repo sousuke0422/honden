@@ -145,8 +145,20 @@ export async function main(argv: string[]): Promise<number> {
       return EXIT_INVALID;
     }
     const stdin = process.stdin.isTTY ? undefined : await Bun.stdin.text();
-    const insideFormation = (process.env.TMUX_PANE ?? '') !== '';
-    return emit(inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun, { insideFormation }));
+    const pane = process.env.TMUX_PANE ?? '';
+    const insideFormation = pane !== '';
+    // 名乗りは環境から取る。引数の from とは突き合わせるだけで、信じない。
+    // skills/external-to-shogun の Step 0 と同じ。TMUX_PANE が空のまま
+    // tmux display-message を打つと、アクティブな他人の @agent_id を返す。
+    let selfId = process.env.HONDEN_AGENT_ID?.trim();
+    if (!selfId && insideFormation) {
+      const p = Bun.spawnSync(['tmux', 'display-message', '-t', pane, '-p', '#{@agent_id}']);
+      const got = p.success ? new TextDecoder().decode(p.stdout).trim() : '';
+      selfId = got === '' ? undefined : got;
+    }
+    return emit(
+      inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun, { insideFormation, selfId }),
+    );
   }
 
   if (rest[0] === 'inbox' && rest[1] === 'unread') {

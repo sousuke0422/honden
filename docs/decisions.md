@@ -204,3 +204,57 @@ honden は type を 5 種に締めてあるので、開く前に分類まで出�
 
 ただし「どの CLI が積むか」は未測定。測ってから梯子を変えること。
 「積まれるはず」で抑制を外し、実は捨てられていたら報せが黙って消える。
+
+## 先例: `.opencode/tools/mark-as-read.ts`
+
+OpenCode だけは、既に直書きをやめていた。read フラグを立てるのに汎用の Edit を
+使わず、専用の道具を通す造りになっている。honden が向かっている方向と同じ。
+
+取るべきものが 4 つある。
+
+### 名乗りは環境から取る
+
+```ts
+function assertCurrentAgent(targetAgentId: string): void {
+  const currentAgentId = process.env.OPENCODE_AGENT_ID?.trim();
+  if (currentAgentId !== targetAgentId) {
+    throw new Error(`Refusing to mark another agent's inbox as read: …`);
+  }
+}
+```
+
+**名乗りを引数に任せると、名乗りが検査にならない。**
+
+honden の `inbox write` は当初 `from` を自己申告のまま受けていた。布陣の外からの
+騙りは止めていたが、中では足軽3号が karo を名乗れた。この先例に倣って
+`HONDEN_AGENT_ID` (無ければ pane の `@agent_id`) と突き合わせる形に直した。
+
+布陣の中に居るのに誰か分からないときは書かせない。「たぶん本人だろう」で
+通すと検査が消える。
+
+### 重複は取らずに落とす
+
+同じ id が 2 つあれば、最初のものを取るのではなく落とす。read 欄が 2 つ
+あるときも同じ。cmd_668 の二重採番と同じ型の危険を、正しく扱っている。
+
+### 済んでいるものは、成功として返す
+
+既に `read: true` なら `changed: false` で返す。エラーにしない。
+何度呼んでも同じ結果になる。
+
+### 行を差し替えるだけで、書き直さない
+
+```ts
+lines[targetBlock.readLine] = "  read: true";
+```
+
+YAML を読み直して書き戻すのではなく、その 1 行だけを置き換える。だから
+書式もコメントも壊れない。`shogun_to_karo.yaml` を壊した経路を踏まない。
+
+### honden では要らなくなるもの
+
+同じファイルにある atomic write (temp + rename)、mkdir によるプロセス間ロック、
+50 回のリトライは、SQLite の取引が代わりに担う。
+
+だが**なぜそれらが要ったのか**は残る。ファイルを正本にする限り、原子性も
+排他も自分で組むしかない。組めば、組んだものの正しさを誰かが確かめねばならない。

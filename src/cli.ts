@@ -162,6 +162,16 @@ export interface RunResult {
 export interface WriteContext {
   /** 布陣の中から呼ばれているか。tmux の外なら false。 */
   insideFormation: boolean;
+  /**
+   * 呼び出し元が誰であるか。引数ではなく環境から取った値を渡すこと。
+   *
+   * `.opencode/tools/mark-as-read.ts` の assertCurrentAgent と同じ考え。
+   * あちらは `OPENCODE_AGENT_ID` を読み、他人の inbox を触ろうとしたら拒む。
+   * 名乗りを引数に任せると、名乗りは検査にならない。
+   *
+   * 布陣の中に居るのに誰か分からないときは undefined。そのときは書かせない。
+   */
+  selfId?: string;
 }
 
 /** `honden inbox write` の中身。 */
@@ -193,6 +203,33 @@ export function inboxWrite(
         '  布陣内なら agent 名、布陣外なら review_session のような名。\n' +
         '  書き込みは行っておらぬ。',
     };
+  }
+
+  // 布陣の中では、名乗りが環境と一致していること。
+  //
+  // 名乗りを引数に任せると、名乗りは検査にならない。足軽3号が karo を名乗れる。
+  // 環境から取った値と突き合わせて初めて、名乗りが証しになる。
+  if (ctx.insideFormation) {
+    if (!ctx.selfId) {
+      return {
+        code: EXIT_INVALID,
+        err:
+          '布陣の中に居るが、誰であるか確かめられぬ。\n' +
+          '  HONDEN_AGENT_ID を置くか、pane の @agent_id を設定されよ。\n' +
+          '  名乗りを引数だけに任せると、名乗りが検査にならぬ。\n' +
+          '  書き込みは行っておらぬ。',
+      };
+    }
+    if (ctx.selfId !== v.from) {
+      return {
+        code: EXIT_INVALID,
+        err:
+          `${ctx.selfId} が ${v.from} を名乗ることはできぬ。\n` +
+          `  この pane の主は ${ctx.selfId} である。\n` +
+          '  他人の名で送ると、受け取った側が誰からの報せか判じられぬ。\n' +
+          '  書き込みは行っておらぬ。',
+      };
+    }
   }
 
   // 布陣外から役職を騙るのを止める。
