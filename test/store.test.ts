@@ -9,7 +9,7 @@
  */
 
 import { expect, test, describe } from 'bun:test';
-import { openStore, pragmas, tx, journal, legacy } from '../src/store';
+import { openStore, pragmas, tx, journal, legacy, indexDoc, search, segment } from '../src/store';
 
 const mem = () => openStore({ path: ':memory:' });
 
@@ -177,6 +177,53 @@ describe('legacy の詰め方', () => {
   test('中身があれば JSON 文字列', () => {
     expect(legacy({ verdict: 'PASS', from: 'shogun' }))
       .toBe('{"verdict":"PASS","from":"shogun"}');
+  });
+});
+
+describe('全文検索', () => {
+  // 例はすべて開発の語で組む。実務の中身をコードへ持ち込まない。
+  const seed = (db: ReturnType<typeof mem>) =>
+    tx(db, () => {
+      indexDoc(db, { kind: 'cmd', ref: 'cmd_1', body: '差分の検証を実装する。回帰試験も足す。' });
+      indexDoc(db, { kind: 'cmd', ref: 'cmd_2', body: '監視役が落ちたときの権限境界を決める。' });
+      indexDoc(db, { kind: 'report', ref: 'r_1', body: 'SQLite の busy_timeout を先に置く。' });
+    });
+
+  test('2 文字の語が引ける (unicode61 素のままでは引けない)', () => {
+    const db = mem(); seed(db);
+    expect(search(db, '検証').map((h) => h.ref)).toEqual(['cmd_1']);
+  });
+
+  // 監視役 → 監視 | 役 と割れる。文書と問いが同じ関数を通っていれば当たる。
+  // 索引だけ切って問いを切らないと、ここが 0 件になる。
+  test('割れる複合語も、問いを同じく切れば当たる', () => {
+    const db = mem(); seed(db);
+    expect(segment('監視役')).toBe('監視 役');
+    expect(search(db, '監視役').map((h) => h.ref)).toEqual(['cmd_2']);
+  });
+
+  test('ASCII の語も引ける', () => {
+    const db = mem(); seed(db);
+    expect(search(db, 'SQLite').map((h) => h.ref)).toEqual(['r_1']);
+  });
+
+  test('無い語は 0 件', () => {
+    const db = mem(); seed(db);
+    expect(search(db, '該当なき語')).toEqual([]);
+  });
+
+  // 語の途中からは当たらない。これは既知の割り切りなので、
+  // 挙動が変わったときに気づけるよう固定しておく。
+  test('語の途中からは当たらない (trigram を張らない代償)', () => {
+    const db = mem(); seed(db);
+    expect(search(db, '視役')).toEqual([]);
+  });
+
+  test('落ちた取引の索引は残らない', () => {
+    const db = mem();
+    try { tx(db, () => { indexDoc(db, { kind: 'cmd', body: '検証' }); throw new Error('失敗'); }); } catch {}
+    expect(search(db, '検証')).toEqual([]);
+    expect((db.query('SELECT count(*) c FROM doc').get() as { c: number }).c).toBe(0);
   });
 });
 

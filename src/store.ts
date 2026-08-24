@@ -179,6 +179,49 @@ CREATE TABLE IF NOT EXISTS ledger (
   detail     TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_ledger_at ON ledger(at);
+
+-- 全文検索。
+--
+-- 日本語は unicode61 のままだと漢字の連なりが 1 語になる。Bun には ICU が
+-- 積まれているが FTS5 の tokenizer としては出ていないので、Intl.Segmenter
+-- で切ってから unicode61 に渡す。拡張 (.so) は要らない。
+--
+-- ## 書く側と引く側で同じ関数を通すこと
+--
+-- これが唯一かつ最大の要点になる。文書を切って索引に入れたなら、問いも同じく
+-- 切らなければ当たらない。複合語が割れても、問いが同じ割れ方をすれば AND で
+-- 当たる。
+--
+--   監視役 → 監視 | 役      文書も問いも同じに割れるので当たる
+--
+-- 索引だけ切って問いを切らないと、複合語が全滅する。
+-- 2026-08-24 にその形で測って「複合語が引けない」と誤って結論した。
+-- 索引の穴ではなく、測り方の穴だった。
+--
+-- ## trigram を張らない理由
+--
+-- 実データ 825 本 7.1MB での実測:
+--
+--   方式        索引     構築    検証  実装  監視役 回帰試験 権限境界 SQLite  gram
+--   segmented  10.2MB   504ms   398  413    3     27     18      3      0
+--   trigram    26.2MB   696ms     0    0     0      7      2      3     10
+--
+-- trigram が勝つのは gram のような「語の途中から打った時」だけで、索引は
+-- 2.6 倍になる。その引き方が要るようになったら、doc.body への LIKE で足りる
+-- (825 本 7MB なら全走査でも一瞬)。索引を 2 本抱えるより安い。
+CREATE TABLE IF NOT EXISTS doc (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind   TEXT NOT NULL,          -- cmd / report / inbox / task / saytask / archive
+  ref    TEXT,                   -- cmd_704 など。追える先があれば入れる
+  source TEXT,                   -- 取り込み元のファイル
+  at     TEXT,
+  body   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_doc_kind ON doc(kind, at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
+  body, doc_id UNINDEXED, tokenize = 'unicode61'
+);
 `;
 
 function migrate(db: Database): void {
@@ -208,6 +251,80 @@ export function tx<T>(db: Database, fn: () => T): T {
 export function legacy(obj: Record<string, unknown>): string | null {
   const kept = Object.entries(obj).filter(([, v]) => v !== undefined && v !== null);
   return kept.length === 0 ? null : JSON.stringify(Object.fromEntries(kept));
+}
+
+/**
+ * 日本語を語に切って空白で繋ぐ。
+ *
+ * Bun には ICU が積まれているが FTS5 の tokenizer としては出ていない。
+ * `Intl.Segmenter` からなら使えるので、書き込みの時に切ってしまう。
+ * 拡張 (.so) を読み込む必要が無いので、外から取ってきた実行物も要らない。
+ */
+const segmenter = new Intl.Segmenter('ja', { granularity: 'word' });
+export function segment(text: string): string {
+  const out: string[] = [];
+  for (const s of segmenter.segment(text)) if (s.isWordLike) out.push(s.segment);
+  return out.join(' ');
+}
+
+export interface DocInput {
+  kind: string;
+  ref?: string;
+  source?: string;
+  at?: string;
+  body: string;
+}
+
+/**
+ * 資料を 1 件積み、索引を張る。取引の中から呼ぶこと。
+ *
+ * 索引に入れる前に必ず [`segment`] を通す。引く側 ([`search`]) も同じ関数を
+ * 通す。この一致が崩れると複合語が全滅するので、両方をこの 1 ファイルに
+ * 閉じてある。
+ */
+export function indexDoc(db: Database, doc: DocInput): number {
+  db.prepare('INSERT INTO doc(kind, ref, source, at, body) VALUES (?,?,?,?,?)').run(
+    doc.kind,
+    doc.ref ?? null,
+    doc.source ?? null,
+    doc.at ?? null,
+    doc.body,
+  );
+  const id = (db.query('SELECT last_insert_rowid() AS id').get() as { id: number }).id;
+  db.prepare('INSERT INTO doc_fts(body, doc_id) VALUES (?,?)').run(segment(doc.body), id);
+  return id;
+}
+
+export interface Hit {
+  id: number;
+  kind: string;
+  ref: string | null;
+  source: string | null;
+}
+
+/**
+ * 全文検索。問いも [`segment`] を通してから当てる。
+ *
+ * 語の途中から打ちたい場合 (`gram` で `trigram` を出したい等) はここでは当たらない。
+ * その用が出たら doc.body への LIKE を足すこと。索引をもう 1 本張るより安い。
+ */
+export function search(db: Database, query: string, limit = 50): Hit[] {
+  let ids: number[];
+  try {
+    ids = (
+      db.query('SELECT doc_id FROM doc_fts WHERE doc_fts MATCH ? LIMIT ?').all(
+        segment(query),
+        limit,
+      ) as { doc_id: number }[]
+    ).map((r) => r.doc_id);
+  } catch {
+    // 検索語が FTS5 の構文として成立しない場合 (記号だけ等)。0 件で返す。
+    return [];
+  }
+  if (ids.length === 0) return [];
+  return db
+    .query(`SELECT id, kind, ref, source FROM doc WHERE id IN (${ids.map(() => '?').join(',')})`)
+    .all(...ids) as Hit[];
 }
 
 /** 台帳へ 1 行落とす。取引の中から呼ぶこと。 */
