@@ -28,17 +28,14 @@
  */
 
 import { openStore, tx, journal } from './store';
+import { roster, isEmpty } from './roster';
 import { validate, explain, type Schema } from './validate';
 
 export const EXIT_OK = 0;
 export const EXIT_SYSTEM = 1;
 export const EXIT_INVALID = 2;
 
-const AGENTS = [
-  'shogun', 'karo', 'gunshi',
-  'ashigaru1', 'ashigaru2', 'ashigaru3', 'ashigaru4',
-  'ashigaru5', 'ashigaru6', 'ashigaru7',
-] as const;
+// 名簿は固定で持たない。環境ごとに足軽の頭数が違う (src/roster.ts)。
 
 /**
  * 相手が処理を知っている type だけ。新しい文字列を発明すると相手が黙り込む。
@@ -46,15 +43,15 @@ const AGENTS = [
  */
 const TYPES = ['report_received', 'task_assigned', 'cmd_new', 'cmd_update', 'clear_command'] as const;
 
-const INBOX_SCHEMA: Schema = {
-  to: { required: true, oneOf: AGENTS, about: '宛先の agent' },
+const inboxSchema = (known: readonly string[]): Schema => ({
+  to: { required: true, oneOf: known, about: '宛先の agent' },
   // from は agent 名に縛らない。布陣外 (standalone) から送るときは、
   // 役職を騙らず review_session / external_audit のような名を使うのが正しい。
   // 縛ると、その正しい使い方を弾いてしまう。
   from: { required: true, about: '差出人。布陣外なら review_session など、役職を騙らぬ名' },
   type: { required: true, oneOf: TYPES, about: '相手が処理を知っている種別' },
   body: { required: true, about: '本文。長いものは EOF 側で渡すとよい' },
-};
+});
 
 /** 差出人名として許す形。空白や制御文字を弾く。 */
 const FROM_SHAPE = /^[A-Za-z0-9_-]{2,40}$/;
@@ -184,7 +181,19 @@ export function inboxWrite(
   const picked = pickInput(src);
   if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
 
-  const problems = validate(INBOX_SCHEMA, picked.value);
+  const db = openStore({ path: dbPath });
+  if (isEmpty(db)) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        '名簿が空である。誰が居るのか分からぬまま送ることはできぬ。\n' +
+        '  honden roster sync --settings <settings.yaml> で入れられよ。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
+  const known = roster(db).map((e) => e.id);
+
+  const problems = validate(inboxSchema(known), picked.value);
   if (problems.length > 0) {
     return {
       code: EXIT_INVALID,
@@ -236,7 +245,7 @@ export function inboxWrite(
   //
   // 「騙るな」と書いておくだけでは止まらない。tmux の外にいるかどうかは
   // 機械で見えるので、見えるものは機械で止める。
-  if (!ctx.insideFormation && (AGENTS as readonly string[]).includes(v.from)) {
+  if (!ctx.insideFormation && known.includes(v.from)) {
     return {
       code: EXIT_INVALID,
       err:
@@ -279,7 +288,6 @@ export function inboxWrite(
 
   if (dryRun) return { code: EXIT_OK, out: `${summary}\n  → 書き込んでおらぬ (--dry-run)` };
 
-  const db = openStore({ path: dbPath });
   tx(db, () => {
     db.prepare(
       'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
@@ -321,13 +329,17 @@ export function inboxWrite(
 
 /** `honden inbox unread <agent>` — 手動 nudge のための未読数。 */
 export function inboxUnread(dbPath: string | undefined, agent: string): RunResult {
-  if (!(AGENTS as readonly string[]).includes(agent)) {
+  const db = openStore({ path: dbPath });
+  const known = roster(db).map((e) => e.id);
+  if (known.length === 0) {
+    return { code: EXIT_INVALID, err: '名簿が空である。honden roster sync で入れられよ。' };
+  }
+  if (!known.includes(agent)) {
     return {
       code: EXIT_INVALID,
-      err: `知らぬ agent: ${JSON.stringify(agent)}\n  ${AGENTS.join(' / ')} のいずれか。`,
+      err: `名簿に無い agent: ${JSON.stringify(agent)}\n  いま居るのは ${known.join(' / ')}。`,
     };
   }
-  const db = openStore({ path: dbPath });
   const n = (
     db.query('SELECT count(*) c FROM inbox WHERE agent = ? AND read = 0').get(agent) as { c: number }
   ).c;

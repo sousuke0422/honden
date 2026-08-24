@@ -10,18 +10,32 @@
  *   3. 直し方が文面に入っていること
  */
 
-import { expect, test, describe } from 'bun:test';
+import { expect, test, describe, beforeEach, afterEach } from 'bun:test';
 import { parseFlags, pickInput, inboxWrite, inboxUnread, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validate, nearest, explain } from '../src/validate';
-import { openStore } from '../src/store';
+import { openStore, tx } from '../src/store';
+import { syncRoster, roleOf } from '../src/roster';
+
+// 名簿は DB に置くので、試験ごとに一時ファイルを作って仕込む。
+// :memory: は openStore のたびに別の DB になるため、外から仕込めない。
+const FULL = ['shogun', 'karo', 'gunshi', 'ashigaru1', 'ashigaru2', 'ashigaru3'];
+let dir: string;
+let db: string;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'honden-cli-'));
+  db = join(dir, 'x.db');
+  const h = openStore({ path: db });
+  tx(h, () => syncRoster(h, FULL.map((id) => ({ id, role: roleOf(id), cli: null, model: null }))));
+});
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 // 名乗りは環境から来る値。試験では from と揃えて渡す
 // (揃わない場合は「名乗りの検査」の節で確かめる)。
 const run = (flags: Record<string, string>, stdin?: string, dry = false) =>
-  inboxWrite(':memory:', { flags, stdin }, dry, {
+  inboxWrite(db, { flags, stdin }, dry, {
     insideFormation: true,
     selfId: flags['from'] ?? 'shogun',
   });
@@ -117,10 +131,10 @@ describe('追い返し方', () => {
   });
 
   test('弾かれたとき、正本に何も入っていない', () => {
-    const db = openStore({ path: ':memory:' });
-    const before = (db.query('SELECT count(*) c FROM inbox').get() as { c: number }).c;
-    run({ to: 'karou' });
-    expect(before).toBe(0);
+    run({ to: 'karou', from: 'shogun', type: 'cmd_new', body: 'x' });
+    const h = openStore({ path: db });
+    const after = (h.query('SELECT count(*) c FROM inbox').get() as { c: number }).c;
+    expect(after).toBe(0);
   });
 });
 
@@ -206,7 +220,7 @@ describe('名乗りの検査', () => {
   // 名乗りを引数に任せると、名乗りが検査にならない。
   const as = (selfId: string | undefined, from: string) =>
     inboxWrite(
-      ':memory:',
+      db,
       { flags: { to: 'karo', from, type: 'cmd_new', body: 'x' } },
       true,
       { insideFormation: true, selfId },
@@ -234,7 +248,7 @@ describe('名乗りの検査', () => {
 
 describe('布陣の外から送る', () => {
   const outside = (flags: Record<string, string>, dry = false) =>
-    inboxWrite(':memory:', { flags }, dry, { insideFormation: false });
+    inboxWrite(db, { flags }, dry, { insideFormation: false });
 
   // skills/external-to-shogun が定める正しい使い方。
   // from を agent 名に縛ると、この正しい形を弾いてしまう。
@@ -255,7 +269,7 @@ describe('布陣の外から送る', () => {
 
   test('布陣内なら役職を名乗れる', () => {
     const r = inboxWrite(
-      ':memory:',
+      db,
       { flags: { to: 'karo', from: 'gunshi', type: 'report_received', body: 'x' } },
       true,
       { insideFormation: true, selfId: 'gunshi' },
@@ -288,6 +302,8 @@ describe('読み戻し', () => {
     const dir = mkdtempSync(join(tmpdir(), 'honden-cli-'));
     const path = join(dir, 'x.db');
     try {
+      const h0 = openStore({ path });
+      tx(h0, () => syncRoster(h0, FULL.map((id) => ({ id, role: roleOf(id), cli: null, model: null }))));
       const body = "C:\\Users\\aki と ''' と $HOME\n二行目";
       const r = inboxWrite(
         path,
@@ -310,13 +326,13 @@ describe('読み戻し', () => {
   });
 
   test('未読数を数えて手動 nudge の形を示す', () => {
-    const r = inboxUnread(':memory:', 'karo');
+    const r = inboxUnread(db, 'karo');
     expect(r.code).toBe(EXIT_OK);
     expect(r.out).toContain('未読 0 件');
   });
 
   test('知らぬ agent の未読は数えられぬ', () => {
-    const r = inboxUnread(':memory:', 'karou');
+    const r = inboxUnread(db, 'karou');
     expect(r.code).toBe(EXIT_INVALID);
   });
 });

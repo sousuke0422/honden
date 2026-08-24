@@ -107,6 +107,28 @@ CREATE TABLE IF NOT EXISTS cmd_acceptance (
   PRIMARY KEY (cmd_id, idx)
 );
 
+-- 顔ぶれ。
+--
+-- 名簿を固定で持ってはならない。布陣は環境ごとに大きさが違う。
+-- 例えば投資分析用の環境 (fshogun) は足軽 7 体を要さない。2 体で足りる。
+--
+-- 役職の名は変わらない (shogun / karo / gunshi と ashigaruN)。変わるのは
+-- 足軽の頭数だけで、上限が 7。fshogun のような名は環境そのものの名であって、
+-- 役職名ではない。
+--
+-- 出所は環境の settings.yaml の cli.agents。鍵がそのまま顔ぶれになる。
+--
+-- 名簿が空のときは書かせない。「たぶんこの名だろう」で通すと、
+-- 2 体しか居ない環境で ashigaru5 が通ってしまう。
+-- 一覧に無いものを既定へ落とすと、正しく書かれた検査が死ぬ
+-- (docs/decisions.md の cursor の件と同じ型)。
+CREATE TABLE IF NOT EXISTS roster (
+  id    TEXT PRIMARY KEY,
+  role  TEXT NOT NULL CHECK (role IN ('commander','worker')),
+  cli   TEXT,
+  model TEXT
+);
+
 -- 各エージェントの持ち場。
 --
 -- ## なぜ貸与 (lease) を持つか

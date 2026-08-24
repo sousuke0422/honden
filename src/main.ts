@@ -8,9 +8,10 @@
  * 切り替えの日を決めるまでは、影に徹するのが安全になる。
  */
 
-import { openStore, search, type Hit } from './store';
+import { openStore, search, tx, type Hit } from './store';
 import { importTree, type ImportResult } from './import';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
+import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
 import type { RunResult } from './cli';
 
 /** 取り込む対象。config は秘密を含みうるので既定では入れない。 */
@@ -48,6 +49,51 @@ export function runImport(
   return { code: r.outstanding > 0 ? EXIT_INVALID : EXIT_OK, out: lines.join('\n') };
 }
 
+/** `honden roster sync --settings <settings.yaml>` — 顔ぶれを入れ替える。 */
+export function runRosterSync(dbPath: string | undefined, settingsPath: string | undefined): RunResult {
+  if (!settingsPath) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        '名簿の出所が要る。\n' +
+        '  honden roster sync --settings <環境の settings.yaml>\n' +
+        '  cli.agents の鍵がそのまま顔ぶれになる。',
+    };
+  }
+  let entries;
+  try {
+    entries = readRosterFromSettings(settingsPath);
+  } catch (e) {
+    if (e instanceof RosterError) return { code: EXIT_INVALID, err: `  ${e.message}` };
+    return { code: EXIT_SYSTEM, err: String(e).slice(0, 300) };
+  }
+  const db = openStore({ path: dbPath });
+  tx(db, () => syncRoster(db, entries));
+  const w = entries.filter((e) => e.role === 'worker');
+  return {
+    code: EXIT_OK,
+    out:
+      `  ${entries.length} 人（上役 ${entries.length - w.length} / 足軽 ${w.length}）\n` +
+      entries.map((e) => `    ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''}`).join('\n'),
+  };
+}
+
+/** `honden roster` — いまの顔ぶれ。 */
+export function runRosterShow(dbPath: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  const r = roster(db);
+  if (r.length === 0) {
+    return {
+      code: EXIT_INVALID,
+      err: '名簿が空である。\n  honden roster sync --settings <settings.yaml> で入れられよ。',
+    };
+  }
+  return {
+    code: EXIT_OK,
+    out: r.map((e) => `  ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n'),
+  };
+}
+
 export function runSearch(dbPath: string | undefined, query: string, limit: number): RunResult {
   if (query.trim() === '') {
     return {
@@ -78,6 +124,8 @@ export function runSearch(dbPath: string | undefined, query: string, limit: numb
 
 const USAGE = `honden — 多エージェント運用の差配層
 
+  honden roster sync --settings <settings.yaml>        顔ぶれを入れ替える
+  honden roster                                        いまの顔ぶれ
   honden import [--root PATH] [--sub queue,saytask]   shogun の YAML を取り込む
   honden search <語> [--limit N]                       取り込んだものを引く
   honden inbox write <宛先> <本文> <種別> <差出人>      旧 inbox_write.sh と同じ並び
@@ -101,6 +149,9 @@ const USAGE = `honden — 多エージェント運用の差配層
 review_session / external_audit のような、外だと分かる名を from に使うこと。
 
 いまは影の段で、shogun 側の YAML へは一切書かない。
+
+顔ぶれは環境ごとに違う。足軽は 1 体から 7 体まで。
+まず roster sync で入れること。名簿が空のままでは送れない。
 `;
 
 export async function main(argv: string[]): Promise<number> {
@@ -122,6 +173,15 @@ export async function main(argv: string[]): Promise<number> {
     delete flags['root'];
     delete flags['sub'];
     return emit(runImport(dbPath, root, subs));
+  }
+
+  if (rest[0] === 'roster') {
+    if (rest[1] === 'sync') {
+      const s = flags['settings'];
+      delete flags['settings'];
+      return emit(runRosterSync(dbPath, s));
+    }
+    return emit(runRosterShow(dbPath));
   }
 
   if (rest[0] === 'search') {
