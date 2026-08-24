@@ -40,12 +40,24 @@ const AGENTS = [
   'ashigaru5', 'ashigaru6', 'ashigaru7',
 ] as const;
 
+/**
+ * 相手が処理を知っている type だけ。新しい文字列を発明すると相手が黙り込む。
+ * `clear_command` は相手のセッションを消すので、布陣外からは撃たせない。
+ */
+const TYPES = ['report_received', 'task_assigned', 'cmd_new', 'cmd_update', 'clear_command'] as const;
+
 const INBOX_SCHEMA: Schema = {
   to: { required: true, oneOf: AGENTS, about: '宛先の agent' },
-  from: { required: true, oneOf: AGENTS, about: '差出人の agent' },
-  type: { required: true, about: 'cmd_new / task_assigned / report_received など' },
+  // from は agent 名に縛らない。布陣外 (standalone) から送るときは、
+  // 役職を騙らず review_session / external_audit のような名を使うのが正しい。
+  // 縛ると、その正しい使い方を弾いてしまう。
+  from: { required: true, about: '差出人。布陣外なら review_session など、役職を騙らぬ名' },
+  type: { required: true, oneOf: TYPES, about: '相手が処理を知っている種別' },
   body: { required: true, about: '本文。長いものは EOF 側で渡すとよい' },
 };
+
+/** 差出人名として許す形。空白や制御文字を弾く。 */
+const FROM_SHAPE = /^[A-Za-z0-9_-]{2,40}$/;
 
 /** 旗を解く。`--k v` と `--k=v` の両方を受ける。 */
 export function parseFlags(argv: string[]): { flags: Record<string, string>; rest: string[] } {
@@ -147,8 +159,18 @@ export interface RunResult {
   err?: string;
 }
 
+export interface WriteContext {
+  /** 布陣の中から呼ばれているか。tmux の外なら false。 */
+  insideFormation: boolean;
+}
+
 /** `honden inbox write` の中身。 */
-export function inboxWrite(dbPath: string | undefined, src: InputSource, dryRun: boolean): RunResult {
+export function inboxWrite(
+  dbPath: string | undefined,
+  src: InputSource,
+  dryRun: boolean,
+  ctx: WriteContext = { insideFormation: true },
+): RunResult {
   const picked = pickInput(src);
   if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
 
@@ -161,6 +183,43 @@ export function inboxWrite(dbPath: string | undefined, src: InputSource, dryRun:
   }
 
   const v = picked.value as { to: string; from: string; type: string; body: string };
+
+  if (!FROM_SHAPE.test(v.from)) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        `差出人の名が使えぬ: ${JSON.stringify(v.from)}\n` +
+        '  英数字・_・- で 2〜40 文字にされよ。\n' +
+        '  布陣内なら agent 名、布陣外なら review_session のような名。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
+
+  // 布陣外から役職を騙るのを止める。
+  //
+  // 「騙るな」と書いておくだけでは止まらない。tmux の外にいるかどうかは
+  // 機械で見えるので、見えるものは機械で止める。
+  if (!ctx.insideFormation && (AGENTS as readonly string[]).includes(v.from)) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        `布陣の外から ${v.from} を名乗ることはできぬ。\n` +
+        '  布陣外だと分かる名を使われよ (review_session / external_audit / probe_session など)。\n' +
+        '  受け取った側が、誰からの報せか判ずるために要る。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
+
+  // 布陣外から相手のセッションを消させない。
+  if (!ctx.insideFormation && v.type === 'clear_command') {
+    return {
+      code: EXIT_INVALID,
+      err:
+        'clear_command は布陣の外から撃てぬ。相手のセッションを消すゆえ。\n' +
+        '  用向きがあるなら家老へ report_received で伝え、判断を委ねられよ。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
 
   // 自分宛は弾く。旧 inbox_write.sh も同じ guard を持っていた。
   // 項ごとの検査では拾えない (どちらの欄も単体では正しい) ので、ここで見る。
@@ -190,7 +249,55 @@ export function inboxWrite(dbPath: string | undefined, src: InputSource, dryRun:
     ).run(id, v.to, at, v.type, v.from, v.body);
     journal(db, { actor: v.from, action: 'inbox.write', target: v.to, detail: v.type });
   });
-  return { code: EXIT_OK, out: `${summary}\n  → ${id}` };
+
+  // 読み戻して見せる。
+  //
+  // 「送ったつもり」を潰すため。ここで出すのは渡した値ではなく、
+  // 正本に入っている値そのもの。渡した値を出しても、化けていたら気づけない。
+  //
+  // ただし断っておくと、`intact` が false になる筋は試験で再現できていない。
+  // bun:sqlite は NUL を含む文字列も往復で保つことを実測したので、
+  // 「格納が意図と食い違う」場面を作れなかった。
+  // これは検証済みの守りではなく、鳴らない前提の鳴子として置いてある。
+  // 鳴ったらそれ自体が新しい発見になる。
+  const back = db
+    .query('SELECT agent, sender, msg_type, body, read FROM inbox WHERE id = ?')
+    .get(id) as { agent: string; sender: string; msg_type: string; body: string; read: number } | null;
+  if (!back) {
+    return { code: EXIT_SYSTEM, err: `書き込んだはずの ${id} が読み戻せぬ。正本を確かめられよ。` };
+  }
+  const unread = (
+    db.query('SELECT count(*) c FROM inbox WHERE agent = ? AND read = 0').get(v.to) as { c: number }
+  ).c;
+  const intact = back.body === v.body;
+  return {
+    code: EXIT_OK,
+    out:
+      `  宛: ${back.agent}  差出: ${back.sender}  種: ${back.msg_type}  未読: ${back.read === 0 ? 'はい' : 'いいえ'}\n` +
+      `  本文 ${[...back.body].length} 文字 / ${back.body.replace(/\n$/, '').split('\n').length} 行` +
+      `${intact ? '（渡した本文と一致）' : '  ★渡した本文と食い違う'}\n` +
+      `  ${back.body.split('\n')[0]?.slice(0, 60) ?? ''}\n` +
+      `  → ${id}\n` +
+      `  ${v.to} の未読は ${unread} 件。反応が無ければ ${v.to} のペインで inbox${unread} と手打ちされよ。`,
+  };
+}
+
+/** `honden inbox unread <agent>` — 手動 nudge のための未読数。 */
+export function inboxUnread(dbPath: string | undefined, agent: string): RunResult {
+  if (!(AGENTS as readonly string[]).includes(agent)) {
+    return {
+      code: EXIT_INVALID,
+      err: `知らぬ agent: ${JSON.stringify(agent)}\n  ${AGENTS.join(' / ')} のいずれか。`,
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const n = (
+    db.query('SELECT count(*) c FROM inbox WHERE agent = ? AND read = 0').get(agent) as { c: number }
+  ).c;
+  return {
+    code: EXIT_OK,
+    out: `  ${agent} の未読 ${n} 件${n > 0 ? ` → 手動 nudge は inbox${n}` : ''}`,
+  };
 }
 
 const USAGE = `honden — 多エージェント運用の差配層
@@ -205,11 +312,16 @@ const USAGE = `honden — 多エージェント運用の差配層
       本文
   EOF
 
+  honden inbox unread <agent>                              手動 nudge 用の未読数
+
   --dry-run  読み取り結果だけ見せて書き込まない
   --db PATH  正本の場所 (既定 ~/.honden/honden.db)
 
 並び順・旗・標準入力は、どれか一つを使う。二つ以上渡すと弾かれる。
 長い本文は EOF が向いておる。シェルが引用符に手を入れぬゆえ。
+
+布陣の外 (TMUX_PANE が無い) から送るときは、役職を騙れぬ。
+review_session / external_audit のような、外だと分かる名を from に使うこと。
 `;
 
 export async function main(argv: string[]): Promise<number> {
@@ -238,7 +350,15 @@ export async function main(argv: string[]): Promise<number> {
       );
       return EXIT_INVALID;
     }
-    const r = inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun);
+    const insideFormation = (process.env.TMUX_PANE ?? '') !== '';
+    const r = inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun, { insideFormation });
+    if (r.out) console.log(r.out);
+    if (r.err) console.error(r.err);
+    return r.code;
+  }
+
+  if (rest[0] === 'inbox' && rest[1] === 'unread') {
+    const r = inboxUnread(dbPath, rest[2] ?? '');
     if (r.out) console.log(r.out);
     if (r.err) console.error(r.err);
     return r.code;

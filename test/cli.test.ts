@@ -11,7 +11,10 @@
  */
 
 import { expect, test, describe } from 'bun:test';
-import { parseFlags, pickInput, inboxWrite, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
+import { parseFlags, pickInput, inboxWrite, inboxUnread, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { validate, nearest, explain } from '../src/validate';
 import { openStore } from '../src/store';
 
@@ -189,6 +192,95 @@ describe('自分宛', () => {
   test('違えば通る', () => {
     const r = run({ to: 'karo', from: 'shogun', type: 'cmd_new', body: 'x' }, undefined, true);
     expect(r.code).toBe(EXIT_OK);
+  });
+});
+
+describe('布陣の外から送る', () => {
+  const outside = (flags: Record<string, string>, dry = false) =>
+    inboxWrite(':memory:', { flags }, dry, { insideFormation: false });
+
+  // skills/external-to-shogun が定める正しい使い方。
+  // from を agent 名に縛ると、この正しい形を弾いてしまう。
+  test('役職でない差出人名で送れる', () => {
+    const r = outside(
+      { to: 'karo', from: 'review_session', type: 'report_received', body: 'レビュー結果' },
+      true,
+    );
+    expect(r.code).toBe(EXIT_OK);
+  });
+
+  test('布陣外から役職を騙れない', () => {
+    const r = outside({ to: 'karo', from: 'gunshi', type: 'report_received', body: 'x' });
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('名乗ることはできぬ');
+    expect(r.err).toContain('review_session');
+  });
+
+  test('布陣内なら役職を名乗れる', () => {
+    const r = inboxWrite(
+      ':memory:',
+      { flags: { to: 'karo', from: 'gunshi', type: 'report_received', body: 'x' } },
+      true,
+      { insideFormation: true },
+    );
+    expect(r.code).toBe(EXIT_OK);
+  });
+
+  test('布陣外から clear_command は撃てない', () => {
+    const r = outside({ to: 'karo', from: 'review_session', type: 'clear_command', body: 'x' });
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('セッションを消す');
+  });
+
+  test('差出人名に空白や記号は使えない', () => {
+    const r = outside({ to: 'karo', from: 'review session', type: 'report_received', body: 'x' });
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('差出人の名が使えぬ');
+  });
+
+  test('知らない type は弾き、選べるものを並べる', () => {
+    const r = outside({ to: 'karo', from: 'review_session', type: '発明した種別', body: 'x' });
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('report_received');
+  });
+});
+
+describe('読み戻し', () => {
+  // 「送ったつもり」を潰す。出すのは渡した値ではなく正本に入っている値。
+  test('書き込んだ後、正本から読み戻して見せる', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-cli-'));
+    const path = join(dir, 'x.db');
+    try {
+      const body = "C:\\Users\\aki と ''' と $HOME\n二行目";
+      const r = inboxWrite(
+        path,
+        { flags: { to: 'karo', from: 'shogun', type: 'cmd_new', body } },
+        false,
+        { insideFormation: true },
+      );
+      expect(r.code).toBe(EXIT_OK);
+      expect(r.out).toContain('渡した本文と一致');
+      expect(r.out).toContain('未読: はい');
+      expect(r.out).toContain('inbox1');
+
+      // 正本の中身そのものを見る。表示だけを信じない。
+      const db = openStore({ path });
+      const row = db.query('SELECT body FROM inbox').get() as { body: string };
+      expect(row.body).toBe(body);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('未読数を数えて手動 nudge の形を示す', () => {
+    const r = inboxUnread(':memory:', 'karo');
+    expect(r.code).toBe(EXIT_OK);
+    expect(r.out).toContain('未読 0 件');
+  });
+
+  test('知らぬ agent の未読は数えられぬ', () => {
+    const r = inboxUnread(':memory:', 'karou');
+    expect(r.code).toBe(EXIT_INVALID);
   });
 });
 
