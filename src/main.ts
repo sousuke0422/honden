@@ -1,0 +1,160 @@
+/**
+ * honden の入口。
+ *
+ * 影の段では、shogun 側へは一切書かない。取り込みと検索だけを提供する。
+ *
+ * 書き戻し (正本 → queue/**.yaml) を入れると書き手が 2 人になる。honden が
+ * 吐いたそばからエージェントが同じファイルへ書き、後から書いたほうが相手を潰す。
+ * 切り替えの日を決めるまでは、影に徹するのが安全になる。
+ */
+
+import { openStore, search, type Hit } from './store';
+import { importTree, type ImportResult } from './import';
+import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
+import type { RunResult } from './cli';
+
+/** 取り込む対象。config は秘密を含みうるので既定では入れない。 */
+const DEFAULT_SUBDIRS = ['queue', 'saytask'];
+
+export function runImport(
+  dbPath: string | undefined,
+  root: string,
+  subdirs: string[],
+): RunResult {
+  const db = openStore({ path: dbPath });
+  const t0 = Bun.nanoseconds();
+  let r: ImportResult;
+  try {
+    r = importTree(db, root, subdirs);
+  } catch (e) {
+    return { code: EXIT_SYSTEM, err: `取り込みが止まった: ${String(e).slice(0, 300)}` };
+  }
+  const ms = ((Bun.nanoseconds() - t0) / 1e6).toFixed(0);
+
+  const lines = [
+    `  走査 ${r.scanned}  取込 ${r.imported}  据置 ${r.skipped}  ${ms}ms`,
+  ];
+  if (r.outstanding > 0) {
+    // 当たった件数ではなく残っている件数を出す。sha256 が変わっていないファイルは
+    // 素通りするので、当たった数だけを見ると残りが消えたように見える。
+    lines.push(`  難あり ${r.outstanding} 件が残っておる（この回で当たったのは ${r.issues.length} 件）:`);
+    const rows = db
+      .query('SELECT path, kind, detail FROM import_issue ORDER BY path')
+      .all() as { path: string; kind: string; detail: string }[];
+    for (const i of rows) lines.push(`    [${i.kind}] ${i.path}  ${i.detail}`);
+  }
+  // 難ありが残っているうちは非ゼロで終わる。黙って 0 を返すと、
+  // 呼んだ側は「全部入った」と読む。
+  return { code: r.outstanding > 0 ? EXIT_INVALID : EXIT_OK, out: lines.join('\n') };
+}
+
+export function runSearch(dbPath: string | undefined, query: string, limit: number): RunResult {
+  if (query.trim() === '') {
+    return {
+      code: EXIT_INVALID,
+      err: '探す語が無い。\n  honden search <語> [--limit N]',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  let hits: Hit[];
+  try {
+    hits = search(db, query, limit);
+  } catch (e) {
+    return { code: EXIT_SYSTEM, err: `検索が止まった: ${String(e).slice(0, 300)}` };
+  }
+  if (hits.length === 0) {
+    return {
+      code: EXIT_OK,
+      out:
+        `  「${query}」は見つからぬ。\n` +
+        '  語の途中からは当たらぬ造りゆえ、語の頭から打たれよ。\n' +
+        '  取り込みが済んでおるかは honden import で確かめられる。',
+    };
+  }
+  const lines = [`  「${query}」 ${hits.length} 件`];
+  for (const h of hits) lines.push(`    ${h.kind.padEnd(8)} ${h.source ?? h.ref ?? ''}`);
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
+
+const USAGE = `honden — 多エージェント運用の差配層
+
+  honden import [--root PATH] [--sub queue,saytask]   shogun の YAML を取り込む
+  honden search <語> [--limit N]                       取り込んだものを引く
+  honden inbox write <宛先> <本文> <種別> <差出人>      旧 inbox_write.sh と同じ並び
+  honden inbox write --to A --from B --type T --body 本文
+  honden inbox write <<'EOF'
+    to: karo
+    from: shogun
+    type: cmd_new
+    body: |
+      本文
+  EOF
+  honden inbox unread <agent>                          手動 nudge 用の未読数
+
+  --dry-run  読み取り結果だけ見せて書き込まない
+  --db PATH  正本の場所 (既定 ~/.honden/honden.db)
+
+並び順・旗・標準入力は、どれか一つを使う。二つ以上渡すと弾かれる。
+長い本文は EOF が向いておる。シェルが引用符に手を入れぬゆえ。
+
+布陣の外 (TMUX_PANE が無い) から送るときは、役職を騙れぬ。
+review_session / external_audit のような、外だと分かる名を from に使うこと。
+
+いまは影の段で、shogun 側の YAML へは一切書かない。
+`;
+
+export async function main(argv: string[]): Promise<number> {
+  const { flags, rest } = parseFlags(argv);
+  const dryRun = flags['dry-run'] === 'true';
+  delete flags['dry-run'];
+  const dbPath = flags['db'];
+  delete flags['db'];
+
+  const emit = (r: RunResult): number => {
+    if (r.out) console.log(r.out);
+    if (r.err) console.error(r.err);
+    return r.code;
+  };
+
+  if (rest[0] === 'import') {
+    const root = flags['root'] ?? process.cwd();
+    const subs = (flags['sub'] ?? DEFAULT_SUBDIRS.join(',')).split(',').filter(Boolean);
+    delete flags['root'];
+    delete flags['sub'];
+    return emit(runImport(dbPath, root, subs));
+  }
+
+  if (rest[0] === 'search') {
+    const limit = Number(flags['limit'] ?? '20');
+    delete flags['limit'];
+    return emit(runSearch(dbPath, rest.slice(1).join(' '), Number.isFinite(limit) ? limit : 20));
+  }
+
+  if (rest[0] === 'inbox' && rest[1] === 'write') {
+    const positional = fromPositional(rest.slice(2));
+    if (positional && Object.keys(flags).length > 0) {
+      console.error('並び順の引数と旗の両方が来ておる。どちらが効いたのか分からなくなるゆえ、片方にされよ。');
+      return EXIT_INVALID;
+    }
+    if (rest.length > 2 && !positional) {
+      console.error(
+        `並び順で渡すなら 4 つ要る (受け取ったのは ${rest.length - 2} つ)。\n` +
+          '  honden inbox write <宛先> <本文> <種別> <差出人>\n' +
+          '  旗や EOF でも渡せる。書き込みは行っておらぬ。',
+      );
+      return EXIT_INVALID;
+    }
+    const stdin = process.stdin.isTTY ? undefined : await Bun.stdin.text();
+    const insideFormation = (process.env.TMUX_PANE ?? '') !== '';
+    return emit(inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun, { insideFormation }));
+  }
+
+  if (rest[0] === 'inbox' && rest[1] === 'unread') {
+    return emit(inboxUnread(dbPath, rest[2] ?? ''));
+  }
+
+  console.error(USAGE);
+  return EXIT_INVALID;
+}
+
+if (import.meta.main) process.exit(await main(Bun.argv.slice(2)));

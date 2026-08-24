@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "honden": "bun run src/main.ts",
+    "build": "bun build --compile --outfile=bin/honden src/main.ts",
     "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {

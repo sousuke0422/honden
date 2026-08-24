@@ -253,3 +253,5 @@ node_modules/
 *.db-shm
 .env
 .env.*
+
+!/bin/
