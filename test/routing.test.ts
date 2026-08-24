@@ -192,6 +192,24 @@ describe('切り替えれば振れる者', () => {
     expect(r.message).toContain('系統が deepseek');
   });
 
+  // 切り替え「先」も素性で締める。ここを漏らすと、能力で外れた者に
+  // 許していない系統への切り替えを勧めてしまう。
+  test('切り替え先も素性で締める', () => {
+    const db = openStore({ path: ':memory:' });
+    tx(db, () => {
+      syncRoster(db, [{ id: 'ashigaru1', role: 'worker', cli: 'cursor', model: 'composer-2.5' }]);
+      syncLimits(db, [
+        { model: 'composer-2.5', maxBloom: 4, costGroup: 'cursor' },
+        // L5 に足りる中で最も軽いが、系統が許されていない
+        { model: 'deepseek-v4-pro', maxBloom: 5, costGroup: 'opencode_go' },
+        { model: 'claude-opus-5', maxBloom: 6, costGroup: 'claude_max' },
+      ]);
+    });
+    const r = recommend(db, { bloom: 5, role: 'worker', allowedProviders: ['cursor', 'anthropic'] });
+    expect(r.switchable.map((s) => s.to)).toEqual(['claude-opus-5']);
+    expect(r.message).not.toContain('deepseek');
+  });
+
   test('いまのまま振れる者が居れば、切り替えは要らぬ', () => {
     const r = recommend(seeded(), { bloom: 3, role: 'worker' });
     expect(r.ok).toBe(true);
