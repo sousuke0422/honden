@@ -12,6 +12,7 @@ import { openStore, search, tx, type Hit } from './store';
 import { importTree, type ImportResult } from './import';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
 import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
+import { readLimitsFromSettings, syncLimits, recommend } from './routing';
 import type { RunResult } from './cli';
 
 /** 取り込む対象。config は秘密を含みうるので既定では入れない。 */
@@ -67,14 +68,19 @@ export function runRosterSync(dbPath: string | undefined, settingsPath: string |
     if (e instanceof RosterError) return { code: EXIT_INVALID, err: `  ${e.message}` };
     return { code: EXIT_SYSTEM, err: String(e).slice(0, 300) };
   }
+  const limits = readLimitsFromSettings(settingsPath);
   const db = openStore({ path: dbPath });
-  tx(db, () => syncRoster(db, entries));
+  tx(db, () => {
+    syncRoster(db, entries);
+    syncLimits(db, limits);
+  });
   const w = entries.filter((e) => e.role === 'worker');
   return {
     code: EXIT_OK,
     out:
       `  ${entries.length} 人（上役 ${entries.length - w.length} / 足軽 ${w.length}）\n` +
-      entries.map((e) => `    ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''}`).join('\n'),
+      entries.map((e) => `    ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n') +
+      `\n  能力制限 ${limits.filter((l) => l.maxBloom < 6).length} 件（表に無いモデルは制限なし）`,
   };
 }
 
@@ -91,6 +97,42 @@ export function runRosterShow(dbPath: string | undefined): RunResult {
   return {
     code: EXIT_OK,
     out: r.map((e) => `  ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n'),
+  };
+}
+
+/** `honden route <bloom>` — 誰に振れるかを挙げる。 */
+export function runRoute(
+  dbPath: string | undefined,
+  bloomRaw: string | undefined,
+  role: string | undefined,
+  providers: string | undefined,
+  busy: string | undefined,
+): RunResult {
+  const bloom = Number(String(bloomRaw ?? '').replace(/^[Ll]/, ''));
+  if (!Number.isFinite(bloom)) {
+    return {
+      code: EXIT_INVALID,
+      err: '難度が要る。\n  honden route <1-6> [--role worker] [--providers openai,anthropic] [--busy a,b]',
+    };
+  }
+  if (role && role !== 'worker' && role !== 'commander') {
+    return { code: EXIT_INVALID, err: `役は worker か commander。受け取った値: ${JSON.stringify(role)}` };
+  }
+  const db = openStore({ path: dbPath });
+  const r = recommend(db, {
+    bloom,
+    role: role as 'worker' | 'commander' | undefined,
+    allowedProviders: providers ? providers.split(',').filter(Boolean) : undefined,
+    busy: busy ? busy.split(',').filter(Boolean) : undefined,
+  });
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  return {
+    code: EXIT_OK,
+    out:
+      `  L${bloom} に振れる者（足りる中で軽い順）\n` +
+      r.candidates
+        .map((c) => `    ${c.agent.padEnd(10)} ${c.model.padEnd(16)} ${c.provider.padEnd(10)} L${c.maxBloom} まで`)
+        .join('\n'),
   };
 }
 
@@ -127,6 +169,7 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden roster sync --settings <settings.yaml>        顔ぶれを入れ替える
   honden roster                                        いまの顔ぶれ
   honden import [--root PATH] [--sub queue,saytask]   shogun の YAML を取り込む
+  honden route <1-6> [--role worker] [--providers ...] 誰に振れるかを挙げる
   honden search <語> [--limit N]                       取り込んだものを引く
   honden inbox write <宛先> <本文> <種別> <差出人>      旧 inbox_write.sh と同じ並び
   honden inbox write --to A --from B --type T --body 本文
@@ -182,6 +225,12 @@ export async function main(argv: string[]): Promise<number> {
       return emit(runRosterSync(dbPath, s));
     }
     return emit(runRosterShow(dbPath));
+  }
+
+  if (rest[0] === 'route') {
+    const role = flags['role']; const providers = flags['providers']; const busy = flags['busy'];
+    delete flags['role']; delete flags['providers']; delete flags['busy'];
+    return emit(runRoute(dbPath, rest[1], role, providers, busy));
   }
 
   if (rest[0] === 'search') {

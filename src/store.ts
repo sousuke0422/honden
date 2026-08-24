@@ -129,6 +129,23 @@ CREATE TABLE IF NOT EXISTS roster (
   model TEXT
 );
 
+-- モデルの能力制限。
+--
+-- これは「使ってよいモデルの一覧」ではなく「能力に制限があるモデルの一覧」。
+-- 表に無いモデルは制限なし (max_bloom 6) として扱う。
+--
+-- 許可制にすると、新しいモデルが出た日に表へ載るまで使えない。載せ忘れが
+-- そのまま封鎖になる。この領域では「新しいものは古いものより強い」がほぼ
+-- 当たるので、未知を通す向きが正しい。
+--
+-- 素性 (provider) はこの表では縛らない。能力と素性は既定の向きが逆で、
+-- 素性は「未知は止める」でなければならない (src/routing.ts の providerOf)。
+CREATE TABLE IF NOT EXISTS model_limit (
+  model      TEXT PRIMARY KEY,
+  max_bloom  INTEGER NOT NULL CHECK (max_bloom BETWEEN 1 AND 6),
+  cost_group TEXT
+);
+
 -- 各エージェントの持ち場。
 --
 -- ## なぜ貸与 (lease) を持つか
