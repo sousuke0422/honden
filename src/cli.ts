@@ -121,6 +121,26 @@ export function pickInput(src: InputSource): { ok: true; value: Record<string, u
   return { ok: true, value: { ...src.flags } };
 }
 
+/**
+ * 旧 `inbox_write.sh` と同じ並び順の引数を受ける。
+ *
+ *   inbox_write.sh <target> <content> <type> <from>
+ *   honden inbox write <target> <content> <type> <from>
+ *
+ * 既存の呼び出しと指示書がそのまま生きるように残す。ただし本文をシェルの
+ * 引数に載せる形なので、引用符との戦いは残る。長い本文は EOF 側が向いている。
+ *
+ * 並び順の取り違えは、`to` と `from` が agent 名かどうかで拾える
+ * (旧版は 4 つとも空でないかしか見ていなかった)。
+ * `content` と `type` の入れ替わりまでは拾えないので、`--dry-run` で
+ * 読み取り結果を見てから撃つのが確実になる。
+ */
+export function fromPositional(args: string[]): Record<string, string> | undefined {
+  if (args.length !== 4) return undefined;
+  const [to, body, type, from] = args as [string, string, string, string];
+  return { to, body, type, from };
+}
+
 export interface RunResult {
   code: number;
   out?: string;
@@ -141,6 +161,19 @@ export function inboxWrite(dbPath: string | undefined, src: InputSource, dryRun:
   }
 
   const v = picked.value as { to: string; from: string; type: string; body: string };
+
+  // 自分宛は弾く。旧 inbox_write.sh も同じ guard を持っていた。
+  // 項ごとの検査では拾えない (どちらの欄も単体では正しい) ので、ここで見る。
+  if (v.to === v.from) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        `自分宛には送れぬ (to と from がどちらも ${v.to})。\n` +
+        '  宛先か差出人のどちらかが違っておらぬか。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
+
   const at = new Date().toISOString();
   const id = `msg_${at.replace(/[-:.TZ]/g, '')}_${Bun.hash(v.body + at).toString(16).slice(0, 8)}`;
   const summary =
@@ -162,8 +195,9 @@ export function inboxWrite(dbPath: string | undefined, src: InputSource, dryRun:
 
 const USAGE = `honden — 多エージェント運用の差配層
 
-  honden inbox write [--to A --from B --type T --body 本文] [--dry-run]
-  honden inbox write [--dry-run] <<'EOF'
+  honden inbox write <宛先> <本文> <種別> <差出人>          旧 inbox_write.sh と同じ並び
+  honden inbox write --to A --from B --type T --body 本文
+  honden inbox write <<'EOF'
     to: karo
     from: shogun
     type: cmd_new
@@ -171,7 +205,11 @@ const USAGE = `honden — 多エージェント運用の差配層
       本文
   EOF
 
-旗と標準入力は、どちらか一方を使う。両方渡すと弾かれる。
+  --dry-run  読み取り結果だけ見せて書き込まない
+  --db PATH  正本の場所 (既定 ~/.honden/honden.db)
+
+並び順・旗・標準入力は、どれか一つを使う。二つ以上渡すと弾かれる。
+長い本文は EOF が向いておる。シェルが引用符に手を入れぬゆえ。
 `;
 
 export async function main(argv: string[]): Promise<number> {
@@ -184,7 +222,23 @@ export async function main(argv: string[]): Promise<number> {
   const stdin = process.stdin.isTTY ? undefined : await Bun.stdin.text();
 
   if (rest[0] === 'inbox' && rest[1] === 'write') {
-    const r = inboxWrite(dbPath, { flags, stdin }, dryRun);
+    // 旧 inbox_write.sh と同じ並びで来た場合は旗へ寄せる。
+    const positional = fromPositional(rest.slice(2));
+    if (positional && Object.keys(flags).length > 0) {
+      console.error(
+        '並び順の引数と旗の両方が来ておる。どちらが効いたのか分からなくなるゆえ、片方にされよ。',
+      );
+      return EXIT_INVALID;
+    }
+    if (rest.length > 2 && !positional) {
+      console.error(
+        `並び順で渡すなら 4 つ要る (受け取ったのは ${rest.length - 2} つ)。\n` +
+          '  honden inbox write <宛先> <本文> <種別> <差出人>\n' +
+          '  旗や EOF でも渡せる。書き込みは行っておらぬ。',
+      );
+      return EXIT_INVALID;
+    }
+    const r = inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun);
     if (r.out) console.log(r.out);
     if (r.err) console.error(r.err);
     return r.code;

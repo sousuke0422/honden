@@ -11,7 +11,7 @@
  */
 
 import { expect, test, describe } from 'bun:test';
-import { parseFlags, pickInput, inboxWrite, EXIT_OK, EXIT_INVALID } from '../src/cli';
+import { parseFlags, pickInput, inboxWrite, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
 import { validate, nearest, explain } from '../src/validate';
 import { openStore } from '../src/store';
 
@@ -142,6 +142,53 @@ describe('通る場合', () => {
     expect(r.code).toBe(EXIT_OK);
     expect(r.out).toContain('--dry-run');
     expect(r.out).not.toContain('msg_');
+  });
+});
+
+describe('旧 inbox_write.sh と同じ並び', () => {
+  test('4 つの並びを旗へ寄せる', () => {
+    // bash scripts/inbox_write.sh karo "本文" cmd_new shogun と同じ形
+    expect(fromPositional(['karo', '本文', 'cmd_new', 'shogun'])).toEqual({
+      to: 'karo',
+      body: '本文',
+      type: 'cmd_new',
+      from: 'shogun',
+    });
+  });
+
+  test('数が合わなければ受けない', () => {
+    expect(fromPositional(['karo', '本文', 'cmd_new'])).toBeUndefined();
+    expect(fromPositional(['karo', '本文', 'cmd_new', 'shogun', '余分'])).toBeUndefined();
+  });
+
+  test('並びで渡しても同じ検査を通る', () => {
+    const p = fromPositional(['karou', '本文', 'cmd_new', 'shogun'])!;
+    const r = run(p);
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('近いのは karo');
+  });
+
+  test('宛先と差出人が入れ替わっていれば拾える', () => {
+    // 旧版は 4 つとも空でないかしか見ていなかったので通ってしまった
+    const p = fromPositional(['cmd_new', '本文', 'karo', 'shogun'])!;
+    const r = run(p);
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('to');
+  });
+});
+
+describe('自分宛', () => {
+  // 旧 inbox_write.sh も持っていた guard。項ごとの検査では拾えない。
+  test('to と from が同じなら弾く', () => {
+    const r = run({ to: 'karo', from: 'karo', type: 'cmd_new', body: 'x' });
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('自分宛');
+    expect(r.err).toContain('書き込みは行っておらぬ');
+  });
+
+  test('違えば通る', () => {
+    const r = run({ to: 'karo', from: 'shogun', type: 'cmd_new', body: 'x' }, undefined, true);
+    expect(r.code).toBe(EXIT_OK);
   });
 });
 
