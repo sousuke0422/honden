@@ -226,13 +226,30 @@ tests/specs/osato_lms_*
 
 # ══════════════════════════════════════════════════
 # honden 固有の許可（shogun の whitelist 方針を継承）
+#
+# 先頭の / は必須。無いとどの深さにも当たり、
+# node_modules/**/package.json まで開いてしまう（2026-08-24 に実際にやった）。
 # ══════════════════════════════════════════════════
-!.gitmodules
-!kagemusha
-!docs/
-!docs/*.md
-!src/
-!src/**/*.ts
-!src/**/*.json
-!package.json
-!tsconfig.json
+!/.gitmodules
+!/kagemusha
+!/docs/
+!/docs/*.md
+!/src/
+!/src/**/*.ts
+!/test/
+!/test/**/*.ts
+!/package.json
+!/tsconfig.json
+!/bun.lock
+
+# ══════════════════════════════════════════════════
+# 最後に、何があっても追跡しないもの。
+# 上の許可行が緩んでも、ここで止まる。
+# ══════════════════════════════════════════════════
+node_modules/
+**/node_modules/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
