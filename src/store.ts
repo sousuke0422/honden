@@ -222,6 +222,31 @@ CREATE INDEX IF NOT EXISTS ix_doc_kind ON doc(kind, at);
 CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
   body, doc_id UNINDEXED, tokenize = 'unicode61'
 );
+
+-- 取り込み元のファイル。
+--
+-- honden が単体で動くまで、shogun 側の YAML からの取り込みは何度も走る。
+-- 二度目で重複が積もらないよう、ファイルを識別子にして冪等に入れ替える。
+-- sha256 が変わっていなければ触らない。
+CREATE TABLE IF NOT EXISTS source (
+  path        TEXT PRIMARY KEY,
+  sha256      TEXT NOT NULL,
+  bytes       INTEGER NOT NULL,
+  imported_at TEXT NOT NULL,
+  doc_count   INTEGER NOT NULL DEFAULT 0
+);
+
+-- 取り込めなかったものの記録。
+--
+-- 読めないファイルを黙って飛ばしてはならない。飛ばしたことが残らなければ、
+-- 取り込みが「全部入った」ように見える。だが 1 本読めないだけで全体を止めると、
+-- 繰り返しの取り込みが成立しない。なので「記録して続け、最後に非ゼロで終わる」。
+CREATE TABLE IF NOT EXISTS import_issue (
+  path       TEXT PRIMARY KEY,
+  at         TEXT NOT NULL,
+  kind       TEXT NOT NULL,   -- parse / encoding / shape
+  detail     TEXT NOT NULL
+);
 `;
 
 function migrate(db: Database): void {
