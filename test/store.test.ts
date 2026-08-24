@@ -9,7 +9,7 @@
  */
 
 import { expect, test, describe } from 'bun:test';
-import { openStore, pragmas, tx, journal } from '../src/store';
+import { openStore, pragmas, tx, journal, legacy } from '../src/store';
 
 const mem = () => openStore({ path: ':memory:' });
 
@@ -117,6 +117,66 @@ describe('台帳', () => {
     tx(db, () => journal(db, { actor: 'shogun', action: 'cmd.create', target: 'cmd_704' }));
     const r = db.query('SELECT actor, action, target FROM ledger').all();
     expect(r).toEqual([{ actor: 'shogun', action: 'cmd.create', target: 'cmd_704' }]);
+  });
+});
+
+describe('判定型', () => {
+  const insReport = (db: ReturnType<typeof mem>) =>
+    db.prepare('INSERT INTO report(agent, verdict, raw, legacy) VALUES (?,?,?,?)');
+
+  test('規定の 4 値は通る', () => {
+    const db = mem(); const ins = insReport(db);
+    for (const v of ['APPROVED','APPROVED_WITH_CONCERNS','CHANGES_REQUESTED','REJECTED']) {
+      ins.run('gunshi', v, 'x', null);
+    }
+    const n = db.query('SELECT count(*) c FROM report').get() as { c: number };
+    expect(n.c).toBe(4);
+  });
+
+  // 実データで最多だった値。廃止された qa_decision の値が欄の名だけ変わって残ったもの。
+  // gunshi_at.md は pass → APPROVED / APPROVED_WITH_CONCERNS の一対二だと明記しており、
+  // 本文を読まずに写せない。だから型で止める。
+  test('規定外の PASS は入らない', () => {
+    const db = mem();
+    expect(() => insReport(db).run('gunshi', 'PASS', 'x', null)).toThrow();
+  });
+
+  test('CONDITIONAL_PASS も BLOCKED も入らない', () => {
+    const db = mem();
+    expect(() => insReport(db).run('gunshi', 'CONDITIONAL_PASS', 'x', null)).toThrow();
+    expect(() => insReport(db).run('gunshi', 'BLOCKED', 'x', null)).toThrow();
+  });
+
+  test('規定外は verdict を空にして legacy へ逃がせば通る', () => {
+    const db = mem();
+    insReport(db).run('gunshi', null, '原文', legacy({ verdict: 'PASS' }));
+    const r = db.query('SELECT verdict, legacy FROM report').get() as { verdict: null; legacy: string };
+    expect(r.verdict).toBeNull();
+    expect(JSON.parse(r.legacy)).toEqual({ verdict: 'PASS' });
+  });
+
+  // checks[].result は verdict とは別の enum。混ぜると PLAUSIBLE のような
+  // 外部レビューの値が紛れ込んでも気づけない。
+  test('checks の result に APPROVED は入らない (別の enum である)', () => {
+    const db = mem();
+    insReport(db).run('gunshi', 'APPROVED', 'x', null);
+    const id = (db.query('SELECT id FROM report').get() as { id: number }).id;
+    const ins = db.prepare('INSERT INTO report_check(report_id, idx, name, result) VALUES (?,?,?,?)');
+    expect(() => ins.run(id, 0, 'build', 'APPROVED')).toThrow();
+    expect(() => ins.run(id, 1, 'build', 'PLAUSIBLE')).toThrow();
+    ins.run(id, 2, 'build', 'PASS');
+  });
+});
+
+describe('legacy の詰め方', () => {
+  test('中身が無ければ null（空の JSON と取り違えない）', () => {
+    expect(legacy({})).toBeNull();
+    expect(legacy({ a: undefined, b: null })).toBeNull();
+  });
+
+  test('中身があれば JSON 文字列', () => {
+    expect(legacy({ verdict: 'PASS', from: 'shogun' }))
+      .toBe('{"verdict":"PASS","from":"shogun"}');
   });
 });
 

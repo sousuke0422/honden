@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS cmd (
                CHECK (status IN ('pending','in_progress','done','failed','cancelled')),
   assigned_to  TEXT,
   completed_at TEXT,
-  raw          TEXT NOT NULL              -- 取り込み元の YAML 原文。欠落を出さないため
+  raw          TEXT NOT NULL,             -- 取り込み元の YAML 原文。欠落を出さないため
+  legacy       TEXT                       -- 型に収まらなかったものの JSON。null なら無し
 );
 
 -- 受け入れ条件。cmd 1 件に対して順序つきで並ぶ。
@@ -129,15 +130,43 @@ CREATE TABLE IF NOT EXISTS inbox (
 CREATE INDEX IF NOT EXISTS ix_inbox_unread ON inbox(agent, read, created_at);
 
 -- 報告。
+--
+-- verdict は instructions/gunshi_at.md が定める 4 値だけを受ける。
+-- 実データには PASS (90) / CONDITIONAL_PASS (6) / BLOCKED (1) という規定外の値が
+-- 混じっており、規定内 85 件に対して規定外が 97 件と過半を占めていた。
+-- PASS は廃止された qa_decision の値が欄の名だけ変わって残ったものと見える。
+--
+-- これらを推測で写してはならない。gunshi_at.md が明記している。
+--
+--   qa_decision: pass → verdict: APPROVED または APPROVED_WITH_CONCERNS
+--   fail を REJECTED と同義に扱うのは誤り
+--
+-- 一対一ではないので、本文を読まないと写し先が決まらない。
+-- 規定外の値は verdict を空にして legacy へ丸ごと落とす。
 CREATE TABLE IF NOT EXISTS report (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   agent      TEXT NOT NULL,
   task_id    TEXT,
   created_at TEXT,
-  status     TEXT,
-  raw        TEXT NOT NULL
+  verdict    TEXT CHECK (verdict IS NULL OR verdict IN
+               ('APPROVED','APPROVED_WITH_CONCERNS','CHANGES_REQUESTED','REJECTED')),
+  raw        TEXT NOT NULL,
+  legacy     TEXT                      -- 型に収まらなかったものの JSON。null なら無し
 );
 CREATE INDEX IF NOT EXISTS ix_report_agent ON report(agent, created_at);
+
+-- 報告の中の個別の検査項目。verdict とは別の enum を持つ。
+-- 実データは PASS 474 / PLAUSIBLE 4 / FAIL 2 / PARTIAL 2 / WARNING 1 で、
+-- PLAUSIBLE は外部レビューの verdict がこの欄へ紛れ込んだものと見える。
+CREATE TABLE IF NOT EXISTS report_check (
+  report_id INTEGER NOT NULL REFERENCES report(id) ON DELETE CASCADE,
+  idx       INTEGER NOT NULL,
+  name      TEXT NOT NULL,
+  result    TEXT CHECK (result IS NULL OR result IN ('PASS','FAIL','WARNING')),
+  note      TEXT,
+  legacy    TEXT,
+  PRIMARY KEY (report_id, idx)
+);
 
 -- 追記専用の台帳。書き込みは全部ここにも落ちる。
 -- kagemusha の decisions_journal に相当する層。上書きも削除もしない。
@@ -165,6 +194,20 @@ function migrate(db: Database): void {
  */
 export function tx<T>(db: Database, fn: () => T): T {
   return db.transaction(fn)();
+}
+
+/**
+ * 型に収まらなかったものを 1 つの JSON にまとめる。
+ *
+ * 欄を増やして受け止めると、規定と規定外の境目が schema から読めなくなる。
+ * 収まらなかったものは、収まらなかったという事実ごと 1 箇所へ置く。
+ *
+ * 中身が空なら null を返す。null と `'{}'` を区別して、
+ * 「legacy が無い」と「legacy が空だった」を取り違えないため。
+ */
+export function legacy(obj: Record<string, unknown>): string | null {
+  const kept = Object.entries(obj).filter(([, v]) => v !== undefined && v !== null);
+  return kept.length === 0 ? null : JSON.stringify(Object.fromEntries(kept));
 }
 
 /** 台帳へ 1 行落とす。取引の中から呼ぶこと。 */
