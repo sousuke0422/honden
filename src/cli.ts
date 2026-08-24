@@ -40,8 +40,19 @@ export const EXIT_INVALID = 2;
 /**
  * 相手が処理を知っている type だけ。新しい文字列を発明すると相手が黙り込む。
  * `clear_command` は相手のセッションを消すので、布陣外からは撃たせない。
+ *
+ * skills/external-to-shogun は「実在する type は 5 種類のみ」と書いているが、
+ * 実データには report_completed が 5 件ある（2026-08-25 実測・全 145 件を集計）。
+ * 文書ではなくデータに合わせる。
  */
-const TYPES = ['report_received', 'task_assigned', 'cmd_new', 'cmd_update', 'clear_command'] as const;
+const TYPES = [
+  'report_received',
+  'report_completed',
+  'task_assigned',
+  'cmd_new',
+  'cmd_update',
+  'clear_command',
+] as const;
 
 const inboxSchema = (known: readonly string[]): Schema => ({
   to: { required: true, oneOf: known, about: '宛先の agent' },

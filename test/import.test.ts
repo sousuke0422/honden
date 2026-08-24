@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, search } from '../src/store';
-import { importTree, importFile } from '../src/import';
+import { importTree, importFile, collectYaml } from '../src/import';
 
 let root: string;
 beforeEach(() => {
@@ -132,6 +132,38 @@ describe('残っている難あり', () => {
     expect(importTree(db, root, ['queue']).outstanding).toBe(1);
     put('queue/tasks/broken.yaml', 'a: 1\n');
     expect(importTree(db, root, ['queue']).outstanding).toBe(0);
+  });
+});
+
+describe('集め方', () => {
+  // 2026-08-25: readdirSync の withFileTypes は 9p の上で嘘をつく。
+  // queue 直下で inbox だけがファイルと報告され、配下 10 本が取り込みからも
+  // 索引からも初めから漏れていた。エラーは出ず 0 件になるだけ。
+  //
+  // ただし断っておくと、**この試験はその欠陥を検出しない**。試験は /tmp
+  // (ext4) で走り、そこでは withFileTypes が正しく動く。statSync へ戻しても
+  // 緑のままになる。ここで固定しているのは「入れ子を取りこぼさない」という
+  // 意図であって、9p の嘘そのものではない。
+  //
+  // 嘘のほうは実データで確かめた。statSync へ切り替えたら
+  // inbox の取り込みが 0 件から 145 件になった。
+  test('入れ子のディレクトリを取りこぼさぬ', () => {
+    mkdirSync(join(root, 'queue', 'inbox'), { recursive: true });
+    mkdirSync(join(root, 'queue', 'a', 'b', 'c'), { recursive: true });
+    put('queue/inbox/karo.yaml', 'messages: []\n');
+    put('queue/tasks/x.yaml', 'x: 1\n');
+    put('queue/a/b/c/deep.yaml', 'x: 1\n');
+    const found = collectYaml(join(root, 'queue'));
+    expect(found.length).toBe(3);
+    expect(found.filter((p) => p.includes('/inbox/')).length).toBe(1);
+    expect(found.filter((p) => p.includes('/c/')).length).toBe(1);
+  });
+
+  test('yaml でないものは拾わぬ', () => {
+    put('queue/tasks/x.yaml', 'x: 1\n');
+    put('queue/tasks/x.yaml.lock', '');
+    put('queue/tasks/readme.md', '#');
+    expect(collectYaml(join(root, 'queue')).length).toBe(1);
   });
 });
 

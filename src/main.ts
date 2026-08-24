@@ -9,7 +9,10 @@
  */
 
 import { openStore, search, tx, type Hit } from './store';
-import { importTree, type ImportResult } from './import';
+import { readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { importTree, collectYaml, type ImportResult } from './import';
+import { ingestAll } from './ingest';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
 import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
 import { readLimitsFromSettings, syncLimits, recommend } from './routing';
@@ -31,10 +34,16 @@ export function runImport(
   } catch (e) {
     return { code: EXIT_SYSTEM, err: `取り込みが止まった: ${String(e).slice(0, 300)}` };
   }
+  // 本文を入れたあと、形が読めたものを型のある表へ写す。
+  const files = subdirs
+    .flatMap((s) => collectYaml(join(root, s)))
+    .map((p) => ({ path: relative(root, p).split('\\').join('/'), body: readFileSync(p, 'utf8') }));
+  const ing = ingestAll(db, root, files);
   const ms = ((Bun.nanoseconds() - t0) / 1e6).toFixed(0);
 
   const lines = [
     `  走査 ${r.scanned}  取込 ${r.imported}  据置 ${r.skipped}  ${ms}ms`,
+    `  構造化: inbox ${ing.inbox} / task ${ing.task} / report ${ing.report}（読めず飛ばした ${ing.skipped}）`,
   ];
   if (r.outstanding > 0) {
     // 当たった件数ではなく残っている件数を出す。sha256 が変わっていないファイルは

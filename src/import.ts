@@ -42,14 +42,35 @@ export interface ImportResult {
   outstanding: number;
 }
 
-/** YAML ファイルを再帰的に集める。 */
+/**
+ * YAML ファイルを再帰的に集める。
+ *
+ * ## dirent の型を信じない
+ *
+ * `readdirSync(dir, { withFileTypes: true })` の `isDirectory()` は 9p
+ * (`/mnt/c`) の上で嘘をつく。実測 (2026-08-25): `queue` 直下で `archive` /
+ * `metrics` / `reports` / `tasks` は正しく d と返るのに、`inbox` だけが f と
+ * 返った。実体は `drwxr-xr-x` のディレクトリ。
+ *
+ * そのせいで `queue/inbox/` 配下 10 本が、取り込みからも索引からも初めから
+ * 漏れていた。エラーは出ない。ただ 0 件になるだけなので、数えるまで気づけない。
+ *
+ * `statSync` は実体を見るので嘘をつかない。1 階層ごとに 1 回余分に叩くが、
+ * 800 本で数秒の差にしかならない。黙って一部を落とすほうが高い。
+ */
 export function collectYaml(root: string): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith('.yaml') || e.name.endsWith('.yml')) out.push(p);
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      let isDir: boolean;
+      try {
+        isDir = statSync(p).isDirectory();
+      } catch {
+        continue; // 読めないものは飛ばす（壊れた symlink 等）
+      }
+      if (isDir) walk(p);
+      else if (name.endsWith('.yaml') || name.endsWith('.yml')) out.push(p);
     }
   };
   walk(root);
