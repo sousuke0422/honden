@@ -124,9 +124,31 @@ export interface RecommendOptions {
   busy?: readonly string[];
 }
 
+export interface Switchable {
+  agent: string;
+  /** いま載せているモデル。 */
+  from: string;
+  /** 切り替え先の案。足りる中で最も軽いもの。 */
+  to: string;
+  /** そのモデルを載せている者が居れば、その CLI。居なければ null。 */
+  cli: string | null;
+  reason: string;
+}
+
 export interface Recommendation {
   ok: boolean;
+  /** いまのまま振れる者。 */
   candidates: Candidate[];
+  /**
+   * 切り替えれば振れる者。
+   *
+   * いま走っていないモデルを挙げること自体は問題ない。switch_cli.sh で
+   * どの agent もどのモデルへ切り替えられる。fable が過剰／不足なときに
+   * opus や sonnet へ寄せる筋もある。
+   *
+   * 手が塞がっている者・素性で外れた者はここに載せない。切り替えても解けぬゆえ。
+   */
+  switchable: Switchable[];
   /** 選べなかったときの理由。誰がなぜ外れたかまで書く。 */
   message?: string;
 }
@@ -139,15 +161,29 @@ export interface Recommendation {
  */
 export function recommend(db: Database, opts: RecommendOptions): Recommendation {
   if (!Number.isInteger(opts.bloom) || opts.bloom < 1 || opts.bloom > 6) {
-    return { ok: false, candidates: [], message: `bloom は 1 から 6 の整数。受け取った値: ${opts.bloom}` };
+    return { ok: false, candidates: [], switchable: [], message: `bloom は 1 から 6 の整数。受け取った値: ${opts.bloom}` };
   }
   const all: RosterEntry[] = roster(db);
   if (all.length === 0) {
-    return { ok: false, candidates: [], message: '名簿が空である。honden roster sync で入れられよ。' };
+    return { ok: false, candidates: [], switchable: [], message: '名簿が空である。honden roster sync で入れられよ。' };
   }
+
+  // その難度に足りるモデルを、軽い順に並べた品揃え。
+  // 表に載っているものだけを見る。未知のモデルは制限なしだが、
+  // 名を知らぬものを「切り替え先」として勧めることはできない。
+  const catalog = (
+    db.query('SELECT model, max_bloom FROM model_limit WHERE max_bloom >= ? ORDER BY max_bloom, model').all(
+      opts.bloom,
+    ) as { model: string; max_bloom: number }[]
+  ).filter((m) => !opts.allowedProviders || opts.allowedProviders.includes(providerOf(m.model)));
+
+  // そのモデルを今載せている者が居れば、その CLI を添える。
+  const cliOf = new Map<string, string>();
+  for (const e of all) if (e.model && e.cli) cliOf.set(e.model, e.cli);
 
   const rejected: string[] = [];
   const candidates: Candidate[] = [];
+  const switchable: Switchable[] = [];
 
   for (const e of all) {
     if (opts.role && e.role !== opts.role) continue;
@@ -167,6 +203,17 @@ export function recommend(db: Database, opts: RecommendOptions): Recommendation 
     const maxBloom = maxBloomOf(db, e.model);
     if (maxBloom < opts.bloom) {
       rejected.push(`${e.id}: ${e.model} は L${maxBloom} まで（L${opts.bloom} に足りぬ）`);
+      // 能力だけで外れた者は、切り替えれば足りる。
+      const to = catalog.find((m) => m.model !== e.model);
+      if (to) {
+        switchable.push({
+          agent: e.id,
+          from: e.model,
+          to: to.model,
+          cli: cliOf.get(to.model) ?? null,
+          reason: `${e.model} は L${maxBloom} まで`,
+        });
+      }
       continue;
     }
     candidates.push({ agent: e.id, model: e.model, cli: e.cli, provider, maxBloom });
@@ -176,14 +223,22 @@ export function recommend(db: Database, opts: RecommendOptions): Recommendation 
   candidates.sort((a, b) => a.maxBloom - b.maxBloom || a.agent.localeCompare(b.agent));
 
   if (candidates.length === 0) {
-    return {
-      ok: false,
-      candidates: [],
-      message:
-        `L${opts.bloom}${opts.role ? `（${opts.role === 'worker' ? '足軽' : '上役'}）` : ''} に振れる者が居らぬ。\n` +
-        rejected.map((r) => `    ${r}`).join('\n') +
-        '\n  仕事を分けて bloom を下げるか、手が空くのを待たれよ。',
-    };
+    const lines = [
+      `L${opts.bloom}${opts.role ? `（${opts.role === 'worker' ? '足軽' : '上役'}）` : ''} に、いまのまま振れる者は居らぬ。`,
+      ...rejected.map((r) => `    ${r}`),
+    ];
+    if (switchable.length > 0) {
+      lines.push('  切り替えれば振れる者:');
+      for (const s of switchable) {
+        lines.push(
+          `    ${s.agent}: ${s.from} → ${s.to}` +
+            (s.cli ? `  bash scripts/switch_cli.sh ${s.agent} --type ${s.cli} --model ${s.to}` : ''),
+        );
+      }
+    } else {
+      lines.push('  仕事を分けて bloom を下げるか、手が空くのを待たれよ。');
+    }
+    return { ok: false, candidates: [], switchable, message: lines.join('\n') };
   }
-  return { ok: true, candidates };
+  return { ok: true, candidates, switchable };
 }

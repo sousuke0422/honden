@@ -138,6 +138,67 @@ describe('振り先を挙げる', () => {
   });
 });
 
+describe('切り替えれば振れる者', () => {
+  // いま走っていないモデルを挙げること自体は問題ない。switch_cli.sh で
+  // どの agent もどのモデルへ切り替えられる。fable が過剰／不足なときに
+  // opus や sonnet へ寄せる筋もある。
+  const weakFleet = () => {
+    const db = openStore({ path: ':memory:' });
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'ashigaru1', role: 'worker', cli: 'cursor', model: 'composer-2.5' },
+        { id: 'ashigaru2', role: 'worker', cli: 'cursor', model: 'composer-2.5' },
+        { id: 'shogun', role: 'commander', cli: 'claude', model: 'claude-opus-5' },
+      ]);
+      syncLimits(db, [
+        { model: 'composer-2.5', maxBloom: 4, costGroup: 'cursor' },
+        { model: 'claude-opus-5', maxBloom: 6, costGroup: 'claude_max' },
+        // 誰も走らせていないが、切り替え先としては挙げてよい
+        { model: 'gpt-5.5', maxBloom: 6, costGroup: 'chatgpt_plus' },
+      ]);
+    });
+    return db;
+  };
+
+  test('能力で外れた者は、切り替え案つきで出る', () => {
+    const r = recommend(weakFleet(), { bloom: 6, role: 'worker' });
+    expect(r.ok).toBe(false);
+    expect(r.switchable.map((s) => s.agent).sort()).toEqual(['ashigaru1', 'ashigaru2']);
+    expect(r.switchable[0]?.from).toBe('composer-2.5');
+    expect(r.message).toContain('切り替えれば振れる者');
+  });
+
+  test('切り替え先を今載せておる者が居れば、その CLI も添える', () => {
+    const r = recommend(weakFleet(), { bloom: 6, role: 'worker' });
+    const s = r.switchable.find((x) => x.to === 'claude-opus-5');
+    expect(s?.cli).toBe('claude');
+    expect(r.message).toContain('switch_cli.sh');
+  });
+
+  // 手が塞がっている者を切り替えても解けない。
+  test('手が塞がっておる者は切り替え案に出さぬ', () => {
+    const r = recommend(weakFleet(), { bloom: 6, role: 'worker', busy: ['ashigaru1'] });
+    expect(r.switchable.map((s) => s.agent)).toEqual(['ashigaru2']);
+  });
+
+  test('素性で外れた者も切り替え案に出さぬ', () => {
+    const db = openStore({ path: ':memory:' });
+    tx(db, () => {
+      syncRoster(db, [{ id: 'ashigaru1', role: 'worker', cli: 'opencode', model: 'deepseek-v5' }]);
+      syncLimits(db, [{ model: 'claude-opus-5', maxBloom: 6, costGroup: 'claude_max' }]);
+    });
+    const r = recommend(db, { bloom: 6, role: 'worker', allowedProviders: ['anthropic'] });
+    expect(r.switchable).toEqual([]);
+    expect(r.message).toContain('系統が deepseek');
+  });
+
+  test('いまのまま振れる者が居れば、切り替えは要らぬ', () => {
+    const r = recommend(seeded(), { bloom: 3, role: 'worker' });
+    expect(r.ok).toBe(true);
+    expect(r.switchable).toEqual([]);
+  });
+});
+
 describe('素性で締める', () => {
   const chinese = () => {
     const db = openStore({ path: ':memory:' });

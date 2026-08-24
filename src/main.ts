@@ -126,13 +126,18 @@ export function runRoute(
     busy: busy ? busy.split(',').filter(Boolean) : undefined,
   });
   if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  const sw =
+    r.switchable.length > 0
+      ? '\n  切り替えれば足りる者もおる:\n' +
+        r.switchable.map((s) => `    ${s.agent}: ${s.from} → ${s.to}`).join('\n')
+      : '';
   return {
     code: EXIT_OK,
     out:
       `  L${bloom} に振れる者（足りる中で軽い順）\n` +
       r.candidates
         .map((c) => `    ${c.agent.padEnd(10)} ${c.model.padEnd(16)} ${c.provider.padEnd(10)} L${c.maxBloom} まで`)
-        .join('\n'),
+        .join('\n') + sw,
   };
 }
 
