@@ -108,13 +108,47 @@ CREATE TABLE IF NOT EXISTS cmd_acceptance (
 );
 
 -- 各エージェントの持ち場。
+--
+-- ## なぜ貸与 (lease) を持つか
+--
+-- YAML 直書きの造りでは status: assigned が一度書かれるだけで更新されない。
+-- だから「今も持ち主が居るのか」を直に問えず、周辺の痕跡から推し量るしかない。
+--
+-- shogun 側の沈黙検知 (lib/stale_task_detect.sh) は、こう推し量っている。
+--
+--   最終活動 = max(assigned_at, report の mtime, task YAML の mtime)
+--
+-- そのために 4 層 (死署名 / 沈黙30分 / 再通知90分 / pane 不在) と 500 行余りが要る。
+-- しかも死署名の層には「新しい壊れ方は未知の文字列。一覧に無ければ原理的に
+-- 取りこぼす」と実装者自身の但し書きがある。
+--
+-- mtime は嘘をつく。関係ない者がファイルを触れば動くし (2026-08-24 に将軍が
+-- 実演した)、足軽が黙って考えていれば生きていても沈黙と判ぜられる。
+-- 痕跡は活動そのものではない。
+--
+-- 期限を持てば、期限切れは推定ではなく事実になる。pane を覗く必要も、
+-- 死署名の一覧を育てる必要も無くなる。
+--
+-- ## DHCP から借りるもの・借りないもの
+--
+-- 借りる: 更新は期限の前に仕事のついでに行う (T1 更新) / 台帳が正であって
+-- 持ち主の自己申告ではない / 再起動時は前の貸与を確かめてから使う (INIT-REBOOT。
+-- /clear 復帰がこれに当たる)。
+--
+-- 借りない: 期限切れで自動的に池へ返すこと。IP は誰に渡っても同じだが、
+-- 半分やりかけた仕事は他の足軽に渡しても続かない。文脈が消えているため。
+-- 期限切れは「空き」ではなく「要報告」として扱う。
+-- shogun 側の実装も既に「自動振り直しなし」と明記していて、そこは正しい。
 CREATE TABLE IF NOT EXISTS task (
-  agent      TEXT PRIMARY KEY,
-  task_id    TEXT,
-  status     TEXT NOT NULL DEFAULT 'idle',
-  cmd_id     TEXT,
-  updated_at TEXT NOT NULL,
-  raw        TEXT NOT NULL
+  agent       TEXT PRIMARY KEY,
+  task_id     TEXT,
+  status      TEXT NOT NULL DEFAULT 'idle',
+  cmd_id      TEXT,
+  updated_at  TEXT NOT NULL,
+  raw         TEXT NOT NULL,
+  holder      TEXT,          -- 誰が握っているか。null なら空き
+  leased_at   TEXT,
+  lease_until TEXT           -- ここを過ぎたら期限切れ。ただし自動返却はしない
 );
 
 -- 受け渡し。read は既定で 0 (未読)。
