@@ -19,8 +19,13 @@ pub const IN_MOVE_SELF: u32 = 0x0000_0800;
 const IN_NONBLOCK: i32 = 0o4000;
 const IN_CLOEXEC: i32 = 0o2000000;
 
+// flock の操作。Linux/BSD で同じ値。
+pub const LOCK_EX: i32 = 2;
+pub const LOCK_NB: i32 = 4;
+
 extern "C" {
     fn inotify_init1(flags: i32) -> i32;
+    fn flock(fd: i32, operation: i32) -> i32;
     fn inotify_add_watch(fd: i32, pathname: *const i8, mask: u32) -> i32;
     fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
     fn close(fd: i32) -> i32;
@@ -118,5 +123,32 @@ impl Drop for Inotify {
     fn drop(&mut self) {
         // SAFETY: 自分で開いた fd を一度だけ閉じる。
         unsafe { close(self.fd) };
+    }
+}
+
+/// 二重起動を防ぐ錠。落とすと解ける。
+///
+/// ファイルを消しても解けない（inode に付くため）。プロセスが落ちれば
+/// OS が解く——「錠を残したまま死ぬ」が起きないのが、印ファイルとの違い。
+pub struct FileLock {
+    _file: std::fs::File,
+}
+
+impl FileLock {
+    /// 握れたら Some。他が握っていれば None。
+    pub fn try_acquire(path: &Path) -> io::Result<Option<Self>> {
+        use std::os::unix::io::AsRawFd;
+        let file = std::fs::OpenOptions::new().create(true).write(true).open(path)?;
+        // SAFETY: fd は file が生きている間だけ有効で、その間にしか使わない。
+        let r = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+        if r == 0 {
+            return Ok(Some(Self { _file: file }));
+        }
+        let e = io::Error::last_os_error();
+        // 他が握っておる。失敗ではない。
+        if e.raw_os_error() == Some(11) {
+            return Ok(None); // EWOULDBLOCK
+        }
+        Err(e)
     }
 }

@@ -1,3 +1,6 @@
+// 試験の名は日本語で書く。読み手が何を検めておるかを一目で追えるようにするため。
+#![cfg_attr(test, allow(non_snake_case))]
+
 //! 芯の決め事。syscall を持たないので、そのまま試験できる。
 //!
 //! ## 何を知っていて、何を知らないか
@@ -24,6 +27,10 @@
 //! 未読を数えるたびに python3 が PyYAML を読み込む。
 //! 速さの話ではない。**何も起きていない間の常駐費**である。
 
+pub mod oal;
+
+use oal::{Oal, Watch};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// 芯の決め事。
@@ -256,5 +263,232 @@ mod tests {
         // 手が途中で何行も出しても、最後の一行を見る
         let out = "{\"next_wake_ms\": 1000}\n途中の報せ\n{\"next_wake_ms\": 2000}";
         assert_eq!(parse_next_wake(out), Some(Duration::from_millis(2000)));
+    }
+}
+
+/// 回り方。
+///
+/// OS から借りるものは全部 `Oal` 越し。ここには syscall が一つも無い。
+///
+/// `limit` は試験のための止め木。None なら永久に回る。
+pub fn run_loop<O: Oal>(
+    os: &O,
+    paths: &[PathBuf],
+    hook: &[String],
+    policy: Policy,
+    lock_path: Option<&Path>,
+    limit: Option<usize>,
+) -> Result<usize, String> {
+    if let Some(p) = lock_path {
+        match os.single_instance(p) {
+            // 錠は返り値を捨てずに持っておくこと。落とすと解ける。
+            Ok(Some(guard)) => {
+                let r = spin(os, paths, hook, policy, limit);
+                drop(guard);
+                return r;
+            }
+            Ok(None) => {
+                return Err(format!("既に別の芯が見張っておる（{}）。二重には走らせぬ。", p.display()));
+            }
+            Err(e) => return Err(format!("錠を取れぬ: {e}")),
+        }
+    }
+    spin(os, paths, hook, policy, limit)
+}
+
+fn spin<O: Oal>(
+    os: &O,
+    paths: &[PathBuf],
+    hook: &[String],
+    policy: Policy,
+    limit: Option<usize>,
+) -> Result<usize, String> {
+    let mut w = os.watch(paths).map_err(|e| format!("見張れぬ: {e}"))?;
+    let mut sched = Scheduler::new(policy);
+    let mut runs = 0usize;
+
+    // 空回りの歯止め。
+    //
+    // 待ったのに時が進まぬ回数を数える。実装が約束 (Watch::wait の註) を
+    // 守っておれば 0 か 1 で済む。続くのは OS の口が壊れている時だけで、
+    // その時は密なループになり、機械ごと持っていかれる。
+    // 実際に試験用の偽物で 25 GiB 食って OOM に殺された (2026-08-26)。
+    //
+    // 止めるより回り続けるほうが良い場面ではない。誰も起こせぬ芯は
+    // 生きている意味が無いので、誤りとして落として気づかせる。
+    const SPIN_LIMIT: u32 = 64;
+    let mut spins: u32 = 0;
+    let mut last_seen = os.now();
+
+    loop {
+        match sched.step(os.now()) {
+            Step::Run => {
+                let next = match os.run(hook) {
+                    Ok(o) => {
+                        if !o.stderr.trim().is_empty() {
+                            eprint!("{}", o.stderr);
+                        }
+                        if !o.ok {
+                            eprintln!("手が {} で終わった", o.status);
+                        }
+                        parse_next_wake(&o.stdout)
+                    }
+                    Err(e) => {
+                        // 手が落ちても芯は落とさない。
+                        // 芯が落ちると、誰も起こせなくなる。
+                        eprintln!("手を呼べぬ: {} ({e})", hook[0]);
+                        None
+                    }
+                };
+                sched.ran(os.now(), next);
+                runs += 1;
+                if let Some(n) = limit {
+                    if runs >= n {
+                        return Ok(runs);
+                    }
+                }
+            }
+            Step::Wait(d) => {
+                match w.wait(d) {
+                    Ok(true) => sched.touched(os.now()),
+                    Ok(false) => {}
+                    Err(e) => return Err(format!("待ちに失敗した: {e}")),
+                }
+                let now = os.now();
+                if now > last_seen {
+                    last_seen = now;
+                    spins = 0;
+                } else {
+                    spins += 1;
+                    if spins >= SPIN_LIMIT {
+                        return Err(format!(
+                            "待っても時が進まぬ。{SPIN_LIMIT} 回続いたゆえ止める。\n\
+                             　見張る口が timeout ぶん眠っておらぬ（Watch::wait の約束）。\n\
+                             　このまま回すと密なループになり、機械ごと持っていかれる。"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod loop_tests {
+    use super::oal::fake::{broken, out, Fake, Script};
+    use super::*;
+
+    fn paths() -> Vec<PathBuf> {
+        vec![PathBuf::from("/dummy")]
+    }
+    fn hook() -> Vec<String> {
+        vec!["honden".into(), "nudge".into()]
+    }
+
+    #[test]
+    fn 手の言うた次の起床を採る() {
+        let os = Fake::new(Script {
+            events: vec![false, false, false],
+            outs: vec![out("{\"next_wake_ms\": 120000}")],
+            lock_free: true,
+        });
+        run_loop(&os, &paths(), &hook(), Policy::default(), None, Some(2)).unwrap();
+        // 一番長い待ちを見る。呼んだ直後は歯止め (floor) の 500ms が先に効くので、
+        // 最初の待ちは常にそちらになる。見たいのは「手の言うた時まで寝るか」。
+        let longest = os.log.borrow().waits.iter().flatten().copied().max().expect("待ちが記録されておらぬ");
+        assert!(longest.as_secs() >= 119, "手の言うた 120 秒でなく {longest:?} までしか寝ぬ");
+    }
+
+    #[test]
+    fn 手が落ちても回り続ける() {
+        // 芯が落ちると誰も起こせなくなる。落ちた手は既定の網へ落とす。
+        let os = Fake::new(Script { events: vec![false; 8], outs: vec![broken()], lock_free: true });
+        let runs = run_loop(&os, &paths(), &hook(), Policy::default(), None, Some(3)).unwrap();
+        assert_eq!(runs, 3);
+        let longest = os.log.borrow().waits.iter().flatten().copied().max().unwrap();
+        // 既定の網 (300 秒) へ落ちておること。読めぬ出力を「今すぐ」と解しておらぬ証。
+        assert!(longest.as_secs() >= 299, "既定の網でなく {longest:?}");
+    }
+
+    #[test]
+    fn 二重には走らせぬ() {
+        let os = Fake::new(Script { events: vec![], outs: vec![], lock_free: false });
+        let e = run_loop(&os, &paths(), &hook(), Policy::default(), Some(Path::new("/tmp/x.lock")), Some(1))
+            .unwrap_err();
+        assert!(e.contains("既に別の芯"), "{e}");
+        // 錠が取れねば手は一度も呼ばれぬ
+        assert_eq!(os.log.borrow().runs.len(), 0);
+    }
+
+    #[test]
+    fn 錠が空いておれば走る() {
+        let os = Fake::new(Script { events: vec![false], outs: vec![out("{}")], lock_free: true });
+        let runs = run_loop(&os, &paths(), &hook(), Policy::default(), Some(Path::new("/tmp/x.lock")), Some(1))
+            .unwrap();
+        assert_eq!(runs, 1);
+    }
+
+    #[test]
+    fn 変化が来れば束ねて呼ぶ() {
+        // 時計を 100ms 刻みで進める。debounce 200ms ゆえ、
+        // 変化を 3 度受けても呼ばれるのは 1 度で済むこと。
+        let os = Fake::new(Script {
+            events: vec![true, true, true, false],
+            outs: vec![out("{\"next_wake_ms\": 600000}")],
+            lock_free: true,
+        });
+        let runs = run_loop(&os, &paths(), &hook(), Policy::default(), None, Some(2)).unwrap();
+        // 起動直後の 1 回 + 束ねた 1 回
+        assert_eq!(runs, 2);
+    }
+
+    #[test]
+    fn 台本を使い切れば止まる() {
+        // 偽物が「使い切った」を黙って「何も来ない」にすると、
+        // 上の層は永久に回る。実際に 25 GiB 食って OOM に殺された
+        // (2026-08-26)。止まることを試験で押さえる。
+        let os = Fake::new(Script { events: vec![false], outs: vec![out("{}")], lock_free: true });
+        let e = run_loop(&os, &paths(), &hook(), Policy::default(), None, None).unwrap_err();
+        assert!(e.contains("待ちに失敗"), "{e}");
+        // 際限なく積もっていないこと
+        assert!(os.log.borrow().waits.len() <= 4, "待ちが {} 回も積もった", os.log.borrow().waits.len());
+    }
+
+    #[test]
+    fn 待たされたぶん時が進む() {
+        // 実物の wait は頼まれた時間ぶん眠る。眠らぬ偽物を置くと、
+        // 束ねも歯止めも期限も、全部その進みを前提にしておるゆえ崩れる。
+        let os = Fake::new(Script {
+            events: vec![false, false],
+            outs: vec![out("{\"next_wake_ms\": 1000}")],
+            lock_free: true,
+        });
+        let t0 = os.now();
+        run_loop(&os, &paths(), &hook(), Policy::default(), None, Some(2)).unwrap();
+        assert!(os.now() >= t0 + Duration::from_millis(1000), "時が進んでおらぬ");
+    }
+
+    #[test]
+    fn 眠らぬ口は止められる() {
+        // 約束を破った口（timeout を無視して即返す）を挿す。
+        // 歯止めが無ければここで機械が焼ける。
+        let os = Fake::new(Script {
+            // 常に「何も来ぬ」を返し続け、時も進めぬ口
+            events: vec![false; 10_000],
+            outs: vec![out("{\"next_wake_ms\": 600000}")],
+            lock_free: true,
+        })
+        .sleepless();
+        let e = run_loop(&os, &paths(), &hook(), Policy::default(), None, None).unwrap_err();
+        assert!(e.contains("時が進まぬ"), "{e}");
+        // 際限なく積もらずに止まっておること
+        assert!(os.log.borrow().waits.len() < 100, "{} 回も回った", os.log.borrow().waits.len());
+    }
+
+    #[test]
+    fn 手には渡した命令がそのまま行く() {
+        let os = Fake::new(Script { events: vec![false], outs: vec![out("{}")], lock_free: true });
+        run_loop(&os, &paths(), &hook(), Policy::default(), None, Some(1)).unwrap();
+        assert_eq!(os.log.borrow().runs[0], hook());
     }
 }
