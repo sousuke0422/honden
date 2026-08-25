@@ -98,6 +98,10 @@ export interface InputSource {
  * 両方来たら弾く。黙って片方を優先すると、どちらが効いたのか撃った側に分からない。
  */
 export function pickInput(src: InputSource): { ok: true; value: Record<string, unknown> } | { ok: false; message: string } {
+  // 断っておくと、main.ts は旗が来ているとき標準入力を読まない
+  // （端末でない環境で永久に待つのを避けるため）。ゆえに実運用で
+  // 「両方来た」が起きるのは、旗が無く標準入力だけがある筋に限られる。
+  // ここの検査は、関数を直に呼ぶ場合と将来のために残してある。
   const hasFlags = Object.keys(src.flags).length > 0;
   const hasStdin = src.stdin !== undefined && src.stdin.trim() !== '';
 

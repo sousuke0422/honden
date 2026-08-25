@@ -14,6 +14,8 @@ import { join, relative } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll } from './inbox';
+import { createCmd, assignTask } from './dispatch';
+import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
 import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
 import { readLimitsFromSettings, syncLimits, recommend } from './routing';
@@ -108,6 +110,48 @@ export function runRosterShow(dbPath: string | undefined): RunResult {
     code: EXIT_OK,
     out: r.map((e) => `  ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n'),
   };
+}
+
+/** `honden cmd new` — 司令を書く。将軍だけ。 */
+export function runCmdNew(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  src: InputSource,
+  dryRun: boolean,
+): RunResult {
+  const picked = pickInput(src);
+  if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
+  if (dryRun) {
+    return {
+      code: EXIT_OK,
+      out: `  読み取り: ${Object.keys(picked.value).join(' / ')}\n  → 書き込んでおらぬ (--dry-run)`,
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = createCmd(db, selfId, picked.value);
+  if (!r.ok) return { code: EXIT_INVALID, err: r.message };
+  return { code: EXIT_OK, out: `  ${r.id} を書いた。家老へ渡されよ。` };
+}
+
+/** `honden task assign` — 持ち場へ振る。家老だけ。 */
+export function runTaskAssign(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  src: InputSource,
+  dryRun: boolean,
+): RunResult {
+  const picked = pickInput(src);
+  if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
+  if (dryRun) {
+    return {
+      code: EXIT_OK,
+      out: `  読み取り: ${Object.keys(picked.value).join(' / ')}\n  → 書き込んでおらぬ (--dry-run)`,
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = assignTask(db, selfId, picked.value);
+  if (!r.ok) return { code: EXIT_INVALID, err: r.message };
+  return { code: EXIT_OK, out: `  ${r.id} を振った。task_assigned を届けた。` };
 }
 
 /** `honden inbox read` — 未読を読む。 */
@@ -249,6 +293,17 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden roster sync --settings <settings.yaml>        顔ぶれを入れ替える
   honden roster                                        いまの顔ぶれ
   honden import [--root PATH] [--sub queue,saytask]   shogun の YAML を取り込む
+  honden cmd new <<'EOF'                               司令を書く（将軍だけ）
+    north_star: …
+    purpose: …
+    acceptance_criteria:
+      - …
+    command: |
+      …
+    project: vrt
+    priority: high
+  EOF
+  honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
   honden route <1-6> [--role worker] [--providers ...] 誰に振れるかを挙げる
   honden search <語> [--limit N]                       取り込んだものを引く
   honden inbox write <宛先> <本文> <種別> <差出人>      旧 inbox_write.sh と同じ並び
@@ -301,6 +356,24 @@ export async function main(argv: string[]): Promise<number> {
     return id;
   };
 
+
+  /**
+   * 標準入力を読む。
+   *
+   * 旗が来ているときは読まない。端末でない環境（cron・別プロセスから呼ばれた
+   * 場合など）では `process.stdin.isTTY` が false になるが、書き手が居なければ
+   * EOF も来ないので、読みにいくと永久に待つ。2026-08-25 に実際に固まった。
+   *
+   * 代償として「旗と標準入力の両方が来た」場合を拾えなくなる。だが黙って
+   * 固まるより、片方を無視するほうがましになる。旗が来ている時点で、
+   * 撃った側の意図は旗にある。
+   */
+  const readStdin = async (): Promise<string | undefined> => {
+    if (Object.keys(flags).length > 0) return undefined;
+    if (process.stdin.isTTY) return undefined;
+    return await Bun.stdin.text();
+  };
+
   const emit = (r: RunResult): number => {
     if (r.out) console.log(r.out);
     if (r.err) console.error(r.err);
@@ -313,6 +386,16 @@ export async function main(argv: string[]): Promise<number> {
     delete flags['root'];
     delete flags['sub'];
     return emit(runImport(dbPath, root, subs));
+  }
+
+  if (rest[0] === 'cmd' && rest[1] === 'new') {
+    const stdin = await readStdin();
+    return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'task' && rest[1] === 'assign') {
+    const stdin = await readStdin();
+    return emit(runTaskAssign(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
   if (rest[0] === 'roster') {
@@ -350,7 +433,7 @@ export async function main(argv: string[]): Promise<number> {
       );
       return EXIT_INVALID;
     }
-    const stdin = process.stdin.isTTY ? undefined : await Bun.stdin.text();
+    const stdin = await readStdin();
     const pane = process.env.TMUX_PANE ?? '';
     const insideFormation = pane !== '';
     // 名乗りは環境から取る。引数の from とは突き合わせるだけで、信じない。
