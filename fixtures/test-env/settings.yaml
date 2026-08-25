@@ -1,0 +1,45 @@
+# 試験環境の設定。本番（multi-agent-shogun）とは別の布陣を持つ。
+#
+# 足軽 7 体は要らない。2 体で回る環境が正しく扱えるかを確かめるための小さな布陣。
+# 投資分析用の環境（fshogun）を想定した形でもある。
+language: ja
+
+cli:
+  default: claude
+  agents:
+    shogun:
+      type: claude
+      model: claude-opus-5
+    karo:
+      type: claude
+      model: claude-sonnet-5
+    gunshi:
+      type: claude
+      model: claude-sonnet-5
+    ashigaru1:
+      type: claude
+      model: claude-fable-5
+    ashigaru2:
+      type: cursor
+      model: composer-2.5
+
+bloom_routing: manual
+
+available_cost_groups:
+  - claude_max
+  - cursor
+
+# 能力に制限があるモデルだけを挙げる。表に無いものは制限なし。
+capability_tiers:
+  composer-2.5:
+    max_bloom: 4
+    cost_group: cursor
+  claude-opus-5:
+    max_bloom: 6
+    cost_group: claude_max
+  claude-sonnet-5:
+    max_bloom: 6
+    cost_group: claude_max
+  claude-fable-5:
+    max_bloom: 6
+    cost_group: claude_max

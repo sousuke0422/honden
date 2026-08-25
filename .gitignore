@@ -241,6 +241,10 @@ tests/specs/osato_lms_*
 !/package.json
 !/tsconfig.json
 !/bun.lock
+!/fixtures/
+!/fixtures/**/*.yaml
+!/skills/
+!/skills/**/SKILL.md
 
 # ══════════════════════════════════════════════════
 # 最後に、何があっても追跡しないもの。

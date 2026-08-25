@@ -314,7 +314,8 @@ describe('読み戻し', () => {
       expect(r.code).toBe(EXIT_OK);
       expect(r.out).toContain('渡した本文と一致');
       expect(r.out).toContain('未読: はい');
-      expect(r.out).toContain('inbox1');
+      // 合図の形は nudgeText 一本。手で打つときも watcher が送るときも同じ文字列。
+      expect(r.out).toContain('inbox_notice unread=1');
 
       // 正本の中身そのものを見る。表示だけを信じない。
       const db = openStore({ path });
@@ -328,7 +329,7 @@ describe('読み戻し', () => {
   test('未読数を数えて手動 nudge の形を示す', () => {
     const r = inboxUnread(db, 'karo');
     expect(r.code).toBe(EXIT_OK);
-    expect(r.out).toContain('未読 0 件');
+    expect(r.out).toContain('inbox_notice unread=0');
   });
 
   test('知らぬ agent の未読は数えられぬ', () => {

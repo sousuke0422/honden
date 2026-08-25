@@ -29,6 +29,7 @@
 
 import { openStore, tx, journal } from './store';
 import { roster, isEmpty } from './roster';
+import { summarize, nudgeText } from './inbox';
 import { validate, explain, type Schema } from './validate';
 
 export const EXIT_OK = 0;
@@ -338,7 +339,7 @@ export function inboxWrite(
       `${intact ? '（渡した本文と一致）' : '  ★渡した本文と食い違う'}\n` +
       `  ${back.body.split('\n')[0]?.slice(0, 60) ?? ''}\n` +
       `  → ${id}\n` +
-      `  ${v.to} の未読は ${unread} 件。反応が無ければ ${v.to} のペインで inbox${unread} と手打ちされよ。`,
+      `  ${v.to} への合図: ${nudgeText(summarize(db, v.to))}`,
   };
 }
 
@@ -358,8 +359,8 @@ export function inboxUnread(dbPath: string | undefined, agent: string): RunResul
   const n = (
     db.query('SELECT count(*) c FROM inbox WHERE agent = ? AND read = 0').get(agent) as { c: number }
   ).c;
-  return {
-    code: EXIT_OK,
-    out: `  ${agent} の未読 ${n} 件${n > 0 ? ` → 手動 nudge は inbox${n}` : ''}`,
-  };
+  void n;
+  // 合図の形は 1 つに揃える（src/inbox.ts の nudgeText）。同じものに 2 つの
+  // 書き方があると、指示書とツールの出力が食い違う。
+  return { code: EXIT_OK, out: `  ${agent}: ${nudgeText(summarize(db, agent))}` };
 }
