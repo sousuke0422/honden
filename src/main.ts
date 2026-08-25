@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
+import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
 import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
 import { readLimitsFromSettings, syncLimits, recommend } from './routing';
@@ -109,6 +110,71 @@ export function runRosterShow(dbPath: string | undefined): RunResult {
   };
 }
 
+/** `honden inbox read` — 未読を読む。 */
+export function runInboxRead(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  target: string | undefined,
+  all: boolean,
+): RunResult {
+  const agent = target ?? selfId;
+  if (!agent) {
+    return {
+      code: EXIT_INVALID,
+      err: '誰の inbox か分からぬ。\n  HONDEN_AGENT_ID を置くか、--agent <名> を渡されよ。',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const msgs = list(db, agent, { all });
+  const s = summarize(db, agent);
+  if (msgs.length === 0) {
+    return { code: EXIT_OK, out: `  ${agent}: ${all ? '一件も無い' : nudgeText(s)}` };
+  }
+  const peeking = target !== undefined && target !== selfId;
+  const head = `  ${agent}: ${nudgeText(s)}` + (peeking ? '（覗いておるだけ。既読にはできぬ）' : '');
+  const body = msgs
+    .map((m) => {
+      const mark = m.read ? '  ' : '● ';
+      return (
+        `\n  ${mark}${m.id}  [${m.type}] ${m.sender} → ${m.agent}  ${m.createdAt}\n` +
+        m.body
+          .split('\n')
+          .map((l) => `      ${l}`)
+          .join('\n')
+      );
+    })
+    .join('\n');
+  return { code: EXIT_OK, out: head + body };
+}
+
+/** `honden inbox ack <id...>` — 既読にする。自分のものだけ。 */
+export function runInboxAck(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  ids: string[],
+  all: boolean,
+): RunResult {
+  if (!selfId) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        '誰であるか確かめられぬ。既読は自分の報せだけである。\n' +
+        '  HONDEN_AGENT_ID を置くか、pane の @agent_id を設定されよ。',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = all ? ackAll(db, selfId) : ack(db, selfId, ids);
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  const s = summarize(db, selfId);
+  return {
+    code: EXIT_OK,
+    out:
+      `  既読にした ${r.changed.length} 件` +
+      (r.already.length > 0 ? `（${r.already.length} 件はすでに既読）` : '') +
+      `\n  残り: ${nudgeText(s)}`,
+  };
+}
+
 /** `honden route <bloom>` — 誰に振れるかを挙げる。 */
 export function runRoute(
   dbPath: string | undefined,
@@ -194,7 +260,9 @@ const USAGE = `honden — 多エージェント運用の差配層
     body: |
       本文
   EOF
-  honden inbox unread <agent>                          手動 nudge 用の未読数
+  honden inbox read [--agent X] [--all]                未読を読む
+  honden inbox ack <id...> | --all                     既読にする（自分のだけ）
+  honden inbox unread [agent]                          未読の内訳
 
   --dry-run  読み取り結果だけ見せて書き込まない
   --db PATH  正本の場所 (既定 ~/.honden/honden.db)
@@ -217,6 +285,21 @@ export async function main(argv: string[]): Promise<number> {
   delete flags['dry-run'];
   const dbPath = flags['db'];
   delete flags['db'];
+
+  // 名乗りは環境から取る。引数では取らない。
+  let _self: string | undefined | null = null;
+  const selfId = (): string | undefined => {
+    if (_self !== null) return _self;
+    const pane = process.env.TMUX_PANE ?? '';
+    let id = process.env.HONDEN_AGENT_ID?.trim();
+    if (!id && pane !== '') {
+      const p = Bun.spawnSync(['tmux', 'display-message', '-t', pane, '-p', '#{@agent_id}']);
+      const got = p.success ? new TextDecoder().decode(p.stdout).trim() : '';
+      id = got === '' ? undefined : got;
+    }
+    _self = id;
+    return id;
+  };
 
   const emit = (r: RunResult): number => {
     if (r.out) console.log(r.out);
@@ -285,7 +368,19 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (rest[0] === 'inbox' && rest[1] === 'unread') {
-    return emit(inboxUnread(dbPath, rest[2] ?? ''));
+    return emit(inboxUnread(dbPath, rest[2] ?? selfId() ?? ''));
+  }
+
+  if (rest[0] === 'inbox' && rest[1] === 'read') {
+    const target = flags['agent']; const all = flags['all'] === 'true';
+    delete flags['agent']; delete flags['all'];
+    return emit(runInboxRead(dbPath, selfId(), target, all));
+  }
+
+  if (rest[0] === 'inbox' && rest[1] === 'ack') {
+    const all = flags['all'] === 'true';
+    delete flags['all'];
+    return emit(runInboxAck(dbPath, selfId(), rest.slice(2), all));
   }
 
   console.error(USAGE);
