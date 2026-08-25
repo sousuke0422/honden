@@ -1,0 +1,20 @@
+[package]
+name = "honden-watch"
+version = "0.1.0"
+edition = "2021"
+description = "常駐する監視の芯。何も起きぬ間は何も起こさない"
+
+# 依存を一つも持たない。
+#
+# 常駐する側は、他のすべてが壊れた時にも生きていなければならない。
+# 依存が増えるほど、壊れ方の筋が増える。inotify は syscall を 3 つ
+# 呼ぶだけで足りるので、自前で宣言する（src/sys.rs）。
+
+[dependencies]
+
+[profile.release]
+opt-level = "z"     # 速さは要らない。IO 待ちしかしておらぬ
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

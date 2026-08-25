@@ -29,7 +29,7 @@
 
 import { openStore, tx, journal } from './store';
 import { roster, isEmpty } from './roster';
-import { summarize, nudgeText } from './inbox';
+import { summarize, nudgeText, deliver, signal } from './inbox';
 import { validate, explain, type Schema } from './validate';
 
 export const EXIT_OK = 0;
@@ -305,11 +305,11 @@ export function inboxWrite(
   if (dryRun) return { code: EXIT_OK, out: `${summary}\n  → 書き込んでおらぬ (--dry-run)` };
 
   tx(db, () => {
-    db.prepare(
-      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
-    ).run(id, v.to, at, v.type, v.from, v.body);
+    deliver(db, { id, agent: v.to, at, type: v.type, sender: v.from, body: v.body });
     journal(db, { actor: v.from, action: 'inbox.write', target: v.to, detail: v.type });
   });
+  // 取引を出てから合図を上げる。常駐しておる芯 (core/watch) が起きる。
+  signal(db);
 
   // 読み戻して見せる。
   //

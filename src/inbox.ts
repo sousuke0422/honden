@@ -28,7 +28,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
-import { journal, tx } from './store';
+import { journal, tx, raiseSignal } from './store';
 
 export interface Message {
   id: string;
@@ -170,4 +170,31 @@ export function ackAll(db: Database, selfId: string): AckResult {
   const ids = list(db, selfId, { limit: 1000 }).map((m) => m.id);
   if (ids.length === 0) return { ok: true, changed: [], already: [] };
   return ack(db, selfId, ids);
+}
+
+/**
+ * 報せを一通、相手の inbox へ入れる。
+ *
+ * inbox への挿入はここだけを通す。4 か所に同じ INSERT が散っていると、
+ * 合図を出す所と出さぬ所が生まれ、届いたのに誰も起きない筋ができる。
+ *
+ * 取引 (tx) の中から呼ぶこと。合図は取引の外へ出てから上げる。
+ */
+export function deliver(
+  db: Database,
+  msg: { id: string; agent: string; at: string; type: string; sender: string; body: string },
+): void {
+  db.prepare('INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)').run(
+    msg.id,
+    msg.agent,
+    msg.at,
+    msg.type,
+    msg.sender,
+    msg.body,
+  );
+}
+
+/** 取引が済んでから合図を上げる。届いた分だけ起こす。 */
+export function signal(db: Database): void {
+  raiseSignal(db);
 }

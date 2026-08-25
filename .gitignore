@@ -259,3 +259,12 @@ node_modules/
 .env.*
 
 !/bin/
+
+# 常駐する監視の芯 (Rust)
+!/core/
+!/core/**/
+!/core/**/*.rs
+!/core/**/Cargo.toml
+!/core/**/Cargo.lock
+# 成果物は持たない
+core/**/target/

@@ -40,6 +40,7 @@ import type { Database } from 'bun:sqlite';
 import { tx, journal } from './store';
 import { validate, explain, checkReason, type Schema } from './validate';
 import { roster, roleOf } from './roster';
+import { deliver, signal } from './inbox';
 
 /** 足軽の報せ先。現行 F001 と同じ。 */
 export const WORKER_REPORTS_TO = 'gunshi';
@@ -269,16 +270,14 @@ export function submitReport(
     for (const [idx, ev] of [...norm.map].sort((a, b) => a[0] - b[0])) ins.run(id, idx, ev);
 
     // 報告が入れば必ず軍師の未読が増える。書いたのに誰も知らぬ状態を作らない。
-    db.prepare(
-      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
-    ).run(
-      `msg_${Date.now().toString(36)}_r${id}`,
-      WORKER_REPORTS_TO,
+    deliver(db, {
+      id: `msg_${Date.now().toString(36)}_r${id}`,
+      agent: WORKER_REPORTS_TO,
       at,
-      'report_received',
-      selfId,
-      `${selfId}、${v.task_id} を ${v.status} として報せる。品質の検めを仰ぐ。\n\n${v.summary}`,
-    );
+      type: 'report_received',
+      sender: selfId,
+      body: `${selfId}、${v.task_id} を ${v.status} として報せる。品質の検めを仰ぐ。\n\n${v.summary}`,
+    });
     journal(db, {
       actor: selfId,
       action: `report.submit.${v.status}`,
@@ -286,6 +285,8 @@ export function submitReport(
       detail: `cmd=${cmdId ?? 'なし'} 覆った条件=[${[...norm.map.keys()].sort((a, b) => a - b).join(',')}]`,
     });
   });
+
+  signal(db);
 
   const covered = [...norm.map.keys()].sort((a, b) => a - b);
   // 残りは司令ぜんたいで数える。自分の分だけを引くと、他の足軽が既に
@@ -410,16 +411,14 @@ export function submitQc(
       const c = checks[i]!;
       ins.run(id, i + 1, c.name, c.result, c.note ?? null);
     }
-    db.prepare(
-      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
-    ).run(
-      `msg_${Date.now().toString(36)}_q${id}`,
-      CMD_CLOSER,
+    deliver(db, {
+      id: `msg_${Date.now().toString(36)}_q${id}`,
+      agent: CMD_CLOSER,
       at,
-      'report_received',
-      QC_AUTHOR,
-      `${target.agent} の ${target.task_id} を検めた。判定 ${v.verdict}。\n\n${v.summary}`,
-    );
+      type: 'report_received',
+      sender: QC_AUTHOR,
+      body: `${target.agent} の ${target.task_id} を検めた。判定 ${v.verdict}。\n\n${v.summary}`,
+    });
     journal(db, {
       actor: QC_AUTHOR,
       action: 'report.qc',
@@ -427,6 +426,8 @@ export function submitQc(
       detail: `verdict=${v.verdict} cmd=${target.cmd_id ?? 'なし'} checks=${checks.length} fail=${failed.length}`,
     });
   });
+
+  signal(db);
 
   return {
     ok: true,

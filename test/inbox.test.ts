@@ -8,7 +8,12 @@
  */
 
 import { expect, test, describe } from 'bun:test';
-import { openStore, tx } from '../src/store';
+import { openStore, tx, signalPathOf } from '../src/store';
+import { syncRoster } from '../src/roster';
+import { inboxWrite } from '../src/cli';
+import { existsSync, statSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { list, summarize, nudgeText, ack, ackAll } from '../src/inbox';
 
 const seeded = () => {
@@ -149,5 +154,57 @@ describe('既読にする', () => {
       c: number;
     }).c;
     expect(n).toBe(0);
+  });
+});
+
+describe('合図の口', () => {
+  test('未読が増えると合図の口が触られる', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-sig-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander' },
+        { id: 'karo', role: 'commander' },
+      ]);
+    });
+    const sig = signalPathOf(dbPath);
+    expect(existsSync(sig)).toBe(false);
+
+    const r = inboxWrite(
+      dbPath,
+      { flags: { to: 'karo', from: 'shogun', type: 'cmd_new', body: '用件' } },
+      false,
+      { insideFormation: true, selfId: 'shogun' },
+    );
+    expect(r.code).toBe(0);
+    expect(existsSync(sig)).toBe(true);
+  });
+
+  test('読むだけでは合図の口を触らぬ（帰還ループを断つ）', () => {
+    // 手 (nudge を飛ばす側) は正本を読む。読みで合図が立つと、
+    // 芯がまた手を呼び、手がまた読む。実測で 6 秒 27 回まわった筋。
+    const dir = mkdtempSync(join(tmpdir(), 'honden-sig2-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander' },
+        { id: 'karo', role: 'commander' },
+      ]);
+    });
+    inboxWrite(dbPath, { flags: { to: 'karo', from: 'shogun', type: 'cmd_new', body: '用件' } }, false, {
+      insideFormation: true,
+      selfId: 'shogun',
+    });
+    const sig = signalPathOf(dbPath);
+    const before = statSync(sig).mtimeMs;
+
+    // 読む側の操作を一通り
+    const db2 = openStore({ path: dbPath });
+    list(db2, 'karo');
+    summarize(db2, 'karo');
+
+    expect(statSync(sig).mtimeMs).toBe(before);
   });
 });

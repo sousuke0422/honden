@@ -24,7 +24,7 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -46,6 +46,52 @@ export interface OpenOptions {
  *
  * pragma は必ずこの順で流す。順序を変えてはならない (冒頭の理由を参照)。
  */
+/**
+ * 開いた正本の場所。合図の口を作るために覚えておく。
+ *
+ * WeakMap ゆえ、Database が落ちれば一緒に消える。
+ */
+const dbPathOf = new WeakMap<Database, string>();
+
+/**
+ * 合図の口。
+ *
+ * 常駐する監視の芯 (core/watch) はこの一点だけを見張る。
+ *
+ * ## なぜ正本そのものを見張らぬか
+ *
+ * 手 (nudge を飛ばす側) は正本を読み、届けたら台帳へ書く。
+ * 正本を見張ると、その書き込みで芯がまた手を呼び、手がまた書く。
+ * 実測で確かめた——見張り先へ書く手を置いたところ、6 秒で 27 回回った
+ * (2026-08-26)。歯止め (floor) は回転の速さを抑えるだけで、止められない。
+ *
+ * 口を分ければ、その筋が構造として消える。合図の口へ触るのは
+ * 「誰かの未読が増えた時」だけで、手は決して触らない。
+ *
+ * ## 取引の外で触る
+ *
+ * 取引が巻き戻っても、この touch は戻らない。余計な起床が 1 回起きるが、
+ * 手は未読を数え直すだけなので害が無い。逆に、取引の中に入れて
+ * 「書けたのに合図が出ない」筋を作るほうが重い。
+ */
+export function signalPathOf(dbPath: string): string {
+  return `${dbPath}.signal`;
+}
+
+/** 誰かの未読が増えたことを、常駐している芯へ知らせる。 */
+export function raiseSignal(db: Database): void {
+  const path = dbPathOf.get(db);
+  if (!path) return; // :memory: では見張る先が無い
+  const sig = signalPathOf(path);
+  try {
+    // 中身は要らない。触れた事実だけが合図になる。
+    writeFileSync(sig, `${Date.now()}\n`);
+  } catch {
+    // 合図が出せずとも、正本には入っている。芯は既定の網で起きる。
+    // ここで投げると、届いた報せを書けたのに失敗として返すことになる。
+  }
+}
+
 export function openStore(opts: OpenOptions = {}): Database {
   const path = opts.path ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
 
@@ -69,6 +115,7 @@ export function openStore(opts: OpenOptions = {}): Database {
   db.run('PRAGMA foreign_keys = ON');
 
   migrate(db);
+  if (path !== ':memory:') dbPathOf.set(db, path);
   return db;
 }
 

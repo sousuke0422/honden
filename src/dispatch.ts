@@ -44,6 +44,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
+import { deliver, signal } from './inbox';
 import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
@@ -272,16 +273,14 @@ export function assignTask(
       JSON.stringify({ ...input, task_id: taskId }),
       v.agent,
     );
-    db.prepare(
-      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
-    ).run(
-      `msg_${Date.now().toString(36)}_${taskId}`,
-      v.agent,
-      new Date().toISOString(),
-      'task_assigned',
-      actor,
-      `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}`,
-    );
+    deliver(db, {
+      id: `msg_${Date.now().toString(36)}_${taskId}`,
+      agent: v.agent,
+      at: new Date().toISOString(),
+      type: 'task_assigned',
+      sender: actor,
+      body: `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}`,
+    });
     journal(db, {
       actor,
       action: wantsBypass ? 'task.assign.bypass' : 'task.assign',
@@ -294,6 +293,7 @@ export function assignTask(
     });
     result = { ok: true, id: taskId };
   });
+  if (result.ok) signal(db);
   // 取引の中で断った場合はここへ落ちる（acquire が false を返した筋）。
   return result;
 }
