@@ -45,6 +45,8 @@ describe('読む', () => {
 describe('開く前に分かること', () => {
   // inbox3 は「未読 3 件」とも「足軽 3 号」とも読める。足軽の番号も 1〜7 で
   // 未読数と同じ範囲になるため衝突する。数と分類を分けて書けば消える。
+  // 受け取るのは人ではなく各 CLI の裏のモデル。日本語の記号や語の切れ目は
+  // モデルごとに揺れるので、key=value で揃える。
   test('内訳が出る', () => {
     const s = summarize(seeded(), 'karo');
     expect(s.total).toBe(3);
@@ -57,19 +59,19 @@ describe('開く前に分かること', () => {
   test('手を止めるべきものが混じっていれば印が付く', () => {
     const s = summarize(seeded(), 'karo');
     expect(s.urgent).toBe(true);
-    expect(nudgeText(s)).toContain('★要着手');
+    expect(nudgeText(s)).toContain('urgent=1');
   });
 
   test('報告だけなら急がぬ', () => {
     const s = summarize(seeded(), 'gunshi');
     expect(s.urgent).toBe(false);
-    expect(nudgeText(s)).toBe('未読1 report_received1');
+    expect(nudgeText(s)).toBe('inbox_notice unread=1 report_received=1 urgent=0');
   });
 
   test('無ければそう言う', () => {
     const db = seeded();
     ackAll(db, 'karo');
-    expect(nudgeText(summarize(db, 'karo'))).toBe('未読なし');
+    expect(nudgeText(summarize(db, 'karo'))).toBe('inbox_notice unread=0');
   });
 });
 

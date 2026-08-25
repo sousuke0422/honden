@@ -85,11 +85,29 @@ export function summarize(db: Database, agent: string): Summary {
   };
 }
 
-/** 合図の文字列。`inbox3` の曖昧さを避けて、数と分類を分けて書く。 */
+/**
+ * 合図の文字列。
+ *
+ * ## なぜ日本語ではないか
+ *
+ * これを受け取るのは人ではなく、各 CLI の裏に居るモデルになる。
+ * claude / codex / cursor / opencode / copilot / kimi と種類があり、
+ * 日本語の記号（★ など）や語の切れ目の扱いはモデルごとに揺れる。
+ *
+ * key=value の羅列なら、どのモデルでも同じに読める。type の名は
+ * もともとこの系の識別子で ASCII なので、そのまま使える。
+ *
+ * ## なぜ `inbox3` ではないか
+ *
+ * `inbox3` の 3 は未読数だが、足軽の番号も 1〜7 で同じ範囲になる。
+ * 「足軽 3 号」と読み違える事例が実際に出ている。
+ * 先頭を `inbox_notice` にして数を key=value へ移せば、衝突しようがない。
+ */
 export function nudgeText(s: Summary): string {
-  if (s.total === 0) return '未読なし';
-  const parts = s.byType.map((b) => `${b.type}${b.count}`);
-  return `未読${s.total} ${parts.join(' ')}${s.urgent ? ' ★要着手' : ''}`;
+  const parts = [`inbox_notice`, `unread=${s.total}`];
+  for (const b of s.byType) parts.push(`${b.type}=${b.count}`);
+  if (s.total > 0) parts.push(`urgent=${s.urgent ? 1 : 0}`);
+  return parts.join(' ');
 }
 
 export interface AckResult {
