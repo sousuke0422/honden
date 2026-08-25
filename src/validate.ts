@@ -33,6 +33,14 @@ export interface FieldSpec {
   oneOf?: readonly string[];
   /** 配列を受ける欄。 */
   list?: boolean;
+  /**
+   * 形をここでは見ない欄。
+   *
+   * 対応でも並びでも受ける所（report の acceptance など）に使う。
+   * 形の検めは呼び出し側が受け持つ。ここで文字列を強いると、
+   * 正しく書かれた対応が「文字列で書く項目」として弾かれる。
+   */
+  structured?: boolean;
   /** 空文字を許すか。既定は許さない。 */
   allowEmpty?: boolean;
   /** 何のための欄か。追い返すときに添える。 */
@@ -120,6 +128,8 @@ export function validate(schema: Schema, input: Record<string, unknown>): Proble
       }
       continue;
     }
+
+    if (spec.structured) continue;
 
     if (typeof v !== 'string') {
       problems.push({ field: key, got: v, message: '文字列で書く項目' });

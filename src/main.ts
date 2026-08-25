@@ -15,6 +15,7 @@ import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { createCmd, assignTask } from './dispatch';
+import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { leaseState, expired, release } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
@@ -358,6 +359,27 @@ const USAGE = `honden — 多エージェント運用の差配層
   EOF
   honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
   honden task assign … --bypass --reason "…"                 家老を通さぬ迂回（将軍だけ）
+  honden cmd show <cmd_id>                             受け入れ条件と覆い具合
+  honden cmd done <cmd_id> [--bypass --reason "…"]     司令を閉じる（家老だけ・門あり）
+  honden report submit <<'EOF'                          足軽が報せる → 軍師へ自動で行く
+    task_id: subtask_1_x
+    status: done
+    summary: |
+      何をしたか
+    acceptance:
+      1: "cargo test → job 18 / service 195 / exit 0"
+      3: "git log で push しておらぬことを確認"
+  EOF
+  honden report qc <<'EOF'                              軍師が検める → 家老へ自動で行く
+    report_id: 12
+    verdict: APPROVED
+    summary: |
+      何をどう検めたか
+    checks:
+      - name: 試験の独立再現
+        result: PASS
+        note: 隔離 worktree で同数
+  EOF
   honden lease                                         持ち場と貸与の様子
   honden lease release <agent> [--force --reason "…"]  手放す
   honden route <1-6> [--role worker] [--providers ...] 誰に振れるかを挙げる
@@ -384,11 +406,90 @@ const USAGE = `honden — 多エージェント運用の差配層
 布陣の外 (TMUX_PANE が無い) から送るときは、役職を騙れぬ。
 review_session / external_audit のような、外だと分かる名を from に使うこと。
 
+報告の路は現行のまま。足軽 → 軍師 → 家老 → dashboard → 将軍。
+宛先は引数に無い。飛び越えようがないゆえ、指示書の禁止事項を守る要が無い。
+家老から将軍への inbox は開けておらぬ（殿の入力を割り込みで潰さぬため）。
+
+司令は、全条件が証拠つきで覆われ、軍師が是と言うまで閉じられぬ。
+「済」だけの証拠は弾く。後から検める者が辿れぬゆえ。
+
 いまは影の段で、shogun 側の YAML へは一切書かない。
 
 顔ぶれは環境ごとに違う。足軽は 1 体から 7 体まで。
 まず roster sync で入れること。名簿が空のままでは送れない。
 `;
+
+/** `honden report submit` — 足軽が報せる。宛先は選べぬ（軍師へ行く）。 */
+export function runReportSubmit(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  src: InputSource,
+  dryRun: boolean,
+): RunResult {
+  const picked = pickInput(src);
+  if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
+  if (dryRun) {
+    return {
+      code: EXIT_OK,
+      out: `  読み取り: ${Object.keys(picked.value).join(' / ')}\n  → 書き込んでおらぬ (--dry-run)`,
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = submitReport(db, selfId, picked.value);
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
+/** `honden report qc` — 軍師が検める。結果は家老へ行く。 */
+export function runReportQc(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  src: InputSource,
+  dryRun: boolean,
+): RunResult {
+  const picked = pickInput(src);
+  if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
+  if (dryRun) {
+    return { code: EXIT_OK, out: `  読み取り: ${Object.keys(picked.value).join(' / ')}\n  → 書き込んでおらぬ (--dry-run)` };
+  }
+  const db = openStore({ path: dbPath });
+  const r = submitQc(db, selfId, picked.value);
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
+/** `honden cmd done` — 司令を閉じる。家老だけ。門を通らねば閉じられぬ。 */
+export function runCmdDone(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  input: Record<string, unknown>,
+): RunResult {
+  const db = openStore({ path: dbPath });
+  const r = cmdDone(db, selfId, input);
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
+/** `honden cmd show <id>` — 受け入れ条件と、いまどこまで覆っておるか。 */
+export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined): RunResult {
+  if (!cmdId) return { code: EXIT_INVALID, err: '司令の番号を渡されよ。例: honden cmd show cmd_1' };
+  const db = openStore({ path: dbPath });
+  const cmd = db.query('SELECT id, status, purpose FROM cmd WHERE id = ?').get(cmdId) as
+    | { id: string; status: string; purpose: string | null }
+    | null;
+  if (!cmd) return { code: EXIT_INVALID, err: `そのような司令は無い: ${cmdId}` };
+  const cov = coverageOf(db, cmdId);
+  const lines = [`  ${cmd.id}  [${cmd.status}]  ${cmd.purpose ?? ''}`, '  受け入れ条件:'];
+  if (cov.criteria.length === 0) lines.push('    （無し）');
+  for (const c of cov.criteria) {
+    const got = cov.covered.get(c.idx);
+    lines.push(`    ${c.idx}. ${c.text}`);
+    lines.push(got ? `       覆済 ← #${got.reportId} ${got.agent}: ${got.evidence}` : '       未達');
+  }
+  lines.push(`  検め: ${cov.passing.map((p) => `#${p.id} ${p.verdict}`).join(', ') || 'まだ無い'}`);
+  if (cov.unreviewed.length > 0) {
+    lines.push(`  検め待ち: ${cov.unreviewed.map((u) => `#${u.id} ${u.agent}/${u.taskId}`).join(', ')}`);
+  }
+  void criteriaOf;
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
 
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
@@ -447,6 +548,26 @@ export async function main(argv: string[]): Promise<number> {
   if (rest[0] === 'cmd' && rest[1] === 'new') {
     const stdin = await readStdin();
     return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'cmd' && rest[1] === 'done') {
+    const input: Record<string, unknown> = { ...flags };
+    if (rest[2] && !input['cmd_id']) input['cmd_id'] = rest[2];
+    return emit(runCmdDone(dbPath, selfId(), input));
+  }
+
+  if (rest[0] === 'cmd' && rest[1] === 'show') {
+    return emit(runCmdShow(dbPath, rest[2]));
+  }
+
+  if (rest[0] === 'report' && (rest[1] === 'submit' || rest[1] === undefined)) {
+    const stdin = await readStdin();
+    return emit(runReportSubmit(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'report' && rest[1] === 'qc') {
+    const stdin = await readStdin();
+    return emit(runReportQc(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
   if (rest[0] === 'task' && rest[1] === 'assign') {

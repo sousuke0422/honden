@@ -91,7 +91,48 @@ honden inbox write <<'EOF' … EOF
 honden inbox read [--agent X] [--all]
 honden inbox ack <id...> | --all                  自分のだけ
 honden inbox unread [agent]
+honden cmd show <cmd_id>                          条件と覆い具合
+honden cmd done <cmd_id> [--bypass --reason "…"]  家老だけ・門あり
+honden report submit <<'EOF' … EOF                足軽 → 軍師へ自動
+honden report qc <<'EOF' … EOF                    軍師 → 家老へ自動
 ```
+
+### 報告の路
+
+現行のまま。変えたのは受け渡しだけ。
+
+```
+足軽 ──report_received──> 軍師 ──verdict──> 家老 ──dashboard──> 将軍
+```
+
+宛先は命令の引数に無い。撃つ先を選べないので、飛び越えようがない。
+現行 `instructions/ashigaru.md` の F001（将軍へ直に報せるな）と
+`instructions/karo.md` の `to_shogun: false`（殿の入力を割り込みで潰さぬため）を、
+禁止事項の散文から構造へ移した。`cmd done` も将軍の inbox を鳴らさない。
+
+現行は「報告 YAML を書く」と「inbox_write で軍師を起こす」が別の手順で、
+前者だけ済ませると報告は在るのに誰も知らない状態になる。
+`report submit` は 1 つの取引にまとめた。報告が入れば必ず軍師の未読が増える。
+
+### 受け入れ条件の門
+
+現行の検めは `instructions/karo.md` の
+「Don't: Mark cmd as done if any acceptance_criteria is unmet」という一行だけで、
+守っているかを確かめる者が居ない。材料は既に揃っている——足軽の報告 YAML には
+`acceptance_check:` が並んでいる。足りないのは、その並びと cmd の条件を
+突き合わせる所だった。
+
+| 決め | 理由 |
+|---|---|
+| 条件は**番号**で引く | 文言で照合すると、写し違いや言い換えで別物になる |
+| 証拠は「済」だけでは通さぬ | 後から検める者が辿れぬ。形だけの通過で門が開く |
+| `done` だけが覆う義務を負う | `blocked` / `failed` に証拠を出させると嘘が書かれる |
+| 残りは司令ぜんたいで数える | 自分の分だけ引くと、他の者が覆った条件まで残りに出る |
+| FAIL つき APPROVED は弾く | 検査を集めても判定に結ばねば、検めていないのと同じ |
+| 同じ仕事を二度は検めぬ | 判定が二つ残ると、門がどちらを見るか決まらない |
+
+閉じるには**全条件が証拠つきで覆われ、かつ軍師が是**（`APPROVED` か
+`APPROVED_WITH_CONCERNS`）であること。どちらも欠ければ、何が足りぬかを並べて断る。
 
 ### 型で守っているもの
 
@@ -103,6 +144,11 @@ honden inbox unread [agent]
 | 既読は自分のものだけ | 他人の分を既読にすると相手が永久に気づけない |
 | 生きた貸与は横取りできぬ | worktree を足軽と同時に触り merge commit を生んだ |
 | 指揮系統（将軍→家老→足軽） | 文で書いてあるだけで止める者が無かった |
+| 報告の宛先は選べぬ | F001（将軍へ直に報せるな）が禁止事項の散文だった |
+| 未達の条件があれば閉じられぬ | karo.md の「done にするな」を守る者が居なかった |
+| 「済」だけの証拠を弾く | 並べれば覆ったことになってしまう |
+| 足軽は自分の仕事を自分で是とできぬ | 検めの意味が消える |
+| 他人の仕事の報告は書けぬ | cmd_020 の regression（足軽5が足軽2の仕事を実行） |
 | 名簿に無い者へは送れぬ | 足軽 2 体の環境で ashigaru5 が通ってしまう |
 | 能力の足りぬ者へは振れぬ | composer-2.5 は L4 まで |
 | pragma の順序（busy_timeout が先） | 順序を誤ると 8 プロセス中 7 つが即死し 1400 件消える |

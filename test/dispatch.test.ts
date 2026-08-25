@@ -114,7 +114,9 @@ describe('司令を書く', () => {
       text: string;
     }[];
     expect(rows.length).toBe(2);
-    expect(rows[0]?.idx).toBe(0);
+    // 番号は 1 から。honden cmd show / report submit の acceptance が指す番号と同じ。
+    expect(rows[0]?.idx).toBe(1);
+    expect(rows[1]?.idx).toBe(2);
   });
 });
 

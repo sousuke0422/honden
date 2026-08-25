@@ -223,10 +223,27 @@ CREATE TABLE IF NOT EXISTS report (
   created_at TEXT,
   verdict    TEXT CHECK (verdict IS NULL OR verdict IN
                ('APPROVED','APPROVED_WITH_CONCERNS','CHANGES_REQUESTED','REJECTED')),
+  cmd_id     TEXT,                     -- どの司令の下の報告か。門はここで引く
   raw        TEXT NOT NULL,
   legacy     TEXT                      -- 型に収まらなかったものの JSON。null なら無し
 );
 CREATE INDEX IF NOT EXISTS ix_report_agent ON report(agent, created_at);
+
+-- 受け入れ条件ごとの証拠。
+--
+-- 現行では足軽の報告 YAML に acceptance_check: として並んでいる
+-- （queue/reports/ashigaru1_report.yaml に実在する）。だが並べるだけで、
+-- 全条件を覆っているかを検める者が居らず、家老の指示書に
+-- 「未達の条件があるなら done にするな」と散文で書いてあるだけになっている。
+--
+-- 条件は cmd_acceptance の idx で引く。文言で照合すると、
+-- 写し間違いや言い換えで別物になり、覆っていないのに覆ったことになる。
+CREATE TABLE IF NOT EXISTS report_acceptance (
+  report_id INTEGER NOT NULL REFERENCES report(id) ON DELETE CASCADE,
+  idx       INTEGER NOT NULL,      -- cmd_acceptance.idx と同じ番号
+  evidence  TEXT NOT NULL,
+  PRIMARY KEY (report_id, idx)
+);
 
 -- 報告の中の個別の検査項目。verdict とは別の enum を持つ。
 -- 実データは PASS 474 / PLAUSIBLE 4 / FAIL 2 / PARTIAL 2 / WARNING 1 で、
@@ -322,8 +339,38 @@ CREATE TABLE IF NOT EXISTS import_issue (
 );
 `;
 
+/**
+ * 既にある表へ列を足す。既にあれば何もしない。
+ *
+ * SQLite の ALTER に IF NOT EXISTS は無いので、table_info を引いてから足す。
+ * 例外を握り潰す形にすると、別の理由で落ちたときに気づけない。
+ */
+function addColumn(db: Database, table: string, column: string, decl: string): void {
+  const cols = db.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) return;
+  db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+}
+
 function migrate(db: Database): void {
   db.run(SCHEMA);
+  // 既に走っている正本のための追い足し。新しい正本は SCHEMA 側で足りている。
+  addColumn(db, 'report', 'cmd_id', 'TEXT');
+
+  // 受け入れ条件の番号を 1 始まりへ揃える。
+  // 初期は配列の添字をそのまま入れており「条件 0」という言い方になっていた。
+  // 主キーが (cmd_id, idx) ゆえ、その場で +1 すると途中で衝突する。
+  // 読み出してから入れ直す。0 が一つも無ければ何もしない（何度走らせても同じ）。
+  const zero = db.query('SELECT count(*) c FROM cmd_acceptance WHERE idx = 0').get() as { c: number };
+  if (zero.c > 0) {
+    const rows = db.query('SELECT cmd_id, idx, text FROM cmd_acceptance ORDER BY cmd_id, idx').all() as {
+      cmd_id: string;
+      idx: number;
+      text: string;
+    }[];
+    db.run('DELETE FROM cmd_acceptance');
+    const ins = db.prepare('INSERT INTO cmd_acceptance(cmd_id, idx, text) VALUES (?,?,?)');
+    for (const r of rows) ins.run(r.cmd_id, r.idx + 1, r.text);
+  }
 }
 
 /**

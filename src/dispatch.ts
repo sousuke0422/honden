@@ -133,7 +133,9 @@ export function createCmd(
       JSON.stringify(input),
     );
     const ins = db.prepare('INSERT INTO cmd_acceptance(cmd_id, idx, text) VALUES (?,?,?)');
-    v.acceptance_criteria.forEach((text, i) => ins.run(id, i, String(text)));
+    // 番号は 1 から。人が読んで指す番号ゆえ、0 から数えると
+    // 「条件 0」という言い方が要る。honden cmd show の並びと揃える。
+    v.acceptance_criteria.forEach((text, i) => ins.run(id, i + 1, String(text)));
     journal(db, {
       actor: selfId,
       action: 'cmd.create',
@@ -253,7 +255,10 @@ export function assignTask(
     };
   }
 
-  const taskId = `subtask_${v.cmd_id.replace(/^cmd_/, '')}_${Date.now().toString(36)}`;
+  // 時刻だけでは足りない。同じミリ秒に 2 件振ると同じ番号になり、
+  // inbox の主キーが衝突して 2 件目の割り当てが丸ごと落ちる（試験で実際に出た）。
+  const stamp = `${Date.now().toString(36)}${Bun.hash(`${v.agent}${v.title}${Math.random()}`).toString(36).slice(0, 4)}`;
+  const taskId = `subtask_${v.cmd_id.replace(/^cmd_/, '')}_${stamp}`;
   const minutes = v.minutes ? Number(v.minutes) : DEFAULT_LEASE_MINUTES;
   let result: DispatchResult = { ok: false };
   tx(db, () => {
