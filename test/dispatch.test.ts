@@ -232,6 +232,98 @@ describe('難度と能力', () => {
   });
 });
 
+describe('迂回', () => {
+  // 家老が倒れれば誰も振れなくなる。指揮系統の縛りが、まさにその時に効いてしまう。
+  // だから道は要る。だが名の無い抜け道は、いずれ常道になる。
+  const bypass = (db: ReturnType<typeof seeded>, cmdId: string, over: Record<string, unknown> = {}) =>
+    assignTask(db, 'shogun', {
+      agent: 'ashigaru1',
+      cmd_id: cmdId,
+      title: '緊急',
+      bypass: 'true',
+      reason: '家老が沈黙して 40 分。仕事が止まっておる',
+      ...over,
+    });
+
+  test('将軍は理由つきなら迂回できる', () => {
+    const { db, cmdId } = withCmd();
+    expect(bypass(db, cmdId).ok).toBe(true);
+  });
+
+  test('理由が無ければ通れぬ', () => {
+    const { db, cmdId } = withCmd();
+    const r = bypass(db, cmdId, { reason: undefined });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('理由が要る');
+  });
+
+  test('短すぎる理由は通れぬ', () => {
+    const { db, cmdId } = withCmd();
+    expect(bypass(db, cmdId, { reason: '急ぎ' }).ok).toBe(false);
+  });
+
+  // 長さだけ満たしても中身が無ければ通さない。
+  test('長くても中身の無い理由は通れぬ', () => {
+    const { db, cmdId } = withCmd();
+    for (const reason of ['ああああああああああ', 'xxxxxxxxxxxx']) {
+      const r = bypass(db, cmdId, { reason });
+      expect(r.ok).toBe(false);
+      expect(r.message).toContain('理由になっておらぬ');
+    }
+  });
+
+  test('将軍以外は迂回できぬ', () => {
+    const { db, cmdId } = withCmd();
+    const r = assignTask(db, 'gunshi', {
+      agent: 'ashigaru1',
+      cmd_id: cmdId,
+      title: 'x',
+      bypass: 'true',
+      reason: '家老が沈黙して 40 分',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('迂回できるのは shogun だけ');
+  });
+
+  // 数えられる形で残す。増えれば「常道が壊れている」という報せになる。
+  test('迂回は別の action として残る', () => {
+    const { db, cmdId } = withCmd();
+    bypass(db, cmdId);
+    const acts = (db.query('SELECT action FROM ledger').all() as { action: string }[]).map((r) => r.action);
+    expect(acts).toContain('task.assign.bypass');
+    expect(acts).not.toContain('task.assign');
+  });
+
+  // 後から「本当に家老は倒れていたか」を検められるように。
+  test('迂回した時の家老の様子が残る', () => {
+    const { db, cmdId } = withCmd();
+    bypass(db, cmdId);
+    const d = db
+      .query("SELECT detail FROM ledger WHERE action = 'task.assign.bypass'")
+      .get() as { detail: string };
+    expect(d.detail).toContain('迂回時の家老=[karo:');
+    expect(d.detail).toContain('last_activity=');
+    expect(d.detail).toContain('reason=');
+  });
+
+  test('迂回しても他の守りは効く', () => {
+    const { db, cmdId } = withCmd();
+    // 能力の足りぬ者へは、迂回しても振れぬ
+    expect(bypass(db, cmdId, { agent: 'ashigaru2', bloom: 'L6' }).ok).toBe(false);
+    // 上役へも振れぬ
+    expect(bypass(db, cmdId, { agent: 'shogun' }).ok).toBe(false);
+    // 無い司令の下へも振れぬ
+    expect(bypass(db, 'cmd_999').ok).toBe(false);
+  });
+
+  test('迂回を宣言せねば将軍は振れぬまま', () => {
+    const { db, cmdId } = withCmd();
+    const r = assignTask(db, 'shogun', { agent: 'ashigaru1', cmd_id: cmdId, title: 'x' });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('--bypass');
+  });
+});
+
 describe('台帳', () => {
   test('司令も割り当ても残る', () => {
     const { db, cmdId } = withCmd();

@@ -304,6 +304,7 @@ const USAGE = `honden — 多エージェント運用の差配層
     priority: high
   EOF
   honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
+  honden task assign … --bypass --reason "…"                 家老を通さぬ迂回（将軍だけ）
   honden route <1-6> [--role worker] [--providers ...] 誰に振れるかを挙げる
   honden search <語> [--limit N]                       取り込んだものを引く
   honden inbox write <宛先> <本文> <種別> <差出人>      旧 inbox_write.sh と同じ並び

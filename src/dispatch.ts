@@ -21,6 +21,21 @@
  *
  * 番号は正本が振る。人にも機械にも数えさせない。
  *
+ * ## 迂回は名のある一本にする
+ *
+ * 家老が倒れれば誰も振れなくなる。指揮系統の縛りが、まさにその時に効いてしまう。
+ * だから迂回の道は要る。だが名の無い抜け道は、いずれ常道になる。
+ *
+ * 四つを課す。
+ *
+ *   1. 明示（--bypass）。誤って通れない
+ *   2. 理由が必須。空も、それらしいだけの短文も弾く
+ *   3. 別の action として台帳に残す（task.assign.bypass）。数えられるように
+ *   4. 迂回した時の相手の様子を併せて記録する
+ *
+ * 4 つ目が肝になる。後から「本当に家老は倒れていたか」を検められるし、
+ * 迂回が増えれば「常道が壊れている」という報せになる。
+ *
  * ## 受け入れ条件を空で通さない
  *
  * 2026-08-24、cmd_705 が「軍師レビューを通っている」という受け入れ条件を
@@ -135,6 +150,8 @@ const ASSIGN_SCHEMA: Schema = {
   title: { required: true, about: '何をする仕事か。1 行' },
   bloom: { about: 'L1 から L6。能力の足りぬ者へは振れぬ' },
   minutes: { about: '貸与の長さ（分）。既定 30' },
+  bypass: { about: '家老を通さず将軍が直に振る。理由が要る' },
+  reason: { about: '迂回の理由。何が起きて迂回するのかを書く' },
 };
 
 /**
@@ -148,14 +165,30 @@ export function assignTask(
   selfId: string | undefined,
   input: Record<string, unknown>,
 ): DispatchResult {
-  if (selfId !== ASSIGNER) {
+  const wantsBypass = input['bypass'] === 'true' || input['bypass'] === true;
+  if (selfId !== ASSIGNER && !wantsBypass) {
     return {
       ok: false,
       message:
         `持ち場へ振れるのは ${ASSIGNER} だけである（そなたは ${selfId ?? '名乗り無し'}）。\n` +
-        '  将軍が足軽へ直に振ってはならぬ（CLAUDE.md の指揮系統）。書き込みは行っておらぬ。',
+        '  将軍が足軽へ直に振ってはならぬ（CLAUDE.md の指揮系統）。\n' +
+        `  家老が倒れておるなど、常道が使えぬときは --bypass --reason "…" で通れる。\n` +
+        '  書き込みは行っておらぬ。',
     };
   }
+  if (wantsBypass) {
+    if (selfId !== CMD_AUTHOR) {
+      return {
+        ok: false,
+        message: `迂回できるのは ${CMD_AUTHOR} だけである（そなたは ${selfId ?? '名乗り無し'}）。`,
+      };
+    }
+    const bad = checkReason(typeof input['reason'] === 'string' ? input['reason'] : undefined);
+    if (bad) return { ok: false, message: `${bad}\n  書き込みは行っておらぬ。` };
+  }
+  // ここまで来た時点で selfId は ASSIGNER か CMD_AUTHOR のいずれか。
+  const actor: string = selfId!;
+
   const known = roster(db);
   if (known.length === 0) return { ok: false, message: '名簿が空である。honden roster sync で入れられよ。' };
 
@@ -241,17 +274,58 @@ export function assignTask(
       v.agent,
       new Date().toISOString(),
       'task_assigned',
-      selfId,
+      actor,
       `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}`,
     );
     journal(db, {
-      actor: selfId,
-      action: 'task.assign',
+      actor,
+      action: wantsBypass ? 'task.assign.bypass' : 'task.assign',
       target: v.agent,
-      detail: `${taskId} cmd=${v.cmd_id}${v.bloom ? ` bloom=${v.bloom}` : ''}`,
+      detail:
+        `${taskId} cmd=${v.cmd_id}${v.bloom ? ` bloom=${v.bloom}` : ''}` +
+        (wantsBypass
+          ? ` reason=${JSON.stringify(input['reason'])} 迂回時の家老=[${observeBypassed(db, ASSIGNER)}]`
+          : ''),
     });
     result = { ok: true, id: taskId };
   });
   // 取引の中で断った場合はここへ落ちる（acquire が false を返した筋）。
   return result;
+}
+
+/**
+ * 迂回の理由として受け付けるか。
+ *
+ * 空も、それらしいだけの短文も弾く。理由が形だけになると、
+ * 後から「なぜ迂回したのか」が誰にも分からなくなる。
+ */
+export function checkReason(reason: string | undefined): string | null {
+  const r = (reason ?? '').trim();
+  if (r === '') return '迂回には理由が要る。--reason "家老が沈黙して 40 分" のように書かれよ。';
+  if ([...r].length < 8) return `理由が短すぎる: ${JSON.stringify(r)}\n  何が起きて迂回するのかを書かれよ。`;
+  if (/^(test|テスト|試験|tmp|x+|あ+)$/i.test(r)) {
+    return `それは理由になっておらぬ: ${JSON.stringify(r)}`;
+  }
+  return null;
+}
+
+/** 迂回された側が、その時どう見えていたか。後から検めるために残す。 */
+export function observeBypassed(db: Database, agent: string): string {
+  const t = db.query('SELECT task_id, status, holder, lease_until FROM task WHERE agent = ?').get(agent) as
+    | { task_id: string | null; status: string; holder: string | null; lease_until: string | null }
+    | null;
+  const unread = (
+    db.query('SELECT count(*) c FROM inbox WHERE agent = ? AND read = 0').get(agent) as { c: number }
+  ).c;
+  const last = db
+    .query('SELECT at FROM ledger WHERE actor = ? ORDER BY id DESC LIMIT 1')
+    .get(agent) as { at: string } | null;
+  return [
+    `${agent}:`,
+    `status=${t?.status ?? '不明'}`,
+    `holder=${t?.holder ?? 'なし'}`,
+    `lease_until=${t?.lease_until ?? 'なし'}`,
+    `unread=${unread}`,
+    `last_activity=${last?.at ?? 'なし'}`,
+  ].join(' ');
 }
