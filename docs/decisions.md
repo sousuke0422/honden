@@ -300,3 +300,31 @@ shogun → ashigaru1  [task.assign.bypass]
 
 迂回しても他の守りは効いたままにする。能力の足りない者へは振れないし、
 上役へも振れないし、無い司令の下へも振れない。緩めるのは指揮系統の 1 点だけ。
+
+## 貸与の強制解除も、同じ形にする
+
+足軽が握ったまま倒れると、持ち主しか手放せない造りでは誰も解けない。
+`expired()` は並べるだけで直さないので、詰まったままになる。
+
+迂回と同じ四つを課した。
+
+```
+$ honden lease release ashigaru1
+  ashigaru1 を握っておるのは ashigaru1 である。他人の持ち場は手放せぬ。
+  倒れて詰まっておるなら --force --reason "…" で解ける。跡は台帳に残る。
+
+$ honden lease release ashigaru1 --force --reason "足軽1号のpaneが落ちて1時間"
+  ashigaru1 の持ち場を空けた（強制。台帳に跡が残る）
+```
+
+```
+shogun → ashigaru1 [lease.release.force]
+  task=subtask_1_… prev_holder=ashigaru1 解除時の状態=held
+  lease_until=2026-08-25T15:54:28Z reason="足軽1号のpaneが落ちて1時間"
+```
+
+`解除時の状態=held` が肝になる。**まだ生きていた貸与を取り上げた**という事実が残る。
+「倒れていたから解いた」と言われたときに、台帳が `held` と言っていれば食い違いが分かる。
+倒れていたなら `expired` と残る。
+
+断り文に道を書くのも同じ理由。隠せば、いずれ誰かが別の抜け道を掘る。

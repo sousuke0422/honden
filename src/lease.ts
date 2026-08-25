@@ -15,6 +15,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { journal } from './store';
+import { checkReason } from './validate';
 
 /** 仕事の重さから期限を決める。宣言が無いときの既定。 */
 export const DEFAULT_LEASE_MINUTES = 30;
@@ -146,21 +147,57 @@ export function renew(
   return { ok: true, state: 'held', lease: readRow(db, opts.agent) ?? undefined };
 }
 
-/** 手放す。仕事が終わったときに呼ぶ。 */
+/**
+ * 手放す。仕事が終わったときに呼ぶ。
+ *
+ * ## 強制解除の道
+ *
+ * 足軽が握ったまま倒れると、持ち主しか手放せない造りでは誰も解けない。
+ * expired() は並べるだけで何も直さないので、詰まったままになる。
+ *
+ * だから道は要る。だが迂回と同じ four を課す。
+ *
+ *   1. 明示（force）。誤って通れない
+ *   2. 理由が必須
+ *   3. 別の action として台帳に残す（lease.release.force）
+ *   4. 解いた時の持ち場の様子を併せて記録する
+ *
+ * 4 つ目が要るのは、後から「本当に倒れていたか」を検めるため。
+ * 生きている者の仕事を取り上げた場合も、跡が残る。
+ */
 export function release(
   db: Database,
-  opts: { agent: string; holder: string; now?: Date },
+  opts: { agent: string; holder: string; now?: Date; force?: boolean; reason?: string },
 ): AcquireResult {
   const now = opts.now ?? new Date();
   const cur = readRow(db, opts.agent);
   if (!cur || !cur.holder) return { ok: true, state: 'free' };
-  if (cur.holder !== opts.holder) {
+  if (cur.holder !== opts.holder && !opts.force) {
     return {
       ok: false,
       state: leaseState(cur, now),
       lease: cur,
-      message: `${opts.agent} を握っておるのは ${cur.holder} である。他人の持ち場は手放せぬ。`,
+      message:
+        `${opts.agent} を握っておるのは ${cur.holder} である。他人の持ち場は手放せぬ。\n` +
+        `  倒れて詰まっておるなら --force --reason "…" で解ける。跡は台帳に残る。`,
     };
+  }
+  if (opts.force && cur.holder !== opts.holder) {
+    const bad = checkReason(opts.reason, `${opts.agent} の pane が落ちて 1 時間`);
+    if (bad) return { ok: false, state: leaseState(cur, now), lease: cur, message: bad };
+    const st = leaseState(cur, now);
+    db.prepare(
+      "UPDATE task SET holder = NULL, leased_at = NULL, lease_until = NULL, status = 'idle', updated_at = ? WHERE agent = ?",
+    ).run(now.toISOString(), opts.agent);
+    journal(db, {
+      actor: opts.holder,
+      action: 'lease.release.force',
+      target: opts.agent,
+      detail:
+        `task=${cur.taskId ?? '不明'} prev_holder=${cur.holder} 解除時の状態=${st} ` +
+        `lease_until=${cur.leaseUntil ?? 'なし'} reason=${JSON.stringify(opts.reason)}`,
+    });
+    return { ok: true, state: 'free', lease: readRow(db, opts.agent) ?? undefined };
   }
   db.prepare(
     "UPDATE task SET holder = NULL, leased_at = NULL, lease_until = NULL, status = 'idle', updated_at = ? WHERE agent = ?",

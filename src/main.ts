@@ -15,6 +15,7 @@ import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { createCmd, assignTask } from './dispatch';
+import { leaseState, expired, release } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
 import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
@@ -109,6 +110,58 @@ export function runRosterShow(dbPath: string | undefined): RunResult {
   return {
     code: EXIT_OK,
     out: r.map((e) => `  ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n'),
+  };
+}
+
+/** `honden lease` — いまの持ち場と貸与。 */
+export function runLeaseShow(dbPath: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  const rows = db
+    .query('SELECT agent, task_id, status, holder, lease_until FROM task ORDER BY agent')
+    .all() as { agent: string; task_id: string | null; status: string; holder: string | null; lease_until: string | null }[];
+  if (rows.length === 0) return { code: EXIT_OK, out: '  持ち場の記録が無い。' };
+  const now = new Date();
+  const lines = rows.map((r) => {
+    const st = leaseState({ holder: r.holder, leaseUntil: r.lease_until }, now);
+    const mark = st === 'expired' ? '★期限切れ' : st === 'held' ? '働いておる' : '空き';
+    return `    ${r.agent.padEnd(10)} ${mark.padEnd(10)} ${(r.task_id ?? '').padEnd(24)} ${r.lease_until ?? ''}`;
+  });
+  const stale = expired(db, now);
+  return {
+    code: EXIT_OK,
+    out:
+      '  持ち場\n' +
+      lines.join('\n') +
+      (stale.length > 0
+        ? `\n  ★期限切れ ${stale.length} 件。自動では返さぬ（やりかけの仕事が失われるため）。\n` +
+          '    手放させるなら honden lease release <agent> --force --reason "…"'
+        : ''),
+  };
+}
+
+/** `honden lease release <agent>` — 手放す。他人のものは force と理由が要る。 */
+export function runLeaseRelease(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  agent: string | undefined,
+  force: boolean,
+  reason: string | undefined,
+): RunResult {
+  if (!selfId) {
+    return { code: EXIT_INVALID, err: '誰であるか確かめられぬ。HONDEN_AGENT_ID を置かれよ。' };
+  }
+  if (!agent) {
+    return {
+      code: EXIT_INVALID,
+      err: 'どの持ち場か分からぬ。\n  honden lease release <agent> [--force --reason "…"]',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = tx(db, () => release(db, { agent, holder: selfId, force, reason }));
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  return {
+    code: EXIT_OK,
+    out: `  ${agent} の持ち場を空けた${force && selfId !== agent ? '（強制。台帳に跡が残る）' : ''}`,
   };
 }
 
@@ -305,6 +358,8 @@ const USAGE = `honden — 多エージェント運用の差配層
   EOF
   honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
   honden task assign … --bypass --reason "…"                 家老を通さぬ迂回（将軍だけ）
+  honden lease                                         持ち場と貸与の様子
+  honden lease release <agent> [--force --reason "…"]  手放す
   honden route <1-6> [--role worker] [--providers ...] 誰に振れるかを挙げる
   honden search <語> [--limit N]                       取り込んだものを引く
   honden inbox write <宛先> <本文> <種別> <差出人>      旧 inbox_write.sh と同じ並び
@@ -397,6 +452,15 @@ export async function main(argv: string[]): Promise<number> {
   if (rest[0] === 'task' && rest[1] === 'assign') {
     const stdin = await readStdin();
     return emit(runTaskAssign(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'lease') {
+    if (rest[1] === 'release') {
+      const force = flags['force'] === 'true'; const reason = flags['reason'];
+      delete flags['force']; delete flags['reason'];
+      return emit(runLeaseRelease(dbPath, selfId(), rest[2], force, reason));
+    }
+    return emit(runLeaseShow(dbPath));
   }
 
   if (rest[0] === 'roster') {

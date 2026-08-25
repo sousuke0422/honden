@@ -122,6 +122,94 @@ describe('手放す', () => {
   });
 });
 
+describe('強制解除', () => {
+  // 足軽が握ったまま倒れると、持ち主しか手放せない造りでは誰も解けない。
+  // expired() は並べるだけで直さないので、詰まったままになる。
+  const held = () => {
+    const db = mem();
+    tx(db, () => acquire(db, { agent: 'ashigaru1', taskId: 't1', holder: 'ashigaru1', now: T0 }));
+    return db;
+  };
+
+  test('理由つきなら他人の持ち場も解ける', () => {
+    const db = held();
+    const r = tx(db, () =>
+      release(db, {
+        agent: 'ashigaru1',
+        holder: 'shogun',
+        force: true,
+        reason: '足軽1号の pane が落ちて 1 時間',
+        now: plus(T0, 60),
+      }),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.state).toBe('free');
+  });
+
+  test('理由が無ければ解けぬ', () => {
+    const db = held();
+    const r = tx(db, () =>
+      release(db, { agent: 'ashigaru1', holder: 'shogun', force: true, now: plus(T0, 60) }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('理由が要る');
+  });
+
+  test('force を宣言せねば解けぬまま。だが道は教える', () => {
+    const db = held();
+    const r = tx(db, () => release(db, { agent: 'ashigaru1', holder: 'shogun', now: plus(T0, 60) }));
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('--force');
+  });
+
+  // 生きている者の仕事を取り上げた場合も、跡が残らねばならぬ。
+  test('解除時の状態が台帳に残る', () => {
+    const db = held();
+    tx(db, () =>
+      release(db, {
+        agent: 'ashigaru1',
+        holder: 'shogun',
+        force: true,
+        reason: '足軽1号の pane が落ちて 1 時間',
+        now: plus(T0, 60),
+      }),
+    );
+    const l = db
+      .query("SELECT actor, action, detail FROM ledger WHERE action = 'lease.release.force'")
+      .get() as { actor: string; action: string; detail: string };
+    expect(l.actor).toBe('shogun');
+    expect(l.detail).toContain('prev_holder=ashigaru1');
+    expect(l.detail).toContain('解除時の状態=expired');
+    expect(l.detail).toContain('reason=');
+  });
+
+  test('生きておる貸与を取り上げても、その旨が残る', () => {
+    const db = held();
+    tx(db, () =>
+      release(db, {
+        agent: 'ashigaru1',
+        holder: 'shogun',
+        force: true,
+        reason: '誤った仕事を振ってしまったゆえ取り消す',
+        now: plus(T0, 5),
+      }),
+    );
+    const l = db
+      .query("SELECT detail FROM ledger WHERE action = 'lease.release.force'")
+      .get() as { detail: string };
+    // まだ生きていた（held）ことが残る。倒れていたかを後から検められる。
+    expect(l.detail).toContain('解除時の状態=held');
+  });
+
+  test('自分の持ち場なら force は要らぬ（普通の解除として残る）', () => {
+    const db = held();
+    tx(db, () => release(db, { agent: 'ashigaru1', holder: 'ashigaru1', now: plus(T0, 5) }));
+    const acts = (db.query('SELECT action FROM ledger').all() as { action: string }[]).map((r) => r.action);
+    expect(acts).toContain('lease.release');
+    expect(acts).not.toContain('lease.release.force');
+  });
+});
+
 describe('期限切れの扱い', () => {
   test('期限切れは並ぶ', () => {
     const db = mem();

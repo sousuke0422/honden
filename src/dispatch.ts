@@ -48,7 +48,7 @@ import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
 import { maxBloomOf } from './routing';
-import { validate, explain, type Schema } from './validate';
+import { validate, explain, checkReason, type Schema } from './validate';
 
 const PRIORITIES = ['high', 'medium', 'low'] as const;
 
@@ -291,22 +291,6 @@ export function assignTask(
   });
   // 取引の中で断った場合はここへ落ちる（acquire が false を返した筋）。
   return result;
-}
-
-/**
- * 迂回の理由として受け付けるか。
- *
- * 空も、それらしいだけの短文も弾く。理由が形だけになると、
- * 後から「なぜ迂回したのか」が誰にも分からなくなる。
- */
-export function checkReason(reason: string | undefined): string | null {
-  const r = (reason ?? '').trim();
-  if (r === '') return '迂回には理由が要る。--reason "家老が沈黙して 40 分" のように書かれよ。';
-  if ([...r].length < 8) return `理由が短すぎる: ${JSON.stringify(r)}\n  何が起きて迂回するのかを書かれよ。`;
-  if (/^(test|テスト|試験|tmp|x+|あ+)$/i.test(r)) {
-    return `それは理由になっておらぬ: ${JSON.stringify(r)}`;
-  }
-  return null;
 }
 
 /** 迂回された側が、その時どう見えていたか。後から検めるために残す。 */
