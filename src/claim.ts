@@ -34,7 +34,8 @@ import type { Database } from 'bun:sqlite';
 import { journal } from './store';
 import { checkReason } from './validate';
 import { roleOf } from './roster';
-import { resolve } from 'node:path';
+import { resolve, dirname, basename, join } from 'node:path';
+import { statSync, realpathSync } from 'node:fs';
 
 export const KINDS = ['path', 'branch'] as const;
 export type Kind = (typeof KINDS)[number];
@@ -61,11 +62,87 @@ export interface Claim {
   source: Source;
 }
 
-/** path は絶対へ均す。相対のままだと同じ場所が別物に見える。 */
+/**
+ * 同じ場所が同じ文字列になるように均す。
+ *
+ * 三つを均す。
+ *
+ *   一、相対を絶対へ。相対のままだと同じ場所が別物に見える
+ *   二、symlink を辿る（実在する時だけ）。同じ木を二つの名で指せるゆえ
+ *   三、大小を区別せぬ土地では小文字へ畳む
+ *
+ * ## 三つ目は土地によって違う（2026-08-26 実測）
+ *
+ *   /mnt/c (DrvFs)  区別せぬ —— .worktrees/VRT-FIX32 で同じ木が開く
+ *   ext4            区別する
+ *
+ * 一律に畳むと、ext4 で本当に別の二つを同じものにしてしまう。
+ * 一律に畳まぬと、/mnt/c で**同じ木へ二人が入れる**。
+ * ゆえに土地を測る——推し量らずに、実際に確かめる。
+ */
 export function normalize(kind: Kind, value: string, cwd?: string): string {
   const v = value.trim();
   if (kind !== 'path') return v;
-  return resolve(cwd ?? process.cwd(), v).replace(/\/+$/, '');
+  let p = resolve(cwd ?? process.cwd(), v).replace(/\/+$/, '');
+  // symlink は実在する時だけ辿れる。これから切る worktree は実在せぬので、
+  // 辿れぬことは異常ではない。
+  try {
+    p = realpathSync(p);
+  } catch {
+    // そのままでよい
+  }
+  return caseInsensitiveAt(p) ? p.toLowerCase() : p;
+}
+
+/** 一度測った土地は覚える。同じ mount を何度も測らぬため。 */
+const caseFoldCache = new Map<string, boolean>();
+
+/**
+ * その場所が大小を区別せぬ土地にあるか。
+ *
+ * **推し量らずに測る。** `/mnt/` で始まるかで決めると、
+ * case-sensitive を明示した DrvFs や、別の mount で誤る。
+ *
+ * 実在する最も近い祖先を探し、その名の大小を入れ替えて同じ inode を
+ * 指すかを見る。名に英字が無ければ、さらに上へ遡る。
+ * 測れなければ「区別する」に倒す——畳まぬ側は、多く断るだけで済む。
+ */
+export interface StatLike {
+  ino: number | bigint;
+  dev: number | bigint;
+}
+
+export function caseInsensitiveAt(
+  path: string,
+  // 測り方を差し替えられるようにする。差し替えられぬと、
+  // 「土地を測っておるのか、パスから推し量っておるのか」を
+  // 試験が見分けられない（この機では /mnt/ の当て推量でも同じ答えが出る）。
+  stat: (p: string) => StatLike = statSync,
+): boolean {
+  let dir = path;
+  for (let i = 0; i < 40; i++) {
+    const parent = dirname(dir);
+    const name = basename(dir);
+    if (parent === dir) break; // 根まで来た
+
+    if (/[A-Za-z]/.test(name)) {
+      const flipped = name === name.toLowerCase() ? name.toUpperCase() : name.toLowerCase();
+      const key = `${parent}\u0000${name}`;
+      const cached = caseFoldCache.get(key);
+      if (cached !== undefined) return cached;
+      try {
+        const a = stat(join(parent, name));
+        const b = stat(join(parent, flipped));
+        const same = a.ino === b.ino && a.dev === b.dev;
+        caseFoldCache.set(key, same);
+        return same;
+      } catch {
+        // 実在せぬ。上へ遡る
+      }
+    }
+    dir = parent;
+  }
+  return false;
 }
 
 /**

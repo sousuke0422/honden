@@ -575,6 +575,15 @@ export interface Hit {
  * 語の途中から打ちたい場合 (`gram` で `trigram` を出したい等) はここでは当たらない。
  * その用が出たら doc.body への LIKE を足すこと。索引をもう 1 本張るより安い。
  */
+/**
+ * 引けなかったこと。
+ *
+ * 「0 件だった」と「引けなかった」を同じ形で返してはならない。
+ * 記号だけの語で FTS5 の構文が壊れた時も、本当に何も無い時も 0 件では、
+ * **探し方が悪いのか、無いのかが分からぬ**。
+ */
+export class SearchError extends Error {}
+
 export function search(db: Database, query: string, limit = 50): Hit[] {
   let ids: number[];
   try {
@@ -584,9 +593,15 @@ export function search(db: Database, query: string, limit = 50): Hit[] {
         limit,
       ) as { doc_id: number }[]
     ).map((r) => r.doc_id);
-  } catch {
-    // 検索語が FTS5 の構文として成立しない場合 (記号だけ等)。0 件で返す。
-    return [];
+  } catch (e) {
+    // 検索語が FTS5 の構文として成立しない（記号だけ等）。
+    // 0 件では返さない——無いことと引けぬことは違う。
+    throw new SearchError(
+      `検索語が引けぬ: ${JSON.stringify(query)}\n` +
+        `  ${String(e).slice(0, 120)}\n` +
+        '  記号だけの語や、FTS5 の演算子（AND OR NOT NEAR " * ^）が\n' +
+        '  中途半端に混ざっておらぬか確かめられよ。',
+    );
   }
   if (ids.length === 0) return [];
   return db

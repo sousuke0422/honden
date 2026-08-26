@@ -7,17 +7,17 @@
  */
 
 import { expect, test, describe } from 'bun:test';
-import { openStore, tx } from '../src/store';
+import { openStore, tx, search as searchDocs, SearchError } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
 import { submitReport, submitQc, cmdDone } from '../src/report';
 import { plan, record, markSince, startClocks, LEVEL_3_AFTER_MS, REPEAT_MS, ATTENDED_SILENT } from '../src/nudge';
 import { setMode } from '../src/mode';
-import { take, live as liveClaims, release as releaseClaim } from '../src/claim';
+import { take, live as liveClaims, release as releaseClaim, normalize as normalizeClaim, caseInsensitiveAt } from '../src/claim';
 import { release as releaseLease, renew as renewLease } from '../src/lease';
 import { ingestTask } from '../src/ingest';
 import { inboxWrite } from '../src/cli';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reportCollision } from '../src/peer';
@@ -454,5 +454,90 @@ describe('指揮系統を宛先の検めへ（F001）', () => {
   test('将軍から足軽へは通る（指揮系統は下りゆえ）', () => {
     const { path } = withDb();
     expect(write(path, 'shogun', 'ashigaru1', 'cmd_new').code).toBe(0);
+  });
+});
+
+describe('同じ場所が同じ文字列になること', () => {
+  test('大小を区別せぬ土地では畳む', () => {
+    // /mnt/c (DrvFs) は区別せぬ——.worktrees/VRT-FIX32 で同じ木が開く（実測 2026-08-26）。
+    // この試験は WSL の /mnt/c が在る時だけ意味を持つ。
+    const drv = '/mnt/c/Users';
+    if (!existsSync(drv) || !caseInsensitiveAt(drv)) return;
+    const a = normalizeClaim('path', '/mnt/c/Users/AKI/work');
+    const b = normalizeClaim('path', '/mnt/c/users/aki/work');
+    expect(a).toBe(b);
+  });
+
+  test('区別する土地では畳まぬ', () => {
+    const root = mkdtempSync(join(tmpdir(), 'honden-case-'));
+    if (caseInsensitiveAt(root)) return; // tmp が DrvFs 上なら見送る
+    mkdirSync(join(root, 'Alpha'));
+    mkdirSync(join(root, 'alpha'));
+    expect(normalizeClaim('path', join(root, 'Alpha'))).not.toBe(normalizeClaim('path', join(root, 'alpha')));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('symlink は辿る。同じ木を二つの名で指せるゆえ', () => {
+    const root = mkdtempSync(join(tmpdir(), 'honden-link-'));
+    const real = join(root, 'real');
+    mkdirSync(real);
+    symlinkSync(real, join(root, 'alias'));
+    expect(normalizeClaim('path', join(root, 'alias'))).toBe(normalizeClaim('path', real));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('実在せぬ場所でも均せる。これから切る worktree ゆえ', () => {
+    const p = normalizeClaim('path', '/そのような/場所は/まだ無い/');
+    expect(p).toBe('/そのような/場所は/まだ無い');
+  });
+
+  test('枝は畳まぬ。枝名は大小を区別する', () => {
+    expect(normalizeClaim('branch', 'Feat/X')).toBe('Feat/X');
+  });
+});
+
+describe('引けぬことと 0 件は違う', () => {
+  test('壊れた検索語は誤りとして返る', () => {
+    const db = openStore({ path: ':memory:' });
+    expect(() => searchDocs(db, '"')).toThrow(SearchError);
+  });
+
+  test('本当に無いときは 0 件', () => {
+    const db = openStore({ path: ':memory:' });
+    expect(searchDocs(db, 'そのような語は無い')).toEqual([]);
+  });
+});
+
+describe('土地の測り方（推し量らぬこと）', () => {
+  /** 名の大小を問わず同じ inode を返す土地。 */
+  const insensitive = () => ({ ino: 1, dev: 1 });
+  /** 名ごとに違う inode を返す土地。片方は実在せぬ体にする。 */
+  const sensitive = (p: string) => {
+    if (/[A-Z]/.test(p.split('/').pop() ?? '')) throw new Error('ENOENT');
+    return { ino: 2, dev: 1 };
+  };
+
+  test('同じ inode を指すなら畳む土地', () => {
+    expect(caseInsensitiveAt('/どこか/Alpha/beta', insensitive)).toBe(true);
+  });
+
+  test('別の inode なら畳まぬ土地', () => {
+    expect(caseInsensitiveAt('/どこか/alpha/beta', sensitive)).toBe(false);
+  });
+
+  test('パスの見た目では決めておらぬ', () => {
+    // /mnt/ で始まるかで決めておるなら、この二つは同じ答えになる。
+    // 測っておるなら、渡した土地の性質どおりに分かれる。
+    expect(caseInsensitiveAt('/mnt/c/x/Alpha', sensitive)).toBe(false);
+    expect(caseInsensitiveAt('/home/aki/Alpha', insensitive)).toBe(true);
+  });
+
+  test('測れねば畳まぬ側へ倒す', () => {
+    // 畳まぬ側は、多く断るだけで済む。畳む側へ倒すと別物を同じにする。
+    expect(
+      caseInsensitiveAt('/どこか/Alpha', () => {
+        throw new Error('ENOENT');
+      }),
+    ).toBe(false);
   });
 });

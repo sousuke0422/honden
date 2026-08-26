@@ -8,7 +8,7 @@
  * 切り替えの日を決めるまでは、影に徹するのが安全になる。
  */
 
-import { openStore, search, tx, type Hit } from './store';
+import { openStore, search, tx, SearchError, type Hit } from './store';
 import { resolve as resolveIdentity, type Identity } from './identity';
 import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -339,6 +339,9 @@ export function runSearch(dbPath: string | undefined, query: string, limit: numb
   try {
     hits = search(db, query, limit);
   } catch (e) {
+    // 引けなかったのは、探し方の問題であって仕組みの故障ではない。
+    // 直せる誤りとして返す——EXIT_SYSTEM で返すと「壊れた」と読まれる。
+    if (e instanceof SearchError) return { code: EXIT_INVALID, err: e.message };
     return { code: EXIT_SYSTEM, err: `検索が止まった: ${String(e).slice(0, 300)}` };
   }
   if (hits.length === 0) {
