@@ -164,8 +164,8 @@ describe('合図の口', () => {
     const db = openStore({ path: dbPath });
     tx(db, () => {
       syncRoster(db, [
-        { id: 'shogun', role: 'commander' },
-        { id: 'karo', role: 'commander' },
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
       ]);
     });
     const sig = signalPathOf(dbPath);
@@ -189,8 +189,8 @@ describe('合図の口', () => {
     const db = openStore({ path: dbPath });
     tx(db, () => {
       syncRoster(db, [
-        { id: 'shogun', role: 'commander' },
-        { id: 'karo', role: 'commander' },
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
       ]);
     });
     inboxWrite(dbPath, { flags: { to: 'karo', from: 'shogun', type: 'cmd_new', body: '用件' } }, false, {

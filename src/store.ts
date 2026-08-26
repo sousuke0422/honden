@@ -305,6 +305,22 @@ CREATE TABLE IF NOT EXISTS report_check (
   PRIMARY KEY (report_id, idx)
 );
 
+-- 合図の段の覚え。
+--
+-- 「いつから未読が続いておるか」「最後にいつ撃ったか」を持つ。
+-- 段 (escalation) は時刻の差から毎回計算する。段そのものを持つと、
+-- 覚えと実際がずれた時にどちらが正しいか決まらない。
+--
+-- 常駐する芯 (core/watch) は状態を持たない。持たせると、芯が落ちた時に
+-- 段が巻き戻る。正本に置けば、芯は何度落ちても続きから拾える。
+CREATE TABLE IF NOT EXISTS nudge (
+  agent         TEXT PRIMARY KEY,
+  since         TEXT,   -- 未読が 0 から増えた時刻。0 に戻れば消す
+  last_at       TEXT,   -- 最後に合図を撃った時刻
+  last_level    INTEGER,
+  last_reset_at TEXT    -- 最後に文脈を消させた時刻。連発を防ぐ
+);
+
 -- 追記専用の台帳。書き込みは全部ここにも落ちる。
 -- kagemusha の decisions_journal に相当する層。上書きも削除もしない。
 CREATE TABLE IF NOT EXISTS ledger (

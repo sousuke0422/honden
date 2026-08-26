@@ -16,6 +16,9 @@ import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
+import { plan, send, record, forget, markSince } from './nudge';
+import { summarize as summarizeInbox } from './inbox';
+import { roster as rosterOf } from './roster';
 import { leaseState, expired, release } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
@@ -491,6 +494,69 @@ export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined
   return { code: EXIT_OK, out: lines.join('\n') };
 }
 
+/**
+ * `honden nudge` — 常駐する芯から呼ばれる手。
+ *
+ * 最後の行に `{"next_wake_ms": N}` を出す。芯はそれを読んで寝る。
+ * 芯は agent も段も知らぬので、次にいつ起こすかもこちらが決める。
+ */
+export async function runNudge(
+  dbPath: string | undefined,
+  dryRun: boolean,
+  wakeShogun: boolean,
+): Promise<RunResult> {
+  const db = openStore({ path: dbPath });
+  const now = new Date();
+
+  // 未読が 0 から増えた者に、続き始めを刻む。
+  // 刻む前に段を数えると、初回がいきなり段 1 の「経ち 0」でなく
+  // 前回の残りから始まってしまう。
+  const live: string[] = [];
+  const quiet: string[] = [];
+  for (const e of rosterOf(db)) {
+    if (summarizeInbox(db, e.id).total > 0) {
+      markSince(db, e.id, now);
+      live.push(e.id);
+    } else {
+      quiet.push(e.id);
+    }
+  }
+  // 片付いた者の覚えは消す。残すと、次の未読がいきなり段 3 から始まる。
+  forget(db, quiet);
+
+  const plans = plan(db, now, { wakeShogun });
+  const lines: string[] = [];
+
+  if (plans.length === 0) {
+    lines.push('  未読は無い。撃つ相手も無い。');
+  }
+
+  let soonest = 600_000; // 誰も居らぬなら 10 分後にもう一度だけ見る
+  for (const p of plans) {
+    soonest = Math.min(soonest, p.nextInMs);
+    const head = `  ${p.agent} 未読${p.unread} 段L${p.level} ${p.pane?.label ?? 'ペイン不明'}`;
+    if (!p.send) {
+      lines.push(`${head} → 撃たぬ（${p.reason}）`);
+      continue;
+    }
+    if (dryRun) {
+      lines.push(`${head} → ${JSON.stringify(p.text)}${p.hardRecovery ? ' (先に Escape×2 + Ctrl-C)' : ''} [--dry-run ゆえ撃たぬ]`);
+      continue;
+    }
+    const r = await send(p);
+    if (r.ok) {
+      record(db, p, now);
+      lines.push(`${head} → 撃った: ${JSON.stringify(p.text)}`);
+    } else {
+      lines.push(`${head} → 撃てぬ: ${r.err}`);
+    }
+  }
+
+  // 芯への返事。人が読む行に混ざってよいが、必ず最後に置く。
+  lines.push(JSON.stringify({ next_wake_ms: soonest }));
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -548,6 +614,12 @@ export async function main(argv: string[]): Promise<number> {
   if (rest[0] === 'cmd' && rest[1] === 'new') {
     const stdin = await readStdin();
     return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'nudge') {
+    const wakeShogun = flags['wake-shogun'] === 'true';
+    delete flags['wake-shogun'];
+    return emit(await runNudge(dbPath, dryRun, wakeShogun));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'done') {
