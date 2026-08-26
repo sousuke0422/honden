@@ -47,6 +47,8 @@ import type { Database } from 'bun:sqlite';
 import { deliver, signal } from './inbox';
 import { take as takeClaim, type Kind, type Source } from './claim';
 import { workRootOf } from './projects';
+import { readNorms, select, forTask } from './norms';
+import { normsRoot } from './settings';
 import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
@@ -309,14 +311,23 @@ export function assignTask(
         JSON.stringify({ ...input, task_id: taskId }),
         v.agent,
       );
+      // 規約を初稿へ差し込む。
+      //
+      // 検めの側（軍師）へ差し込んでも、見つけるのが速くなるだけで線形。
+      // 生成側——足軽が最初に書く時——へ戻して初めて複利になる
+      // (kagemusha ssot/norms/README.md)。
+      //
+      // 棚が空なら何も足さない。空の見出しだけを毎回付けると、
+      // 読む側がその節ごと読み飛ばすようになる。
+      const norms = forTask(select(readNorms(normsRoot(db))));
       deliver(db, {
         id: `msg_${Date.now().toString(36)}_${taskId}`,
         agent: v.agent,
         at: new Date().toISOString(),
         type: 'task_assigned',
         sender: actor,
-        body: `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}`,
-    });
+        body: `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}` + (norms ? `\n\n${norms}` : ''),
+      });
     for (const w of wants) {
       const got = takeClaim(db, { ...w, agent: v.agent, taskId, cmdId: v.cmd_id });
       if (!got.ok) {

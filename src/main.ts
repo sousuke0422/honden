@@ -20,6 +20,8 @@ import { plan, send, record, forget, markSince } from './nudge';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
 import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
+import { readNorms, select, PROMPT_TIERS } from './norms';
+import { normsRoot, setSetting } from './settings';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
 import { roster as rosterOf, roleOf as roleOfId } from './roster';
@@ -369,6 +371,8 @@ const USAGE = `honden — 多エージェント運用の差配層
   EOF
   honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
                      [--workspace .worktrees/x] [--branch feat/y]   重なれば振れぬ
+  honden norms [ドメイン] [--root <kagemusha>]          規約の棚と、初稿へ入るもの
+  honden norms root <path>                             棚の在り処を決める
   honden projects sync --file <projects.yaml>          案件の所在を写す
   honden projects                                      いまの所在と、働く場所
   honden claim                                         誰がどこを握っておるか
@@ -734,6 +738,55 @@ export function runProjectsShow(dbPath: string | undefined): RunResult {
   return { code: EXIT_OK, out: lines.join('\n') };
 }
 
+/**
+ * `honden norms` — 規約の棚と、初稿の指示文へ入るもの。
+ *
+ * 空でも異常ではない。棚は空で出荷される。
+ */
+export function runNorms(dbPath: string | undefined, domain: string | undefined, root?: string): RunResult {
+  const db = openStore({ path: dbPath });
+  const dir = root ?? normsRoot(db);
+  const all = readNorms(dir);
+  const sel = select(all, domain);
+
+  const lines = [`  棚: ${dir}/ssot/norms`];
+  if (all.length === 0) {
+    lines.push('  エントリは 1 行も無い。');
+    lines.push('');
+    lines.push('  棚は空で出荷される。借り物の規約は自分で焼いた規約と同じ枠を食うゆえ、');
+    lines.push('  最初の 1 行は殿ご自身の却下から取り出したものであるべきである。');
+    lines.push(`  cp ${dir}/ssot/norms/writing.md.example ${dir}/ssot/norms/writing.md`);
+    return { code: EXIT_OK, out: lines.join('\n') };
+  }
+
+  lines.push(`  ${all.length} 行 —— うち初稿の指示文へ入るのは ${sel.chosen.length} 行`);
+  lines.push('');
+  lines.push(`  指示文へ入る（${PROMPT_TIERS.join(' / ')}）`);
+  for (const n of sel.chosen) lines.push(`    [${n.domain}] ${n.text}  ← 出典: ${n.source}`);
+  if (sel.chosen.length === 0) lines.push('    （無し）');
+
+  if (sel.tooYoung.length > 0) {
+    lines.push('');
+    lines.push(`  棚に載るが指示文へは入らぬ（段が足りぬ）: ${sel.tooYoung.length} 行`);
+    for (const n of sel.tooYoung) lines.push(`    [${n.tier}] ${n.text}`);
+  }
+  if (sel.unsourced.length > 0) {
+    lines.push('');
+    lines.push(`  段は足りておるが出典が無い: ${sel.unsourced.length} 行`);
+    lines.push('    出典の無い行は後から誰も検算できぬ。指示文へは入れぬ。');
+    for (const n of sel.unsourced) lines.push(`    [${n.tier}] ${n.text}`);
+  }
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
+
+/** `honden norms root <path>` — 棚の在り処を決める。 */
+export function runNormsRoot(dbPath: string | undefined, selfId: string | undefined, path: string | undefined): RunResult {
+  if (!path) return { code: EXIT_INVALID, err: '棚の在り処を渡されよ。例: honden norms root /path/to/kagemusha' };
+  const db = openStore({ path: dbPath });
+  setSetting(db, 'norms_root', path, selfId);
+  return { code: EXIT_OK, out: `  棚の在り処を ${path} にした。` };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -791,6 +844,13 @@ export async function main(argv: string[]): Promise<number> {
   if (rest[0] === 'cmd' && rest[1] === 'new') {
     const stdin = await readStdin();
     return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'norms') {
+    if (rest[1] === 'root') return emit(runNormsRoot(dbPath, selfId(), rest[2]));
+    const root = flags['root'];
+    delete flags['root'];
+    return emit(runNorms(dbPath, rest[1], root));
   }
 
   if (rest[0] === 'projects') {
