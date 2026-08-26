@@ -410,3 +410,39 @@ describe('一回きりの明示（--wake-shogun）', () => {
     expect(p.reason).toContain('ペインが見つからぬ');
   });
 });
+
+describe('様態を切り替えられるのは将軍だけ', () => {
+  test('足軽は切り替えられぬ', () => {
+    const db = seeded();
+    const r = setMode(db, 'ashigaru1', 'autonomous', { until: '6h', now: T0 });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('shogun');
+    expect(getMode(db, T0).mode).toBe('attended');
+  });
+
+  test('家老も切り替えられぬ', () => {
+    const db = seeded();
+    expect(setMode(db, 'karo', 'autonomous', { now: T0 }).ok).toBe(false);
+  });
+
+  test('名乗り無しでは切り替えられぬ', () => {
+    const db = seeded();
+    const r = setMode(db, undefined, 'autonomous', { now: T0 });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('名乗り無し');
+  });
+
+  test('読むのは誰でもよい', () => {
+    const db = seeded();
+    setMode(db, 'shogun', 'autonomous', { until: '6h', now: T0 });
+    // getMode に名乗りは要らぬ。合図を撃つ側が毎回読むゆえ
+    expect(getMode(db, T0).mode).toBe('autonomous');
+  });
+
+  test('弾かれた時は台帳にも残らぬ', () => {
+    const db = seeded();
+    setMode(db, 'ashigaru1', 'autonomous', { now: T0 });
+    const led = db.query("SELECT action FROM ledger WHERE action LIKE 'mode.%'").all() as { action: string }[];
+    expect(led.length).toBe(0);
+  });
+});

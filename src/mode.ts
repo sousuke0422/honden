@@ -14,6 +14,17 @@
  * ゆえに旗ではなく様態にした。旗にすると「例外的に起こす」と読める。
  * 自律運用では起こすのが常道であって、例外ではない。
  *
+ * ## 切り替えられるのは将軍だけ
+ *
+ * 様態が言い表しているのは「殿が席におられるか」という**外の世界の事実**で、
+ * 布陣の都合ではない。それを見ているのは将軍だけである。
+ *
+ * 誰でも切り替えられると、足軽が自分の合図を通したくて自律へ移せる。
+ * 移せば家老から将軍への路も開くので、一体の都合で布陣ぜんたいの
+ * 決めが動く。指揮系統を型で守っているのと同じ理由で絞る。
+ *
+ * 読むのは誰でもよい。合図を撃つ側 (nudge) が毎回読むゆえ。
+ *
  * ## 期限をつけられる
  *
  * 様態を戻し忘れると、朝になって殿が打ち込んでおる最中に合図が飛ぶ。
@@ -29,6 +40,9 @@ export type Mode = (typeof MODES)[number];
 
 /** 何も決めておらぬ時。殿が居るものとして扱う——潰すほうが害が大きい。 */
 export const DEFAULT_MODE: Mode = 'attended';
+
+/** 様態を切り替えられる者。殿の在席を見ておるのは将軍だけゆえ。 */
+export const MODE_AUTHOR = 'shogun';
 
 export interface ModeState {
   mode: Mode;
@@ -108,6 +122,19 @@ export function setMode(
   opts: { until?: string; now?: Date } = {},
 ): SetResult {
   const now = opts.now ?? new Date();
+
+  if (selfId !== MODE_AUTHOR) {
+    return {
+      ok: false,
+      message:
+        `様態を切り替えられるのは ${MODE_AUTHOR} である（そなたは ${selfId ?? '名乗り無し'}）。\n` +
+        '  これは「殿が席におられるか」という布陣の外の事実であって、\n' +
+        '  布陣の都合で動かすものではない。見ておるのは将軍だけである。\n' +
+        '  合図が通らぬなら、まず未読を片付けられよ。\n' +
+        '  読むだけなら誰でもよい: honden mode',
+    };
+  }
+
   if (!(MODES as readonly string[]).includes(mode)) {
     return {
       ok: false,
