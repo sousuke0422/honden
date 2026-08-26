@@ -668,3 +668,47 @@ describe('二度目の外部レビュー（2026-08-27）', () => {
     expect(() => releaseClaim(db, { id: 999, by: 'review_session' })).not.toThrow();
   });
 });
+
+describe('試験環境の smoke が釣ったバグ（2026-08-27）', () => {
+  test('前の山が片付いた後の新しい未読は、段 1 から始まる', () => {
+    // ack で片付く → 手が呼ばれる前に新しい未読 → 次の手。
+    // COALESCE が古い since を残すと、ここでいきなり /clear が飛ぶ。
+    const { db } = seeded();
+    const T0 = new Date('2026-08-27T10:00:00Z');
+    const P = new Map([['karo', { id: '%1', label: 'honden-test:agents.1' }]]);
+    const put = (id: string, at: Date) =>
+      db
+        .prepare('INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)')
+        .run(id, 'karo', at.toISOString(), 'report_received', 'x', 'y');
+
+    // 一山目: 未読 → 時計が立つ → 5 分経つ（放っておけば段 3 の経ち）
+    put('m1', T0);
+    startClocks(db, T0);
+    const later = new Date(T0.getTime() + 5 * 60_000);
+
+    // ack で片付く（手はまだ呼ばれておらぬ = forget も走らぬ）
+    db.run("UPDATE inbox SET read = 1 WHERE agent = 'karo'");
+
+    // 二山目: 新しい未読が来て、それから手が呼ばれる
+    put('m2', new Date(later.getTime() + 1000));
+    startClocks(db, new Date(later.getTime() + 2000));
+    const p = plan(db, new Date(later.getTime() + 2000), { panes: P }).find((x) => x.agent === 'karo')!;
+    expect(p.level).toBe(1); // 段 3（/clear）ではない
+    expect(p.text).toContain('inbox_notice');
+  });
+
+  test('同じ山が続いておる間は、時計は戻らぬ', () => {
+    // 戻ると escalation が永遠に L1 に留まり、詰まった pane を立て直せぬ
+    const { db } = seeded();
+    const T0 = new Date('2026-08-27T10:00:00Z');
+    const P = new Map([['karo', { id: '%1', label: 'honden-test:agents.1' }]]);
+    db.prepare('INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)').run(
+      'm1', 'karo', T0.toISOString(), 'report_received', 'x', 'y',
+    );
+    startClocks(db, T0);
+    const later = new Date(T0.getTime() + 5 * 60_000);
+    startClocks(db, later); // 未読は残ったまま
+    const p = plan(db, later, { panes: P }).find((x) => x.agent === 'karo')!;
+    expect(p.level).toBe(3); // ちゃんと上がる
+  });
+});

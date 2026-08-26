@@ -265,8 +265,32 @@ export function forget(db: Database, agents: string[]): void {
   db.run(`DELETE FROM nudge WHERE agent IN (${q})`, agents);
 }
 
-/** 未読が 0 から増えた者に、続き始めの時刻を刻む。 */
+/**
+ * 未読が 0 から増えた者に、続き始めの時刻を刻む。
+ *
+ * ## 山が入れ替わったら、時計を戻す
+ *
+ * COALESCE で古い since を無条件に残すと、**前の山（ack で片付いた未読）の
+ * 時計が次の山へ持ち越される**。片付いてから次の未読が来るまでの間に
+ * 手が一度も呼ばれぬと forget が走らず、次の手でいきなり段 3——
+ * 試験環境の受け手へ /clear が飛んだ（2026-08-27 実測、smoke が釣った）。
+ *
+ * since より新しい未読しか残っておらぬなら、前の山は片付いておる。
+ * その時は since を今へ戻す。段が数えるのは「いまの山に撃ち始めてから
+ * 返事が無い時間」であって、昔の山の古さではない。
+ */
 export function markSince(db: Database, agent: string, now: Date): void {
+  const cur = db.query('SELECT since FROM nudge WHERE agent = ?').get(agent) as { since: string | null } | null;
+  if (cur?.since) {
+    const oldest = db
+      .query('SELECT MIN(created_at) t FROM inbox WHERE agent = ? AND read = 0')
+      .get(agent) as { t: string | null };
+    if (oldest.t && oldest.t > cur.since) {
+      // いま在る未読はどれも since より新しい ＝ 前の山は片付いた。時計を戻す。
+      db.prepare('UPDATE nudge SET since = ?, last_level = NULL WHERE agent = ?').run(now.toISOString(), agent);
+      return;
+    }
+  }
   db.prepare(
     `INSERT INTO nudge(agent, since) VALUES (?,?)
      ON CONFLICT(agent) DO UPDATE SET since = COALESCE(nudge.since, excluded.since)`,

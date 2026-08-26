@@ -257,6 +257,12 @@ tests/specs/osato_lms_*
 # 棚の作法
 !/skills/README.md
 
+# 試験環境（tmux で布陣を起こし、配達層を通しで検める）
+!/scripts/
+!/scripts/testenv.sh
+!/scripts/testenv/
+!/scripts/testenv/recv.sh
+
 # ══════════════════════════════════════════════════
 # 最後に、何があっても追跡しないもの。
 # 上の許可行が緩んでも、ここで止まる。

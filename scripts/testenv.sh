@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# ============================================================
+# honden の試験環境。tmux で布陣を起こし、配達層を通しで検める。
+#
+#   scripts/testenv.sh up      布陣を起こす（既にあれば断る）
+#   scripts/testenv.sh down    布陣を畳む（人が打つ。agent は D006 ゆえ打たぬ）
+#   scripts/testenv.sh status  いまの様子
+#   scripts/testenv.sh smoke   external-to-honden 経路の疎通試験
+#
+# ## 本番と混ざらぬための三つの壁
+#
+#   一、セッション名が違う（honden-test。本番は multiagent / shogun）
+#   二、正本が違う（~/.honden-test/。9p を避け ext4 に置く）
+#   三、HONDEN_TMUX_SESSION で pane の世界を絞る。
+#       試験の karo と本番の karo は同名ゆえ、絞らねば
+#       **試験の合図が本番の pane へ飛ぶ**（src/pane.ts の註）
+#
+# ## Zellij への申し送り
+#
+# この script の tmux 触りは次の種類のみ。移る時はここが対応表の対象。
+#   has-session / new-session / split-window / select-layout /
+#   set-option -p @agent_id / list-panes / new-window / kill-session
+# ============================================================
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SESSION="${HONDEN_TEST_SESSION:-honden-test}"
+TESTHOME="${HONDEN_TEST_HOME:-$HOME/.honden-test}"
+DB="$TESTHOME/honden.db"
+RECV="$TESTHOME/received"
+AGENTS=(shogun karo gunshi ashigaru1 ashigaru2)   # fixtures/test-env/settings.yaml と揃える
+
+H_OUT() { env -u TMUX_PANE HONDEN_DB="$DB" "$ROOT/bin/honden" "$@"; }  # 布陣の外として
+
+die() { echo "  ✗ $*" >&2; exit 1; }
+
+# 焼き物が源より古くないか。
+#
+# 古い bin で試験すると、**塞いだはずの穴が開いたまま試験が走る**。
+# 実際に起きた（2026-08-27）: pane のセッション絞りを src へ入れた後、
+# 焼き直さずに芯を起こし、手が絞りの無い旧 bin で走って
+# **本番の karo pane へ試験の合図を二発撃った**。旧 bin の芯は未読が残る限り
+# 60 秒ごとに再送するゆえ、焼き忘れは一発では済まぬ。
+freshness() {
+  local stale
+  stale=$(find "$ROOT/src" -name '*.ts' -newer "$ROOT/bin/honden" 2>/dev/null | head -1)
+  [ -n "$stale" ] && die "bin/honden が古い（$stale が新しい）。bun run build で焼き直されよ"
+  stale=$(find "$ROOT/core/watch/src" -name '*.rs' -newer "$ROOT/bin/honden-watch" 2>/dev/null | head -1)
+  [ -n "$stale" ] && die "bin/honden-watch が古い（$stale が新しい）。cargo build --release で焼き直されよ"
+  return 0
+}
+
+up() {
+  freshness
+  [ -x "$ROOT/bin/honden" ] || die "bin/honden が無い。bun run build で焼かれよ"
+  [ -x "$ROOT/bin/honden-watch" ] || die "bin/honden-watch が無い。cd core/watch && cargo build --release"
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    die "セッション $SESSION が既に居る。down してから up されよ（黙って作り直しはせぬ）"
+  fi
+
+  echo "── 正本を新しく ──"
+  rm -rf "$TESTHOME"
+  mkdir -p "$TESTHOME" "$RECV"
+  H_OUT roster sync --settings "$ROOT/fixtures/test-env/settings.yaml" | tail -2
+  touch "$DB.signal"   # 芯の見張る先。先に無いと芯が開けぬ
+
+  echo "── 布陣を起こす ──"
+  tmux new-session -d -s "$SESSION" -n agents \
+    "exec bash '$ROOT/scripts/testenv/recv.sh' '${AGENTS[0]}' '$RECV/${AGENTS[0]}.log'"
+  for a in "${AGENTS[@]:1}"; do
+    tmux split-window -t "$SESSION:agents" \
+      "exec bash '$ROOT/scripts/testenv/recv.sh' '$a' '$RECV/$a.log'"
+    tmux select-layout -t "$SESSION:agents" tiled >/dev/null
+  done
+
+  # @agent_id を付ける。pane_index 順 = 作成順として付け、
+  # 付けた後に**読み戻して**検める。付けっぱなしは信じない。
+  local i=0
+  while IFS=$'\t' read -r pid _; do
+    tmux set-option -p -t "$pid" @agent_id "${AGENTS[$i]}"
+    i=$((i+1))
+  done < <(tmux list-panes -t "$SESSION:agents" -F $'#{pane_id}\t#{pane_index}' | sort -t$'\t' -k2 -n)
+
+  echo "── 付いた名を読み戻す ──"
+  tmux list-panes -t "$SESSION:agents" -F '  #{pane_id} #{@agent_id}'
+
+  echo "── 芯を起こす ──"
+  tmux new-window -t "$SESSION" -n core \
+    "HONDEN_DB='$DB' HONDEN_TMUX_SESSION='$SESSION' exec '$ROOT/bin/honden-watch' \
+       --path '$DB.signal' --lock '$TESTHOME/watch.lock' --debounce-ms 300 \
+       -- '$ROOT/bin/honden' nudge"
+  sleep 1
+  status
+}
+
+down() {
+  # 畳むのは人の操作。agent には D006（kill 系の禁）があるゆえ、
+  # この副命令は殿か人手で打つこと。
+  tmux kill-session -t "$SESSION" 2>/dev/null && echo "  $SESSION を畳んだ" || echo "  $SESSION は居らぬ"
+}
+
+status() {
+  echo "── セッション ──"
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux list-panes -s -t "$SESSION" -F '  #{window_name}.#{pane_index} #{pane_id} @agent_id=#{@agent_id} #{pane_current_command}'
+  else
+    echo "  居らぬ"
+  fi
+  echo "── 正本 ──"
+  if [ -f "$DB" ]; then
+    HONDEN_TMUX_SESSION="$SESSION" H_OUT roster 2>/dev/null | head -8
+  else
+    echo "  正本が無い"
+  fi
+}
+
+smoke() {
+  tmux has-session -t "$SESSION" 2>/dev/null || die "布陣が居らぬ。先に up されよ"
+  freshness
+  local stamp="smoke-$(date +%s)"
+  # ログは累積する。送る**前**の行数を覚え、それより後に現れた行だけを見る。
+  # 見ぬと、前回の smoke の跡で偽陽性になる。
+  local before_lines
+  before_lines=$(wc -l < "$RECV/karo.log" 2>/dev/null || echo 0)
+  echo "── 布陣の外から karo へ送る ──"
+  H_OUT inbox write --to karo --type report_received --from testenv_smoke \
+    --body "疎通試験 $stamp" | grep -E '→|合図' | sed 's/^/  /'
+
+  echo "── karo の受け手に inbox_notice が届くのを待つ（最大 20 秒） ──"
+  local waited=0
+  while [ $waited -lt 40 ]; do
+    if tail -n "+$((before_lines + 1))" "$RECV/karo.log" 2>/dev/null | grep -q 'inbox_notice'; then
+      echo "  ✓ 届いた（この smoke で新しく現れた行）:"
+      tail -n "+$((before_lines + 1))" "$RECV/karo.log" | grep 'inbox_notice' | tail -1 | sed 's/^/    /'
+      echo "── 正本側の未読 ──"
+      HONDEN_TMUX_SESSION="$SESSION" H_OUT inbox unread karo | sed 's/^/  /'
+      return 0
+    fi
+    sleep 0.5; waited=$((waited+1))
+  done
+  echo "  ✗ 20 秒待ったが届かぬ。芯の窓（$SESSION:core）と received/ を検められよ"
+  tail -3 "$RECV/karo.log" 2>/dev/null | sed 's/^/    karo.log: /'
+  return 1
+}
+
+case "${1:-}" in
+  up) up ;;
+  down) down ;;
+  status) status ;;
+  smoke) smoke ;;
+  *) echo "使い方: $0 up|down|status|smoke"; exit 2 ;;
+esac

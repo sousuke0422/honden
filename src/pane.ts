@@ -31,14 +31,30 @@ export interface Pane {
  * tmux が居なければ空を返す。**投げない**——布陣の外から
  * `honden inbox unread` を叩く筋があり、そこで倒れては使えない。
  */
-export function panes(): Map<string, Pane> {
+export function panes(session?: string): Map<string, Pane> {
   const out = new Map<string, Pane>();
+
+  // どのセッションを見るか。
+  //
+  // 既定は全セッション（-a）だが、**同名の agent が二つのセッションに居ると
+  // 危うい**。試験の布陣と本番の布陣の双方に karo が居る時、-a では後に
+  // 列挙された方が勝ち、**試験の合図が本番の pane へ飛びうる**。
+  //
+  // 試験環境は必ず HONDEN_TMUX_SESSION で自分のセッションに絞ること
+  // （scripts/testenv.sh が設定する）。env で渡すのは、これが「どの世界を
+  // 見るか」の指定であって名乗りではないゆえ——芯を起動した env が
+  // 手（nudge）へそのまま継がれ、芯と手が必ず同じ世界を見る。
+  const scope = session ?? process.env.HONDEN_TMUX_SESSION?.trim() ?? '';
+  const args =
+    scope !== ''
+      ? ['list-panes', '-s', '-t', scope]
+      : ['list-panes', '-a'];
+
   let p;
   try {
     p = Bun.spawnSync([
       'tmux',
-      'list-panes',
-      '-a',
+      ...args,
       '-F',
       '#{pane_id}\t#{session_name}:#{window_name}.#{pane_index}\t#{@agent_id}',
     ]);
