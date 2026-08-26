@@ -38,6 +38,9 @@ import { resolve } from 'node:path';
 export const KINDS = ['path', 'branch'] as const;
 export type Kind = (typeof KINDS)[number];
 
+export const SOURCES = ['declared', 'inferred'] as const;
+export type Source = (typeof SOURCES)[number];
+
 export interface Claim {
   id: number;
   kind: Kind;
@@ -46,6 +49,15 @@ export interface Claim {
   taskId: string | null;
   cmdId: string | null;
   at: string;
+  /**
+   * declared —— 振る時に明示された。**約束**ゆえ、重なれば断る
+   * inferred —— 案件の所在から補った。**見立て**ゆえ、断らずに知らせるだけ
+   *
+   * 見立てを約束と同じに扱ってはならない。誰も約束していない場所で
+   * 仕事を断ることになる。現行では一つの案件へ複数の足軽を振るのが常で、
+   * 案件の根を握らせて断れば、その常道が止まる。
+   */
+  source: Source;
 }
 
 /** path は絶対へ均す。相対のままだと同じ場所が別物に見える。 */
@@ -76,16 +88,23 @@ export function live(db: Database): Claim[] {
   return (
     db
       .query(
-        'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at FROM claim WHERE released_at IS NULL ORDER BY id',
+        'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at, source FROM claim WHERE released_at IS NULL ORDER BY id',
       )
       .all() as Claim[]
   );
 }
 
-/** その場所と重なる、生きた取り置き。 */
-export function conflicts(db: Database, kind: Kind, value: string, exclude?: string): Claim[] {
+/**
+ * その場所と重なる、生きた取り置き。
+ *
+ * `declaredOnly` を立てると、約束されたものだけを見る。
+ * 振る門はこちらを使う——見立てで仕事を断ってはならぬゆえ。
+ */
+export function conflicts(db: Database, kind: Kind, value: string, exclude?: string, declaredOnly = false): Claim[] {
   const want = { kind, value: normalize(kind, value) };
-  return live(db).filter((c) => c.agent !== exclude && overlaps(want, c));
+  return live(db).filter(
+    (c) => c.agent !== exclude && overlaps(want, c) && (!declaredOnly || c.source === 'declared'),
+  );
 }
 
 export interface ClaimResult {
@@ -120,7 +139,16 @@ export function explainConflict(kind: Kind, value: string, held: Claim[]): strin
  */
 export function take(
   db: Database,
-  opts: { kind: Kind; value: string; agent: string; taskId?: string; cmdId?: string; now?: Date },
+  opts: {
+    kind: Kind;
+    value: string;
+    agent: string;
+    taskId?: string;
+    cmdId?: string;
+    now?: Date;
+    /** 既定は declared。見立てなら 'inferred'。 */
+    source?: Source;
+  },
 ): ClaimResult {
   const now = opts.now ?? new Date();
   if (!(KINDS as readonly string[]).includes(opts.kind)) {
@@ -129,24 +157,33 @@ export function take(
   const value = normalize(opts.kind, opts.value);
   if (value === '') return { ok: false, message: '取り置く場所が空である。' };
 
+  const source: Source = opts.source ?? 'declared';
+
   // 同じ者が同じ所を取り直すのは通す。振り直しで倒れては困る。
-  const held = conflicts(db, opts.kind, value, opts.agent);
-  if (held.length > 0) {
-    return { ok: false, held, message: explainConflict(opts.kind, value, held) };
+  //
+  // 見立て (inferred) は断らない。誰も約束していない場所で仕事を止めることになる。
+  // 現行は一つの案件へ複数の足軽を振るのが常で、案件の根を握らせて断れば
+  // その常道が止まる。見立ては「そこに誰が居るか」を見えるようにするためだけに置く。
+  if (source === 'declared') {
+    const held = conflicts(db, opts.kind, value, opts.agent, true);
+    if (held.length > 0) {
+      return { ok: false, held, message: explainConflict(opts.kind, value, held) };
+    }
   }
 
-  db.prepare('INSERT INTO claim(kind, value, agent, task_id, cmd_id, at) VALUES (?,?,?,?,?,?)').run(
+  db.prepare('INSERT INTO claim(kind, value, agent, task_id, cmd_id, at, source) VALUES (?,?,?,?,?,?,?)').run(
     opts.kind,
     value,
     opts.agent,
     opts.taskId ?? null,
     opts.cmdId ?? null,
     now.toISOString(),
+    source,
   );
   const id = Number((db.query('SELECT last_insert_rowid() n').get() as { n: number }).n);
   journal(db, {
     actor: opts.agent,
-    action: 'claim.take',
+    action: source === 'inferred' ? 'claim.infer' : 'claim.take',
     target: value,
     detail: `kind=${opts.kind} task=${opts.taskId ?? 'なし'} cmd=${opts.cmdId ?? 'なし'}`,
   });
@@ -179,7 +216,9 @@ export function release(
 ): ClaimResult {
   const now = opts.now ?? new Date();
   const c = db
-    .query('SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at FROM claim WHERE id = ? AND released_at IS NULL')
+    .query(
+      'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at, source FROM claim WHERE id = ? AND released_at IS NULL',
+    )
     .get(opts.id) as Claim | null;
   if (!c) return { ok: false, message: `生きた取り置きが無い: #${opts.id}` };
 

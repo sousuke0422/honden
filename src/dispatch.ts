@@ -45,7 +45,8 @@
 
 import type { Database } from 'bun:sqlite';
 import { deliver, signal } from './inbox';
-import { take as takeClaim, type Kind } from './claim';
+import { take as takeClaim, type Kind, type Source } from './claim';
+import { workRootOf } from './projects';
 import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
@@ -267,12 +268,31 @@ export function assignTask(
   // 現行はこれを家老の記憶に頼っている (karo.md RACE-001)。
   // 足軽は他人の持ち場を読めぬので、振られた後に気づく手立てが無い。
   // 実際に worktree を重ねて merge commit を生んだ (2026-08-25)。
-  const wants: { kind: Kind; value: string }[] = [];
+  const wants: { kind: Kind; value: string; source: Source }[] = [];
   if (typeof input['workspace'] === 'string' && input['workspace'].trim() !== '') {
-    wants.push({ kind: 'path', value: input['workspace'] });
+    wants.push({ kind: 'path', value: input['workspace'], source: 'declared' });
   }
   if (typeof input['branch'] === 'string' && input['branch'].trim() !== '') {
-    wants.push({ kind: 'branch', value: input['branch'] });
+    wants.push({ kind: 'branch', value: input['branch'], source: 'declared' });
+  }
+
+  // 場所が書かれておらぬなら、案件の所在から補う。
+  //
+  // 補った値は**見立て**であって約束ではない。重なっても断らない——
+  // 誰も約束しておらぬ場所で仕事を止めることになるゆえ。
+  // 見えるようにするためだけに置く（honden claim / peek / history に出る）。
+  //
+  // 所在が無ければ補わない。「無いなら無いでよい」（殿下知 2026-08-26）。
+  let inferred: string | undefined;
+  if (!wants.some((w) => w.kind === 'path')) {
+    const proj = db.query('SELECT project FROM cmd WHERE id = ?').get(v.cmd_id) as { project: string | null } | null;
+    if (proj?.project) {
+      const root = workRootOf(db, proj.project);
+      if (root) {
+        wants.push({ kind: 'path', value: root.value, source: 'inferred' });
+        inferred = root.why;
+      }
+    }
   }
   const taskId = `subtask_${v.cmd_id.replace(/^cmd_/, '')}_${stamp}`;
   const minutes = v.minutes ? Number(v.minutes) : DEFAULT_LEASE_MINUTES;
@@ -319,7 +339,14 @@ export function assignTask(
           ? ` reason=${JSON.stringify(input['reason'])} 迂回時の家老=[${observeBypassed(db, ASSIGNER)}]`
           : ''),
     });
-      result = { ok: true, id: taskId };
+      result = {
+        ok: true,
+        id: taskId,
+        message: inferred
+          ? `場所が書かれておらぬゆえ、所在から補った（見立て）。\n  ${inferred}\n` +
+            '  見立ては重なっても断らぬ。確かに握らせるなら --workspace を書かれよ。'
+          : undefined,
+      };
     });
   } catch (e) {
     // 取り置きの割り込みは result に理由が入っておる。それ以外は投げ直す。

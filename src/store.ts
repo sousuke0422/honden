@@ -305,6 +305,24 @@ CREATE TABLE IF NOT EXISTS report_check (
   PRIMARY KEY (report_id, idx)
 );
 
+-- 案件の所在。現行 config/projects.yaml を写す。
+--
+-- 場所が書かれずに振られた時、ここから補う。無ければ補わない——
+-- 「無いなら無いでよい」（殿下知 2026-08-26）。
+--
+-- 罠がある。work_location: coder の案件は path (WSL) が参照専用で、
+-- 実体は Coder の中にある。素直に path を補うと、押せぬ場所を握らせる。
+-- 現行でも足軽が二度これで失敗しておる (cmd_266, cmd_273)。
+CREATE TABLE IF NOT EXISTS project (
+  id              TEXT PRIMARY KEY,
+  path            TEXT,
+  work_location   TEXT,     -- coder / null(=path が実体)
+  coder_workspace TEXT,
+  coder_workdir   TEXT,
+  status          TEXT,
+  raw             TEXT NOT NULL
+);
+
 -- 場所の取り置き。
 --
 -- 貸与 (task.holder) が答えるのは「その足軽が塞がっておるか」であって、
@@ -326,7 +344,10 @@ CREATE TABLE IF NOT EXISTS claim (
   task_id     TEXT,
   cmd_id      TEXT,
   at          TEXT NOT NULL,
-  released_at TEXT              -- null なら握っておる
+  released_at TEXT,             -- null なら握っておる
+  -- declared: 振る時に明示された。約束ゆえ、重なれば断る
+  -- inferred: 案件の所在から補った。ただの見立てゆえ、断らずに知らせるだけ
+  source      TEXT NOT NULL DEFAULT 'declared' CHECK (source IN ('declared','inferred'))
 );
 CREATE INDEX IF NOT EXISTS ix_claim_live ON claim(released_at, kind);
 
@@ -455,6 +476,7 @@ function migrate(db: Database): void {
   db.run(SCHEMA);
   // 既に走っている正本のための追い足し。新しい正本は SCHEMA 側で足りている。
   addColumn(db, 'report', 'cmd_id', 'TEXT');
+  addColumn(db, 'claim', 'source', "TEXT NOT NULL DEFAULT 'declared'");
 
   // 受け入れ条件の番号を 1 始まりへ揃える。
   // 初期は配列の添字をそのまま入れており「条件 0」という言い方になっていた。

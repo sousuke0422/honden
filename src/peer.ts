@@ -123,10 +123,10 @@ export function peek(
   const claims = (
     db
       .query(
-        'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at FROM claim WHERE agent = ? AND released_at IS NULL',
+        'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at, source FROM claim WHERE agent = ? AND released_at IS NULL',
       )
       .all(target) as Claim[]
-  ).map((c) => `      [${c.kind}] ${c.value}`);
+  ).map((c) => `      [${c.kind}] ${c.value}${c.source === 'inferred' ? ' （所在から補った見立て）' : ''}`);
 
   let title = '';
   try {
@@ -185,7 +185,7 @@ export function history(db: Database, kind: Kind, value: string): PeerResult {
 
   const all = db
     .query(
-      'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at, released_at releasedAt FROM claim WHERE kind = ? ORDER BY id',
+      'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at, source, released_at releasedAt FROM claim WHERE kind = ? ORDER BY id',
     )
     .all(kind) as (Claim & { releasedAt: string | null })[];
   const touched = all.filter((c) => overlaps(want, c));
@@ -200,7 +200,7 @@ export function history(db: Database, kind: Kind, value: string): PeerResult {
   } else {
     for (const c of touched) {
       const state = c.releasedAt ? `解いた ${c.releasedAt}` : '**いま握っておる**';
-      lines.push(`    #${c.id} ${c.agent}  ${c.at} 〜  ${state}`);
+      lines.push(`    #${c.id} ${c.agent}  ${c.at} 〜  ${state}${c.source === 'inferred' ? '  （見立て）' : ''}`);
       lines.push(`         ${c.value}  （${c.taskId ?? '仕事不明'} / ${c.cmdId ?? '司令不明'}）`);
     }
   }
@@ -243,7 +243,7 @@ export function overlapBetween(db: Database, a: string, b: string): { mine: Clai
   const q = (agent: string) =>
     db
       .query(
-        'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at FROM claim WHERE agent = ? AND released_at IS NULL',
+        'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at, source FROM claim WHERE agent = ? AND released_at IS NULL',
       )
       .all(agent) as Claim[];
   const mine = q(a);

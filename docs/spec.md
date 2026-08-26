@@ -210,6 +210,38 @@ honden claim check .worktrees/vrt-fix32     そこが空いておるか
 honden claim release <番号> [--force --reason "…"]
 ```
 
+### 場所を書かずに振った時
+
+案件の所在（現行 `config/projects.yaml`）から補う。
+
+```
+honden projects sync --file config/projects.yaml
+honden projects
+```
+
+補った値は**見立て**であって約束ではない。
+
+| | declared（明示） | inferred（見立て） |
+|---|---|---|
+| 重なった時 | 断る | 断らない |
+| 見え方 | `honden claim` / `peek` / `history` に出る | 同じ。「見立て」と付く |
+
+見立てを約束と同じに扱うと、**誰も約束していない場所で仕事を断る**ことになる。
+現行は一つの案件へ複数の足軽を振るのが常なので、案件の根を握らせて断れば
+その常道が止まる。見立ては「そこに誰が居るか」を見えるようにするためだけに置く。
+
+**`path` をそのまま補わない。** `work_location: coder` の案件は `path` (WSL) が
+参照専用で、実体は Coder の中にある。現行でも足軽が二度これで失敗している
+(cmd_266, cmd_273 — WSL で作業して push 403)。
+
+```
+multi-agent-shogun     →  /mnt/c/Users/aki/work/multi-agent-shogun
+teamblackcrystal-task  →  coder:yellow-louse-10:/home/coder/task
+task-local             →  （補わぬ: 休眠中）
+```
+
+所在が無ければ補わない。**無いなら無いでよい。**
+
 重なりは前置きまで見る。`.worktrees/x` を握る者が居れば `.worktrees/x/apps` も重なる。
 区切りの境目で切るので `.worktrees/xyz` は重ならない。
 

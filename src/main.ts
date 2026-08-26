@@ -19,6 +19,7 @@ import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './repor
 import { plan, send, record, forget, markSince } from './nudge';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
+import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
 import { roster as rosterOf, roleOf as roleOfId } from './roster';
@@ -211,7 +212,10 @@ export function runTaskAssign(
   const db = openStore({ path: dbPath });
   const r = assignTask(db, selfId, picked.value);
   if (!r.ok) return { code: EXIT_INVALID, err: r.message };
-  return { code: EXIT_OK, out: `  ${r.id} を振った。task_assigned を届けた。` };
+  return {
+    code: EXIT_OK,
+    out: `  ${r.id} を振った。task_assigned を届けた。` + (r.message ? `\n  ${r.message}` : ''),
+  };
 }
 
 /** `honden inbox read` — 未読を読む。 */
@@ -365,6 +369,8 @@ const USAGE = `honden — 多エージェント運用の差配層
   EOF
   honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
                      [--workspace .worktrees/x] [--branch feat/y]   重なれば振れぬ
+  honden projects sync --file <projects.yaml>          案件の所在を写す
+  honden projects                                      いまの所在と、働く場所
   honden claim                                         誰がどこを握っておるか
   honden claim check [path|branch] <場所>              そこが空いておるか
   honden claim release <番号> [--force --reason "…"]   手放す／譲らせる
@@ -694,6 +700,40 @@ export function runHistory(
   return { code: EXIT_OK, out: r.out };
 }
 
+/** `honden projects sync --file <projects.yaml>` — 案件の所在を写す。 */
+export function runProjectsSync(dbPath: string | undefined, file: string | undefined): RunResult {
+  if (!file) {
+    return { code: EXIT_INVALID, err: '--file に config/projects.yaml の在り処を渡されよ。' };
+  }
+  const db = openStore({ path: dbPath });
+  try {
+    const entries = readProjectsFromFile(file);
+    tx(db, () => syncProjects(db, entries));
+    const lines = entries.map((e) => {
+      const root = workRootOf(db, e.id);
+      return `  ${e.id}  →  ${root ? root.value : '（補わぬ: ' + (e.status === 'standby' ? '休眠中' : '所在が定まらぬ') + '）'}`;
+    });
+    return { code: EXIT_OK, out: `  ${entries.length} 件を写した。\n${lines.join('\n')}` };
+  } catch (e) {
+    if (e instanceof ProjectError) return { code: EXIT_INVALID, err: e.message };
+    throw e;
+  }
+}
+
+/** `honden projects` — いまの所在。 */
+export function runProjectsShow(dbPath: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  const list = projectList(db);
+  if (list.length === 0) {
+    return { code: EXIT_OK, out: '  所在は空である。honden projects sync --file <projects.yaml> で写されよ。' };
+  }
+  const lines = list.map((e) => {
+    const root = workRootOf(db, e.id);
+    return `  ${e.id}${e.status ? ` [${e.status}]` : ''}\n      働く場所: ${root ? root.value : '（補わぬ）'}`;
+  });
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -751,6 +791,15 @@ export async function main(argv: string[]): Promise<number> {
   if (rest[0] === 'cmd' && rest[1] === 'new') {
     const stdin = await readStdin();
     return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'projects') {
+    if (rest[1] === 'sync') {
+      const f = flags['file'];
+      delete flags['file'];
+      return emit(runProjectsSync(dbPath, f));
+    }
+    return emit(runProjectsShow(dbPath));
   }
 
   if (rest[0] === 'peek') {
