@@ -228,6 +228,14 @@ export function history(db: Database, kind: Kind, value: string): PeerResult {
 
 
 /**
+ * 同じ重なりを報せ直すまでの間。
+ *
+ * 短すぎると家老が同じ報せで埋まり、長すぎると塞がったまま忘れられる。
+ * 半日。人が一度は目を通す間隔に合わせてある。
+ */
+export const REPORT_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+
+/**
  * 二人の間に、生きた取り置きの重なりがあるか。
  *
  * ## 常は空である
@@ -265,14 +273,26 @@ export function reportCollision(
 ): boolean {
   const now = opts.now ?? new Date();
   const key = `${opts.from}|${opts.with}|${opts.key ?? '-'}`;
-  const dup = db
-    .query("SELECT id FROM ledger WHERE action = 'collision.report' AND detail LIKE ?")
-    .get(`key=${key}%`) as { id: number } | null;
-  if (dup) return false;
+
+  // 同じ重なりを繰り返し報せない。ただし**永久には黙らない**。
+  //
+  // 初めは台帳に 1 件でもあれば黙る造りだった。台帳は追記専用ゆえ消えず、
+  // 同じ (足軽, 相手, 場所) は**何日経っても二度と報されなかった**
+  // （外部レビューで再現・2026-08-26）。註は「相手が握り直せば at が変わるゆえ
+  // 改めて報せる」と言っておったが、鍵に時刻が入っておらなんだ。
+  //
+  // LIKE も使わない。key に必ず含まれる `_` が任意一文字に当たるため、
+  // 別の重なりを同じものとして黙らせる筋があった。
+  const last = db
+    .query("SELECT at FROM ledger WHERE action = 'collision.report' AND detail = ? ORDER BY id DESC LIMIT 1")
+    .get(`key=${key}`) as { at: string } | null;
+  if (last && now.getTime() - new Date(last.at).getTime() < REPORT_COOLDOWN_MS) return false;
 
   const at = now.toISOString();
   deliver(db, {
-    id: `msg_${Date.now().toString(36)}_col`,
+    // 時刻だけでは足りぬ。同じミリ秒に 2 件出ると主キーが衝突して
+    // 報せが丸ごと落ちる（dispatch で一度潰した型の残党）。
+    id: `msg_${Date.now().toString(36)}${Bun.hash(key + at).toString(36).slice(0, 4)}_col`,
     agent: ASSIGNER,
     at,
     type: 'report_received',

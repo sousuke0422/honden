@@ -319,7 +319,10 @@ describe('受け入れ条件の門', () => {
   });
 
   test('迂回できるのは将軍だけ・理由が要る・跡が残る', () => {
-    const { db, cmdId } = ready({ 1: 'cargo test → 195 passed / exit 0' });
+    const { db, cmdId, reportId } = ready({ 1: 'cargo test → 195 passed / exit 0' });
+    // 条件 1 は検めを通しておく。覆いは是と検められた報告からのみ数えるゆえ、
+    // 検めを通さぬと未達が 3 件になり、この試験が見たい「一部だけ未達」にならぬ。
+    submitQc(db, 'gunshi', { report_id: String(reportId), verdict: 'APPROVED', summary: '条件1は良い' });
 
     // 家老は迂回できない
     expect(cmdDone(db, 'karo', { cmd_id: cmdId, bypass: 'true', reason: '案件が取り止めになった' }).ok).toBe(false);

@@ -92,6 +92,17 @@ export function ingestTask(db: Database, path: string, doc: unknown, raw: string
   // pending.yaml のような持ち場でないものは入れない
   if (!/^(shogun|karo|gunshi|ashigaru[1-9])$/.test(agent)) return 0;
 
+  // honden が振った生きた持ち場は潰さない。
+  //
+  // 取り込みは繰り返し走る前提だが、task 表は agent を鍵に上書きする。
+  // honden で振った直後に shogun 側の YAML を取り込むと task_id が差し替わり、
+  // **足軽は自分の仕事の報告を出せなくなる**（外部レビューで再現・2026-08-26）。
+  //
+  // 「影は一方通行ゆえ安全」は doc 表には成り立つが、task・report・inbox は
+  // 影と実運用が同じ行を取り合う。生きた持ち主が居る行は、影の側が譲る。
+  const holder = db.query('SELECT holder FROM task WHERE agent = ?').get(agent) as { holder: string | null } | null;
+  if (holder?.holder) return 0;
+
   db.prepare(
     `INSERT INTO task(agent, task_id, status, cmd_id, updated_at, raw)
      VALUES (?,?,?,?,?,?)

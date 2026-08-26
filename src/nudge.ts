@@ -87,6 +87,15 @@ export interface Plan {
   /** 次にこの相手を見るまでの間 (ms)。 */
   nextInMs: number;
   /**
+   * 経ちから出した段。撃つ段 (`level`) とは別に持つ。
+   *
+   * 文脈消しが冷ましで塞がれると `level` は 2 へ落ちるが、
+   * **落ちた段を覚えると次の回に「段が上がった」と判ぜられ、
+   * 撃ち直しの間を素通りして連射になる**（外部レビューで再現・2026-08-26）。
+   * 覚えるのは「escalation のどこまで来たか」であって「何を撃ったか」ではない。
+   */
+  escalationLevel: Level;
+  /**
    * 様態ではなく一回きりの明示で撃つのか。
    *
    * 台帳へ別の名で残すために持つ。後から「なぜ殿の在席中に
@@ -172,12 +181,12 @@ export function plan(
       if (now.getTime() - last < RESET_COOLDOWN_MS) {
         // 文脈を消すのは重い。連発すると仕掛かりを繰り返し捨てる。
         // 消せぬ間は素の合図へ落とす。黙るのではない。
-        out.push(mark(build(entry.id, entry.cli, pane, s, 2, true, undefined, now, st)));
+        out.push(mark(build(entry.id, entry.cli, pane, s, 2, true, undefined, now, st, 3)));
         continue;
       }
     }
 
-    out.push(mark(build(entry.id, entry.cli, pane, s, level, send, reason, now, st)));
+    out.push(mark(build(entry.id, entry.cli, pane, s, level, send, reason, now, st, level)));
   }
 
   return out;
@@ -201,6 +210,7 @@ function build(
   reason: string | undefined,
   now: Date,
   st: State,
+  escalationLevel: Level,
 ): Plan {
   const text = level === 3 ? RESET_COMMAND[cli ?? ''] ?? '/clear' : nudgeText(s);
   const hardRecovery = level === 2 && NEEDS_HARD_RECOVERY.has(cli ?? '');
@@ -216,11 +226,11 @@ function build(
         : RESET_COOLDOWN_MS;
   const nextInMs = Math.max(1000, Math.min(toNextLevel, REPEAT_MS));
 
-  return { agent, pane, cli, unread: s.total, level, send, reason, text, hardRecovery, nextInMs };
+  return { agent, pane, cli, unread: s.total, level, escalationLevel, send, reason, text, hardRecovery, nextInMs };
 }
 
 /** 撃った跡を残す。 */
-export function record(db: Database, p: Plan, now: Date, reason?: string): void {
+export function record(db: Database, p: Plan, now: Date, reason?: string, by?: string): void {
   const at = now.toISOString();
   db.prepare(
     `INSERT INTO nudge(agent, since, last_at, last_level, last_reset_at)
@@ -230,10 +240,11 @@ export function record(db: Database, p: Plan, now: Date, reason?: string): void 
        last_at = excluded.last_at,
        last_level = excluded.last_level,
        last_reset_at = COALESCE(excluded.last_reset_at, nudge.last_reset_at)`,
-  ).run(p.agent, p.agent, at, at, p.level, p.level === 3 ? at : null);
+  ).run(p.agent, p.agent, at, at, p.escalationLevel, p.level === 3 ? at : null);
 
   journal(db, {
-    actor: 'nudge',
+    // 誰が起こしたかを残す。'nudge' 固定では、明示で起こした跡が辿れぬ。
+    actor: p.byExplicitWake ? (by ?? '名乗り無し') : 'nudge',
     action: p.byExplicitWake ? 'nudge.wake_shogun' : p.level === 3 ? 'nudge.reset' : `nudge.L${p.level}`,
     target: p.agent,
     detail:
@@ -288,4 +299,37 @@ export async function send(p: Plan): Promise<{ ok: boolean; err?: string }> {
   await Bun.sleep(300);
   if (!run(['send-keys', '-t', target, 'Enter'])) return { ok: false, err: 'Enter を送れぬ' };
   return { ok: true };
+}
+
+
+/**
+ * 未読が続いておる者の時計を進め、片付いた者の覚えを消す。
+ *
+ * **撃たぬ相手には時計を刻まない。** 在席の間は将軍へ撃たぬが、時計だけ
+ * 回しておくと、殿が席を外して様態を切り替えた最初の一発が段 3（文脈消し）に
+ * なる。夜間運用の開始と同時に将軍の文脈が焼ける（外部レビューで再現・2026-08-26）。
+ *
+ * 段が数えておるのは「撃ち始めてから返事が無い時間」であって、
+ * 「未読が置かれてからの時間」ではない。
+ */
+export function startClocks(
+  db: Database,
+  now: Date,
+  opts: { autonomous?: boolean; wakeShogun?: boolean } = {},
+): { live: string[]; quiet: string[] } {
+  const autonomous = opts.autonomous ?? isAutonomous(db, now);
+  const silent = autonomous || opts.wakeShogun ? new Set<string>() : new Set([ATTENDED_SILENT]);
+  const live: string[] = [];
+  const quiet: string[] = [];
+  for (const e of roster(db)) {
+    if (summarize(db, e.id).total > 0) {
+      if (!silent.has(e.id)) markSince(db, e.id, now);
+      live.push(e.id);
+    } else {
+      quiet.push(e.id);
+    }
+  }
+  // 片付いた者の覚えは消す。残すと次の未読がいきなり段 3 から始まる。
+  forget(db, quiet);
+  return { live, quiet };
 }

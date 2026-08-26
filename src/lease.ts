@@ -16,6 +16,7 @@
 import type { Database } from 'bun:sqlite';
 import { journal } from './store';
 import { checkReason } from './validate';
+import { roleOf } from './roster';
 
 /** 仕事の重さから期限を決める。宣言が無いときの既定。 */
 export const DEFAULT_LEASE_MINUTES = 30;
@@ -183,6 +184,18 @@ export function release(
     };
   }
   if (opts.force && cur.holder !== opts.holder) {
+    // 他人の持ち場を解くのは上役の裁定。足軽が互いに解き合うと、
+    // 「倒れておる」の判断が誰のものでもなくなる。
+    if (roleOf(opts.holder) !== 'commander') {
+      return {
+        ok: false,
+        state: leaseState(cur, now),
+        lease: cur,
+        message:
+          `${opts.agent} を握っておるのは ${cur.holder} である。足軽が他人の持ち場を解くことはできぬ。\n` +
+          '  家老へ回されよ。',
+      };
+    }
     const bad = checkReason(opts.reason, `${opts.agent} の pane が落ちて 1 時間`);
     if (bad) return { ok: false, state: leaseState(cur, now), lease: cur, message: bad };
     const st = leaseState(cur, now);

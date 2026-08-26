@@ -33,6 +33,7 @@
 import type { Database } from 'bun:sqlite';
 import { journal } from './store';
 import { checkReason } from './validate';
+import { roleOf } from './roster';
 import { resolve } from 'node:path';
 
 export const KINDS = ['path', 'branch'] as const;
@@ -223,6 +224,19 @@ export function release(
   if (!c) return { ok: false, message: `生きた取り置きが無い: #${opts.id}` };
 
   if (c.agent !== opts.by) {
+    // 譲らせるのは相手の仕掛かりを止めること。上役の裁定にする。
+    //
+    // 案内文は「家老が」と言うておったのに、実装はどの名乗りでも通っていた。
+    // 散文の禁止を構造へ移したと言いながら、移っておらなんだ。
+    if (roleOf(opts.by) !== 'commander') {
+      return {
+        ok: false,
+        held: [c],
+        message:
+          `${c.value} を握っておるのは ${c.agent} である。足軽が他人の取り置きを解くことはできぬ。\n` +
+          '  家老へ回されよ。譲らせるかどうかは裁定である。',
+      };
+    }
     if (!opts.force) {
       return {
         ok: false,

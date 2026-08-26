@@ -158,9 +158,10 @@ const ASSIGN_SCHEMA: Schema = {
   bloom: { about: 'L1 から L6。能力の足りぬ者へは振れぬ' },
   minutes: { about: '貸与の長さ（分）。既定 30' },
   bypass: { about: '家老を通さず将軍が直に振る。理由が要る' },
-  reason: { about: '迂回の理由。何が起きて迂回するのかを書く' },
+  reason: { about: '迂回・引き継ぎの理由。何が起きてそうするのかを書く' },
   workspace: { about: '触る場所（worktree など）。重なれば振れぬ' },
   branch: { about: '触る枝。重なれば振れぬ' },
+  takeover: { about: '期限切れの持ち場を引き継ぐ。理由が要る' },
 };
 
 /**
@@ -252,14 +253,19 @@ export function assignTask(
   const cur = db.query('SELECT holder, lease_until, task_id FROM task WHERE agent = ?').get(v.agent) as
     | { holder: string | null; lease_until: string | null; task_id: string | null }
     | null;
-  if (cur && leaseState({ holder: cur.holder, leaseUntil: cur.lease_until }, new Date()) === 'held') {
-    return {
-      ok: false,
-      message:
-        `${v.agent} は既に仕事を握っておる（${cur.task_id ?? '不明'}、${cur.lease_until} まで）。\n` +
-        '  終わるのを待つか、手放させるか、別の者へ振られよ。\n' +
-        '  honden route <難度> --role worker で空いておる者が分かる。書き込みは行っておらぬ。',
-    };
+  // 持ち場の様子は取引の中で見る（下）。ここでは見ない。
+  //
+  // 見てから取るまでの隙に別の割当が入る筋を残さぬため、門は一本にする。
+  // 二本置くと、外を外しても中が拾ってしまい、**どちらが門なのか
+  // 試験で見分けられなくなる**（実際に一度そうなった）。
+  const wantsTakeover = input['takeover'] === 'true' || input['takeover'] === true;
+  if (wantsTakeover) {
+    const bad = checkReason(
+      typeof input['reason'] === 'string' ? input['reason'] : undefined,
+      `${v.agent} の pane が落ちて 1 時間`,
+      '引き継ぎ',
+    );
+    if (bad) return { ok: false, message: `${bad}\n  書き込みは行っておらぬ。` };
   }
 
   // 時刻だけでは足りない。同じミリ秒に 2 件振ると同じ番号になり、
@@ -297,10 +303,59 @@ export function assignTask(
     }
   }
   const taskId = `subtask_${v.cmd_id.replace(/^cmd_/, '')}_${stamp}`;
-  const minutes = v.minutes ? Number(v.minutes) : DEFAULT_LEASE_MINUTES;
+  // 数でない値を渡すと new Date(NaN).toISOString() が投げる。
+  // 追い返す所で追い返す——投げると、何が悪かったのか撃った側に分からぬ。
+  const minutes = v.minutes === undefined ? DEFAULT_LEASE_MINUTES : Number(v.minutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return {
+      ok: false,
+      message: `貸与の長さは正の数（分）で書かれよ。受け取った値: ${JSON.stringify(v.minutes)}`,
+    };
+  }
   let result: DispatchResult = { ok: false };
   try {
     tx(db, () => {
+      // 持ち場の様子は取引の中で見直す。
+      //
+      // 上の検めは、断る時に手厚い文を出すためのもの。**門はここである。**
+      // 外だけで見ると、見てから取るまでの隙に別の割当が入る。
+      //
+      // acquire は「持ち主が違う時」しか断らぬが、ここでは持ち主も振り先も
+      // 同じ足軽ゆえ、acquire だけでは門にならない（force: true を渡しておった
+      // のはそのためで、結果として取引の中の門が到達不能になっていた）。
+      const at = db.query('SELECT task_id, holder, lease_until FROM task WHERE agent = ?').get(v.agent) as
+        | { task_id: string | null; holder: string | null; lease_until: string | null }
+        | null;
+      const st = at ? leaseState({ holder: at.holder, leaseUntil: at.lease_until }, new Date()) : 'free';
+      if (st === 'held') {
+        result = {
+          ok: false,
+          message:
+            `${v.agent} は既に仕事を握っておる（${at?.task_id ?? '不明'}、${at?.lease_until} まで）。\n` +
+            '  終わるのを待つか、手放させるか、別の者へ振られよ。\n' +
+            '  honden route <難度> --role worker で空いておる者が分かる。書き込みは行っておらぬ。',
+        };
+        throw new Error('claim-conflict');
+      }
+      if (st === 'expired' && !wantsTakeover) {
+        // 期限切れが言うておるのは「貸与が延ばされなかった」ことだけで、
+        // 「その足軽が働くのをやめた」ことではない。黙って上書きすると、
+        // 働いておる最中の task_id が差し替わり、旧い仕事の報告が
+        // 永久に出せなくなる（外部レビューで再現・2026-08-26）。
+        result = {
+          ok: false,
+          message:
+            `${v.agent} の貸与は期限切れである（${at?.task_id ?? '不明'}、${at?.lease_until} まで）。\n` +
+            '  期限切れは「貸与が延ばされなかった」だけで、働くのをやめた証ではない。\n' +
+            '  いま上書きすると、旧い仕事の報告が永久に出せなくなる。\n\n' +
+            `  一、様子を確かめる: honden peek ${v.agent} --reason "…"\n` +
+            '  二、まだ働いておるなら延ばさせる: honden lease renew（当人が）\n' +
+            '  三、本当に倒れておるなら引き継ぐ: --takeover --reason "…"（跡は台帳に残る）\n\n' +
+            '  書き込みは行っておらぬ。',
+        };
+        throw new Error('claim-conflict');
+      }
+
       const got = acquire(db, { agent: v.agent, taskId, holder: v.agent, minutes, force: true });
       if (!got.ok) {
         result = { ok: false, message: got.message };
@@ -342,12 +397,15 @@ export function assignTask(
     }
     journal(db, {
       actor,
-      action: wantsBypass ? 'task.assign.bypass' : 'task.assign',
+      action: wantsBypass ? 'task.assign.bypass' : wantsTakeover ? 'task.assign.takeover' : 'task.assign',
       target: v.agent,
       detail:
         `${taskId} cmd=${v.cmd_id}${v.bloom ? ` bloom=${v.bloom}` : ''}` +
         (wantsBypass
           ? ` reason=${JSON.stringify(input['reason'])} 迂回時の家老=[${observeBypassed(db, ASSIGNER)}]`
+          : '') +
+        (wantsTakeover
+          ? ` reason=${JSON.stringify(input['reason'])} 引き継いだ仕事=${cur?.task_id ?? '不明'} 期限=${cur?.lease_until ?? 'なし'}`
           : ''),
     });
       result = {

@@ -42,6 +42,7 @@ import { validate, explain, checkReason, type Schema } from './validate';
 import { roster, roleOf } from './roster';
 import { deliver, signal } from './inbox';
 import { releaseAllOf } from './claim';
+import { release as releaseLease } from './lease';
 
 /** 足軽の報せ先。現行 F001 と同じ。 */
 export const WORKER_REPORTS_TO = 'gunshi';
@@ -282,6 +283,12 @@ export function submitReport(
     // 納めたら場所を手放す。解かぬと、その worktree が永久に握られたままになり、
     // 次の仕事が振れなくなる。blocked は握ったまま——まだ仕掛かっておるゆえ。
     const freed = v.status === 'blocked' ? 0 : releaseAllOf(db, selfId, new Date(at));
+    // 場所だけでなく持ち場そのものも手放す。
+    //
+    // 解かぬと、納めた足軽が残りの期限まで「既に仕事を握っておる」で
+    // 次の割当を拒まれる。家老は holder ではないゆえ --force でしか解けず、
+    // 納めるたびに強制解除が要ることになる。
+    if (v.status !== 'blocked') releaseLease(db, { agent: selfId, holder: selfId, now: new Date(at) });
     journal(db, {
       actor: selfId,
       action: `report.submit.${v.status}`,
@@ -297,15 +304,18 @@ export function submitReport(
   const covered = [...norm.map.keys()].sort((a, b) => a - b);
   // 残りは司令ぜんたいで数える。自分の分だけを引くと、他の足軽が既に
   // 覆った条件まで「残り」に出て、二度手間を招く。
+  // 「残り」は証拠が出ておるかで数える。検めを待っておるだけの条件を
+  // 「まだ誰も手を付けておらぬ」と出すと、次の者が同じ仕事をやり直す。
   const cov = cmdId ? coverageOf(db, cmdId) : null;
-  const rest = cov ? cov.uncovered : criteria.filter((c) => !norm.map.has(c.idx));
+  const rest = cov ? criteria.filter((c) => !cov.claimed.has(c.idx)) : criteria.filter((c) => !norm.map.has(c.idx));
   return {
     ok: true,
     id,
     out: [
       `  ${v.task_id} を ${v.status} として納めた（報告 #${id}）`,
       `  そなたが覆った条件: ${covered.length > 0 ? covered.join(', ') : 'なし'}`,
-      `  ${cmdId ?? '司令'} ぜんたい: ${cov ? cov.covered.size : covered.length} / ${criteria.length} 件`,
+      `  ${cmdId ?? '司令'} ぜんたい: 証拠 ${cov ? cov.claimed.size : covered.length} / ${criteria.length} 件` +
+        (cov ? `（うち検め済 ${cov.covered.size} 件）` : ''),
       rest.length > 0
         ? `  まだ誰も覆っておらぬ: ${rest.map((c) => `${c.idx}. ${c.text}`).join(' / ')}`
         : '  全条件が覆われた。',
@@ -322,6 +332,85 @@ const QC_SCHEMA: Schema = {
   summary: { required: true, about: '何をどう検めたか' },
   checks: { structured: true, about: '個々の検査。name と result(PASS/FAIL/WARNING)' },
 };
+
+export interface Check {
+  name: string;
+  result: string;
+  note?: string;
+}
+
+export const CHECK_RESULTS = ['PASS', 'FAIL', 'WARNING'] as const;
+
+/**
+ * 検査の並びを解く。
+ *
+ * ## 知らぬ形は黙って素通ししない
+ *
+ * 初めは `Array.isArray` の中でしか検めていなかった。**対応で書くと、
+ * 検査も保存も丸ごと素通りした**——`checks: {lint: FAIL}` と書けば
+ * FAIL 2 件を抱えた APPROVED が通り、`report_check` は 0 行になる。
+ * FAIL の跡が raw 以外に残らない。
+ *
+ * schema は `structured: true` ゆえ validate も弾かない。
+ * 「集めるだけで判定に結ばぬ」を戒めた註のすぐ隣で、
+ * **その門が形の一つにしか置かれていなかった。**
+ *
+ * 二つの形を受ける。どちらでもない形は**断る**。
+ *
+ *   checks:
+ *     - name: 試験の独立再現
+ *       result: PASS
+ *
+ *   checks:
+ *     試験の独立再現: PASS
+ */
+export function parseChecks(
+  input: unknown,
+): { ok: true; checks: Check[] } | { ok: false; message: string } {
+  const checks: Check[] = [];
+  if (input === undefined || input === null) return { ok: true, checks };
+
+  const one = (name: string, result: unknown, note?: unknown): string | null => {
+    if (name.trim() === '') return 'checks の name が空である。';
+    const r = typeof result === 'string' ? result.toUpperCase() : '';
+    if (!(CHECK_RESULTS as readonly string[]).includes(r)) {
+      return `checks の result は ${CHECK_RESULTS.join(' / ')}。受け取った値: ${JSON.stringify(result)}`;
+    }
+    checks.push({ name, result: r, note: typeof note === 'string' ? note : undefined });
+    return null;
+  };
+
+  if (Array.isArray(input)) {
+    for (const c of input) {
+      if (c === null || typeof c !== 'object' || Array.isArray(c)) {
+        return { ok: false, message: 'checks の各項は name と result を持つ対応で書かれよ。' };
+      }
+      const o = c as Record<string, unknown>;
+      const bad = one(typeof o['name'] === 'string' ? o['name'] : '', o['result'], o['note']);
+      if (bad) return { ok: false, message: bad };
+    }
+    return { ok: true, checks };
+  }
+
+  if (typeof input === 'object') {
+    for (const [name, v] of Object.entries(input as Record<string, unknown>)) {
+      // 「名: 結果」の形と、「名: {result, note}」の形の両方を受ける
+      const isObj = v !== null && typeof v === 'object' && !Array.isArray(v);
+      const o = isObj ? (v as Record<string, unknown>) : null;
+      const bad = one(name, o ? o['result'] : v, o ? o['note'] : undefined);
+      if (bad) return { ok: false, message: bad };
+    }
+    return { ok: true, checks };
+  }
+
+  return {
+    ok: false,
+    message:
+      `checks の形が分からぬ: ${JSON.stringify(input).slice(0, 80)}\n` +
+      '  一覧で書くか、「名: 結果」の対応で書かれよ。\n' +
+      '  分からぬ形を黙って素通しすると、FAIL を抱えたまま APPROVED が通る。',
+  };
+}
 
 /** 軍師が検める。結果は家老へ行く。 */
 export function submitQc(
@@ -358,6 +447,23 @@ export function submitQc(
     return { ok: false, message: `#${rid} は報告ではなく検めの記録である。検めを検めることはできぬ。` };
   }
 
+  // 自分の仕事を自分で是としてはならぬ。
+  //
+  // 「足軽は自分の仕事を自分で是とできぬ」と書いた門は、名乗りしか
+  // 見ておらず、**足軽にしか成立していなかった**。軍師には仕事を振れる
+  // (src/dispatch.ts) ので、軍師が自分で報告を出し、自分で APPROVED できた。
+  // 検めの意味が消える所は、誰であっても同じである。
+  if (target.agent === QC_AUTHOR) {
+    return {
+      ok: false,
+      message:
+        `${QC_AUTHOR} が自分の仕事を自分で検めることはできぬ（${target.task_id}）。\n` +
+        '  検めの意味が消えるゆえ。足軽に課しておる門と同じである。\n' +
+        '  家老へ回して別の者に検めさせるか、外の目を入れられよ。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
+
   // 既に検めてあるものを二度検めない。二つの判定が残ると、門がどちらを見るか決まらない。
   const dup = db
     .query("SELECT id FROM report WHERE agent = ? AND task_id = ? AND verdict IS NOT NULL")
@@ -371,25 +477,9 @@ export function submitQc(
     };
   }
 
-  const checks: { name: string; result: string; note?: string }[] = [];
-  if (Array.isArray(input['checks'])) {
-    for (const c of input['checks'] as unknown[]) {
-      if (c === null || typeof c !== 'object') {
-        return { ok: false, message: 'checks の各項は name と result を持つ対応で書かれよ。' };
-      }
-      const o = c as Record<string, unknown>;
-      const name = typeof o['name'] === 'string' ? o['name'] : '';
-      const result = typeof o['result'] === 'string' ? o['result'].toUpperCase() : '';
-      if (name === '') return { ok: false, message: 'checks の name が空である。' };
-      if (!['PASS', 'FAIL', 'WARNING'].includes(result)) {
-        return {
-          ok: false,
-          message: `checks の result は PASS / FAIL / WARNING。受け取った値: ${JSON.stringify(o['result'])}`,
-        };
-      }
-      checks.push({ name, result, note: typeof o['note'] === 'string' ? o['note'] : undefined });
-    }
-  }
+  const parsed = parseChecks(input['checks']);
+  if (!parsed.ok) return { ok: false, message: `${parsed.message}\n  書き込みは行っておらぬ。` };
+  const checks = parsed.checks;
 
   // FAIL を抱えたまま APPROVED は通さない。
   // 集めただけで判定に使わぬのは、検めていないのと変わらない。
@@ -455,9 +545,37 @@ export interface Coverage {
   passing: { id: number; taskId: string | null; verdict: string }[];
   /** 検めを待っている報告。 */
   unreviewed: { id: number; agent: string; taskId: string | null }[];
+  /** 証拠は出したが、その報告が却下されておる条件。 */
+  rejected: { idx: number; agent: string; verdict: string }[];
+  /**
+   * 証拠が出ておる条件（検めの結果を問わない）。
+   *
+   * `covered` とは別の問いに答える。門は `covered`（是と検められたか）を見るが、
+   * 納めた足軽へ「あと何が残っておるか」を見せる時はこちら——
+   * 検めを待っておるだけの条件を「まだ誰も手を付けておらぬ」と出すと、
+   * 次の者が同じ仕事をやり直す。
+   */
+  claimed: Set<number>;
 }
 
-/** 司令が受け入れ条件をどこまで覆っているか。 */
+/**
+ * 司令が受け入れ条件をどこまで覆っているか。
+ *
+ * ## 覆いは「是と検められた報告」からのみ数える
+ *
+ * 初めは done の報告すべてから数えていた。**却下された報告の証拠が
+ * 覆いに残り続けた。** 軍師が REJECTED と判じても、元の報告の verdict は
+ * NULL のまま（検めは別の行として入る）ゆえ、条件に外れなかった。
+ *
+ * 実際に通ってしまった (2026-08-26 の外部レビューで再現):
+ * 足軽1号が全条件を覆って done → 軍師 REJECTED → 足軽2号が些末な仕事で
+ * 条件1だけ覆って APPROVED → **cmd done が通った**。
+ *
+ * 仕様は「全条件が証拠つきで覆われ、かつ軍師が是」だが、実装は
+ * 「（却下済みを含む）誰かが証拠を並べ、かつどこかに是が 1 件」に弱まっていた。
+ *
+ * ゆえに、その証拠を出した報告そのものが是と検められていることを要る。
+ */
 export function coverageOf(db: Database, cmdId: string): Coverage {
   const criteria = criteriaOf(db, cmdId);
   const rows = db
@@ -466,12 +584,42 @@ export function coverageOf(db: Database, cmdId: string): Coverage {
          FROM report_acceptance ra JOIN report r ON r.id = ra.report_id
         WHERE r.cmd_id = ? AND r.verdict IS NULL
           AND json_extract(r.raw, '$.status') = 'done'
+          AND EXISTS (
+            SELECT 1 FROM report q
+             WHERE q.cmd_id = r.cmd_id AND q.task_id = r.task_id
+               AND q.verdict IN (${PASSING_VERDICTS.map(() => '?').join(',')})
+          )
         ORDER BY r.id`,
     )
-    .all(cmdId) as { idx: number; evidence: string; rid: number; agent: string }[];
+    .all(cmdId, ...PASSING_VERDICTS) as { idx: number; evidence: string; rid: number; agent: string }[];
 
   const covered = new Map<number, { reportId: number; agent: string; evidence: string }>();
   for (const r of rows) covered.set(r.idx, { reportId: r.rid, agent: r.agent, evidence: r.evidence });
+
+  const claimed = new Set(
+    (
+      db
+        .query(
+          `SELECT DISTINCT ra.idx idx FROM report_acceptance ra JOIN report r ON r.id = ra.report_id
+            WHERE r.cmd_id = ? AND r.verdict IS NULL AND json_extract(r.raw, '$.status') = 'done'`,
+        )
+        .all(cmdId) as { idx: number }[]
+    ).map((r) => r.idx),
+  );
+
+  // 却下された報告が出した証拠。覆いには数えぬが、家老へ見せる——
+  // 「証拠は在るのに覆われておらぬ」理由が分からねば、次の手が打てぬ。
+  const rejected = db
+    .query(
+      `SELECT DISTINCT ra.idx idx, r.agent agent, q.verdict verdict
+         FROM report_acceptance ra
+         JOIN report r ON r.id = ra.report_id
+         JOIN report q ON q.cmd_id = r.cmd_id AND q.task_id = r.task_id AND q.verdict IS NOT NULL
+        WHERE r.cmd_id = ? AND r.verdict IS NULL
+          AND q.verdict NOT IN (${PASSING_VERDICTS.map(() => '?').join(',')})
+        ORDER BY ra.idx`,
+    )
+    .all(cmdId, ...PASSING_VERDICTS) as { idx: number; agent: string; verdict: string }[];
 
   const passing = db
     .query(
@@ -498,6 +646,8 @@ export function coverageOf(db: Database, cmdId: string): Coverage {
     uncovered: criteria.filter((c) => !covered.has(c.idx)),
     passing,
     unreviewed,
+    rejected: rejected.filter((r) => !covered.has(r.idx)),
+    claimed,
   };
 }
 
@@ -540,9 +690,17 @@ export function cmdDone(
   const cov = coverageOf(db, cmdId);
   const blockers: string[] = [];
   if (cov.uncovered.length > 0) {
+    const why = new Map(cov.rejected.map((r) => [r.idx, r]));
     blockers.push(
       `覆われておらぬ条件が ${cov.uncovered.length} 件ある:\n` +
-        cov.uncovered.map((c) => `    ${c.idx}. ${c.text}`).join('\n'),
+        cov.uncovered
+          .map((c) => {
+            const r = why.get(c.idx);
+            return r
+              ? `    ${c.idx}. ${c.text}\n         ${r.agent} が証拠を出したが ${r.verdict} である。数えられぬ`
+              : `    ${c.idx}. ${c.text}`;
+          })
+          .join('\n'),
     );
   }
   if (cov.passing.length === 0) {

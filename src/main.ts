@@ -16,7 +16,7 @@ import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
-import { plan, send, record, forget, markSince } from './nudge';
+import { plan, send, record, startClocks } from './nudge';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
 import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
@@ -25,7 +25,7 @@ import { normsRoot, setSetting } from './settings';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
 import { roster as rosterOf, roleOf as roleOfId } from './roster';
-import { leaseState, expired, release } from './lease';
+import { leaseState, expired, release, renew, DEFAULT_LEASE_MINUTES } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
 import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
@@ -403,6 +403,7 @@ const USAGE = `honden — 多エージェント運用の差配層
         note: 隔離 worktree で同数
   EOF
   honden lease                                         持ち場と貸与の様子
+  honden lease renew [--minutes N]                      働いておる当人が期限を延ばす
   honden lease release <agent> [--force --reason "…"]  手放す
   honden route <1-6> [--role worker] [--providers ...] 誰に振れるかを挙げる
   honden search <語> [--limit N]                       取り込んだものを引く
@@ -524,25 +525,29 @@ export async function runNudge(
   dryRun: boolean,
   wakeShogun: boolean,
   reason: string | undefined,
+  selfId?: string,
 ): Promise<RunResult> {
   const db = openStore({ path: dbPath });
+
+  // 一回きりの明示は、上役の判断にする。
+  //
+  // 門が無く、誰でも将軍を起こせた。しかも台帳の actor は 'nudge' 固定で
+  // **誰が起こしたか跡が残らなかった**。様態の切替は将軍に絞ったのに、
+  // 同じ効果を持つ一回きりの方が素通しでは、絞った意味が無い。
+  if (wakeShogun && (!selfId || roleOfId(selfId) !== 'commander')) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        `将軍を起こすのは上役の判断である（そなたは ${selfId ?? '名乗り無し'}）。\n` +
+        '  殿の入力を割り込みで潰すゆえ。家老へ回されよ。',
+    };
+  }
   const now = new Date();
 
   // 未読が 0 から増えた者に、続き始めを刻む。
   // 刻む前に段を数えると、初回がいきなり段 1 の「経ち 0」でなく
   // 前回の残りから始まってしまう。
-  const live: string[] = [];
-  const quiet: string[] = [];
-  for (const e of rosterOf(db)) {
-    if (summarizeInbox(db, e.id).total > 0) {
-      markSince(db, e.id, now);
-      live.push(e.id);
-    } else {
-      quiet.push(e.id);
-    }
-  }
-  // 片付いた者の覚えは消す。残すと、次の未読がいきなり段 3 から始まる。
-  forget(db, quiet);
+  startClocks(db, now, { wakeShogun });
 
   const plans = plan(db, now, { wakeShogun });
   const lines: string[] = [];
@@ -568,7 +573,7 @@ export async function runNudge(
     }
     const r = await send(p);
     if (r.ok) {
-      record(db, p, now, reason);
+      record(db, p, now, reason, selfId);
       lines.push(`${head} → 撃った: ${JSON.stringify(p.text)}${why}`);
     } else {
       lines.push(`${head} → 撃てぬ: ${r.err}`);
@@ -787,6 +792,29 @@ export function runNormsRoot(dbPath: string | undefined, selfId: string | undefi
   return { code: EXIT_OK, out: `  棚の在り処を ${path} にした。` };
 }
 
+/**
+ * `honden lease renew` — 働いておる当人が期限を延ばす。
+ *
+ * 仕事が長引いた時、これを打たねば期限が切れる。切れても持ち場は解かれぬが、
+ * 家老が引き継ぎを検討する材料になる。**当人しか延ばせぬ**——
+ * 他人が延ばせると「まだ働いておる」の証にならぬ。
+ */
+export function runLeaseRenew(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  minutes: string | undefined,
+): RunResult {
+  if (!selfId) return { code: EXIT_INVALID, err: '誰であるか確かめられぬ。HONDEN_AGENT_ID を置かれよ。' };
+  const m = minutes === undefined ? DEFAULT_LEASE_MINUTES : Number(minutes);
+  if (!Number.isFinite(m) || m <= 0) {
+    return { code: EXIT_INVALID, err: `延ばす長さは正の数（分）で書かれよ: ${JSON.stringify(minutes)}` };
+  }
+  const db = openStore({ path: dbPath });
+  const r = renew(db, { agent: selfId, holder: selfId, minutes: m });
+  if (!r.ok) return { code: EXIT_INVALID, err: r.message };
+  return { code: EXIT_OK, out: `  ${selfId} の貸与を ${r.lease?.leaseUntil} まで延ばした。` };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -879,6 +907,11 @@ export async function main(argv: string[]): Promise<number> {
       const hasKind = rest[2] === 'path' || rest[2] === 'branch';
       return emit(runClaimCheck(dbPath, hasKind ? rest[2] : 'path', hasKind ? rest[3] : rest[2], selfId()));
     }
+    if (rest[1] === 'renew') {
+      const m = flags['minutes'];
+      delete flags['minutes'];
+      return emit(runLeaseRenew(dbPath, selfId(), m));
+    }
     if (rest[1] === 'release') {
       const force = flags['force'] === 'true';
       const reason = flags['reason'];
@@ -901,7 +934,7 @@ export async function main(argv: string[]): Promise<number> {
     const reason = flags['reason'];
     delete flags['wake-shogun'];
     delete flags['reason'];
-    return emit(await runNudge(dbPath, dryRun, wakeShogun, reason));
+    return emit(await runNudge(dbPath, dryRun, wakeShogun, reason, selfId()));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'done') {
