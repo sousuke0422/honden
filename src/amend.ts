@@ -27,6 +27,14 @@
  *
  * 条件に「最後に変わった時刻」を持たせ、覆いを数える側で見る (src/report.ts)。
  *
+ * ## 丸ごとでも、差分でも受ける
+ *
+ * 丸ごと置き換えは**何が在ったかについて何も主張しない**。長い本文を貼り直す時、
+ * 気づかぬうちに一段落落としても誰も止めない。
+ *
+ * 差分は「いま何が書いてあるか」の主張である。当てれば主張ごと検められる。
+ * 文脈が合わねば当たらない——思っていた中身と違う、と分かる (src/patch.ts)。
+ *
  * ## 閉じた司令は書き換えない
  *
  * 閉じた後に条件を書き換えても、誰にも届かない。開け直すのが筋である。
@@ -37,6 +45,7 @@ import { tx, journal } from './store';
 import { checkReason } from './validate';
 import { deliver, signal } from './inbox';
 import { CMD_AUTHOR, ASSIGNER } from './dispatch';
+import { parseUnified, applyHunks } from './patch';
 
 export interface AmendResult {
   ok: boolean;
@@ -104,7 +113,7 @@ export function amendCmd(
 
   const changes: { field: string; before: string; after: string }[] = [];
   const unknown = Object.keys(input).filter(
-    (k) => k !== 'cmd_id' && k !== 'reason' && !(AMENDABLE as readonly string[]).includes(k),
+    (k) => k !== 'cmd_id' && k !== 'reason' && k !== 'diff' && !(AMENDABLE as readonly string[]).includes(k),
   );
   if (unknown.length > 0) {
     return {
@@ -116,9 +125,56 @@ export function amendCmd(
     };
   }
 
+  // 差分で渡された分を、丸ごとの値へ均す。
+  //
+  // ここで文字列へ落としておけば、以降は丸ごと渡された時と同じ道を通る。
+  // 差分の道と丸ごとの道を別に持つと、片方だけ直る筋ができる。
+  const fromDiff: Record<string, string> = {};
+  if (input['diff'] !== undefined) {
+    if (typeof input['diff'] !== 'string') {
+      return { ok: false, message: 'diff は文字列で渡されよ。YAML なら diff: | の形。' };
+    }
+    const parsed = parseUnified(input['diff']);
+    if (!parsed.ok) return { ok: false, message: `${parsed.message}\n  何も変えておらぬ。` };
+
+    for (const fp of parsed.patches) {
+      if (fp.field === 'acceptance_criteria') {
+        const rows = db
+          .query('SELECT idx, text FROM cmd_acceptance WHERE cmd_id = ? ORDER BY idx')
+          .all(cmdId) as { idx: number; text: string }[];
+        if (rows.some((r) => r.text.includes('\n'))) {
+          return { ok: false, message: '受け入れ条件に改行を含むものがあり、行の差分では扱えぬ。一覧で渡されよ。' };
+        }
+        const got = applyHunks(rows.map((r) => r.text).join('\n'), fp.hunks, fp.field);
+        if (!got.ok) return { ok: false, message: got.message };
+        const list = got.text.split('\n').filter((l) => l.trim() !== '');
+        if (list.length === 0) return { ok: false, message: '受け入れ条件が空になる差分は当てられぬ。' };
+        if (input['acceptance_criteria'] !== undefined) {
+          return { ok: false, message: 'acceptance_criteria を丸ごとと差分の両方で渡しておる。片方にされよ。' };
+        }
+        input['acceptance_criteria'] = list;
+        continue;
+      }
+      if (!(fp.field in COLUMN)) {
+        return {
+          ok: false,
+          message:
+            `差分の宛先が分からぬ: ${fp.field}\n` +
+            `  +++ b/<欄> の欄は ${[...Object.keys(COLUMN), 'acceptance_criteria'].join(' / ')} のいずれか。`,
+        };
+      }
+      if (input[fp.field] !== undefined) {
+        return { ok: false, message: `${fp.field} を丸ごとと差分の両方で渡しておる。片方にされよ。` };
+      }
+      const got = applyHunks(String(cmd[COLUMN[fp.field]!] ?? ''), fp.hunks, fp.field);
+      if (!got.ok) return { ok: false, message: got.message };
+      fromDiff[fp.field] = got.text;
+    }
+  }
+
   // 素の欄
   for (const f of Object.keys(COLUMN)) {
-    const v = input[f];
+    const v = f in fromDiff ? fromDiff[f] : input[f];
     if (v === undefined) continue;
     const before = String(cmd[COLUMN[f]!] ?? '');
     const after = String(v);

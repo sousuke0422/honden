@@ -389,8 +389,19 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden cmd amend <<'EOF'                             途中で書き換える（知らせが同時に飛ぶ）
     cmd_id: cmd_713
     reason: skills が whitelist gitignore であることを見落としておった
-    acceptance_criteria:
+    acceptance_criteria:                               丸ごと置き換え
       - …
+  EOF
+  honden cmd amend <<'EOF'                             差分でも受ける
+    cmd_id: cmd_713
+    reason: …
+    diff: |                                            文脈が合わねば当たらぬ
+      --- a/command
+      +++ b/command
+      @@ -3,2 +3,3 @@
+       前の行
+      +足す行
+       後の行
   EOF
   honden cmd show <cmd_id>                             受け入れ条件と覆い具合
   honden cmd done <cmd_id> [--bypass --reason "…"]     司令を閉じる（家老だけ・門あり）
