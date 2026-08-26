@@ -18,10 +18,10 @@ import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, forget, markSince } from './nudge';
 import { getMode, setMode, describe as describeMode } from './mode';
-import { peek, history } from './peer';
+import { peek, history, reportCollision } from './peer';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
-import { roster as rosterOf } from './roster';
+import { roster as rosterOf, roleOf as roleOfId } from './roster';
 import { leaseState, expired, release } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
@@ -604,7 +604,12 @@ export function runClaimList(dbPath: string | undefined): RunResult {
  * 現行の「衝突の恐れに気づけ、だが他人のファイルは読むな」という
  * 守れぬ決めが守れる形になる。
  */
-export function runClaimCheck(dbPath: string | undefined, kind: string | undefined, value: string | undefined): RunResult {
+export function runClaimCheck(
+  dbPath: string | undefined,
+  kind: string | undefined,
+  value: string | undefined,
+  selfId?: string,
+): RunResult {
   if (!value) {
     return {
       code: EXIT_INVALID,
@@ -617,7 +622,25 @@ export function runClaimCheck(dbPath: string | undefined, kind: string | undefin
   if (held.length === 0) {
     return { code: EXIT_OK, out: `  空いておる: ${normClaim(k, value)}` };
   }
-  return { code: EXIT_INVALID, err: explainConflict(k, normClaim(k, value), held) };
+  // 足軽が塞がりに当たったなら家老へ報せる。
+  //
+  // 足軽には調整の手が無い。譲らせるのも振り直すのも家老の役目ゆえ、
+  // 家老が知らねば、足軽は断られたまま止まる。
+  // 家老自身が検めた時は報せない。それは家老が既に知っておること。
+  let told = '';
+  if (selfId && rosterOf(db).some((e) => e.id === selfId) && roleOfId(selfId) === 'worker') {
+    const h = held[0]!;
+    const sent = reportCollision(db, {
+      from: selfId,
+      with: h.agent,
+      key: h.value,
+      detail:
+        `${selfId} が ${h.value} へ入ろうとして塞がれた。\n` +
+        `  握っておるのは ${h.agent}（${h.taskId ?? '仕事不明'}・${h.at} から）`,
+    });
+    told = sent ? '\n\n  家老へ報せた。' : '\n\n  家老へは既に報せてある。';
+  }
+  return { code: EXIT_INVALID, err: explainConflict(k, normClaim(k, value), held) + told };
 }
 
 /** `honden claim release <番号>` — 手放す。他人のものは force と理由が要る。 */
@@ -745,7 +768,7 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'check') {
       // kind を省けば path。worktree の話が大半ゆえ。
       const hasKind = rest[2] === 'path' || rest[2] === 'branch';
-      return emit(runClaimCheck(dbPath, hasKind ? rest[2] : 'path', hasKind ? rest[3] : rest[2]));
+      return emit(runClaimCheck(dbPath, hasKind ? rest[2] : 'path', hasKind ? rest[3] : rest[2], selfId()));
     }
     if (rest[1] === 'release') {
       const force = flags['force'] === 'true';

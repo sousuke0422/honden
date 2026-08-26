@@ -9,7 +9,10 @@
  */
 
 import { expect, test, describe } from 'bun:test';
-import { openStore, tx } from '../src/store';
+import { openStore, tx, signalPathOf } from '../src/store';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
 import { submitReport } from '../src/report';
@@ -166,5 +169,107 @@ describe('辿る', () => {
     expect(h.out).toContain('誰も取り置いておらぬ');
     expect(h.out).toContain('取り置きが無いのは「誰も触っておらぬ」ことではない');
     expect(h.out).toContain('detached HEAD');
+  });
+});
+
+describe('重なっておった時だけ家老へ報せる', () => {
+  const karoUnread = (db: ReturnType<typeof openStore>) =>
+    (db.query("SELECT count(*) c FROM inbox WHERE agent = 'karo' AND read = 0").get() as { c: number }).c;
+
+  /**
+   * 取り置きが二重に入った状態を作る。
+   *
+   * 振る門も take も重なりを弾くので、**正しく回っておればこの状態は作れない**。
+   * 正本へ直に入れる。ここで検めておるのは「万一入ってしまった時に
+   * 黙って通り過ぎぬこと」であって、通常の筋ではない。
+   */
+  function collided() {
+    const { db, cmdId } = seeded();
+    assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: cmdId, title: '一', branch: 'fix32-rebase' });
+    assignTask(db, 'karo', { agent: 'ashigaru2', cmd_id: cmdId, title: '二' });
+    db.prepare('INSERT INTO claim(kind, value, agent, task_id, at) VALUES (?,?,?,?,?)').run(
+      'branch',
+      'fix32-rebase',
+      'ashigaru2',
+      'subtask_x',
+      new Date().toISOString(),
+    );
+    return { db, cmdId };
+  }
+
+  test('取り置きが宣言されておらずとも報せる。そこがいちばん危うい', () => {
+    // 取り置きが重なる状態は、振る門がそもそも作らせない。
+    // 危ういのは宣言されなかった側——枝を書かずに振った、detached で切った。
+    // そこには比べる取り置きが無いので、重なりの有無を条件にすると
+    // いちばん危うい筋で黙ることになる。
+    const { db, cmdId } = seeded();
+    assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: cmdId, title: '一' }); // 場所の宣言なし
+    assignTask(db, 'karo', { agent: 'ashigaru2', cmd_id: cmdId, title: '二' });
+    const before = karoUnread(db);
+    const r = peek(db, 'ashigaru2', 'ashigaru1', REASON);
+    expect(karoUnread(db)).toBe(before + 1);
+    expect(r.out).toContain('家老へ報せた');
+    const m = db.query("SELECT body FROM inbox WHERE agent = 'karo' ORDER BY rowid DESC LIMIT 1").get() as {
+      body: string;
+    };
+    expect(m.body).toContain('宣言されておらぬ場所で重なっておる恐れ');
+  });
+
+  test('報せには「なぜ覗いたか」が載る', () => {
+    const { db, cmdId } = seeded();
+    assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: cmdId, title: '一' });
+    peek(db, 'ashigaru2', 'ashigaru1', REASON);
+    const m = db.query("SELECT body FROM inbox WHERE agent = 'karo' ORDER BY rowid DESC LIMIT 1").get() as {
+      body: string;
+    };
+    expect(m.body).toContain(REASON);
+  });
+
+  test('取り置きが二重に入っておれば、その場所を名指しする（上流が壊れた印）', () => {
+    const { db } = collided();
+    peek(db, 'ashigaru2', 'ashigaru1', REASON);
+    const m = db
+      .query("SELECT body FROM inbox WHERE agent = 'karo' ORDER BY rowid DESC LIMIT 1")
+      .get() as { body: string };
+    expect(m.body).toContain('fix32-rebase');
+    expect(m.body).toContain('claim release');
+  });
+
+  test('同じ相手の同じ仕事について二度は報せぬ', () => {
+    const { db } = collided();
+    peek(db, 'ashigaru2', 'ashigaru1', REASON);
+    const after1 = karoUnread(db);
+    const r = peek(db, 'ashigaru2', 'ashigaru1', REASON);
+    expect(karoUnread(db)).toBe(after1);
+    expect(r.out).toContain('既に報せてある');
+  });
+
+  test('報せたら合図も上がる。家老が起きねば届いておらぬのと同じ', () => {
+    // :memory: では合図の口が無いので、正本を実体で置く。
+    // deliver だけでは芯が起きぬ——書けたのに誰も知らぬ状態になる。
+    const dir = mkdtempSync(join(tmpdir(), 'honden-peer-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+        { id: 'ashigaru1', role: 'worker', cli: 'claude', model: null },
+        { id: 'ashigaru2', role: 'worker', cli: 'claude', model: null },
+      ]);
+    });
+    const c = createCmd(db, 'shogun', CMD);
+    assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: c.id!, title: '一' });
+    // 振った時点で合図は既に上がっておる。消してから覗く——
+    // そうせぬと「前の合図がまだそこにある」だけで通ってしまい、
+    // 覗きが合図を上げておるかを見たことにならぬ。
+    const sig = signalPathOf(dbPath);
+    rmSync(sig, { force: true });
+    expect(existsSync(sig)).toBe(false);
+
+    peek(db, 'ashigaru2', 'ashigaru1', REASON);
+
+    expect(existsSync(sig)).toBe(true);
+    expect((db.query("SELECT count(*) c FROM ledger WHERE action = 'collision.report'").get() as { c: number }).c).toBe(1);
   });
 });

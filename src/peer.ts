@@ -26,11 +26,29 @@
  * 辿れねば、調整のしようがない。
  *
  * 台帳は追記専用なので、解かれた取り置きも残っている。そこから引く。
+ *
+ * ## 覗いたら家老へ報せる
+ *
+ * 覗いた跡は台帳に残るが、**台帳は誰も読まない**。積むだけで判定に使わねば、
+ * 集めたことを対処したと取り違える。調整できるのは家老だけなので、
+ * 家老が知らねば調整は始まらない。
+ *
+ * はじめ「取り置きが重なった時だけ報せる」としたが、これは的を外していた。
+ * **取り置きが重なる状態は、振る門がそもそも作らせない**（src/dispatch.ts）。
+ * 危ういのは宣言されなかった側——`--branch` を書かずに振った、
+ * detached HEAD で切った——で、そこには比べる取り置きが無い。
+ *
+ * ゆえに覗いたこと自体を報せる。足軽は遊びで覗かない。理由を必須にしてあるので、
+ * **覗きには必ず「なぜ」が付いている**。それがそのまま家老への報せになる。
+ *
+ * 同じ相手の同じ仕事について二度は報せない。相手が次の仕事へ移れば改めて報せる。
  */
 
 import type { Database } from 'bun:sqlite';
 import { journal } from './store';
 import { normalize, overlaps, type Kind, type Claim } from './claim';
+import { deliver, signal } from './inbox';
+import { ASSIGNER } from './dispatch';
 import { checkReason } from './validate';
 import { leaseState } from './lease';
 
@@ -118,6 +136,28 @@ export function peek(
     // raw が読めずとも、他の欄で用は足りる
   }
 
+  // 覗いたことを家老へ報せる。
+  //
+  // 覗いた者に「家老へ回せ」と促すだけでは現行と同じ——気づいた者が
+  // 動くかどうかに委ねることになる。理由は必須ゆえ、報せには必ず
+  // 「なぜ覗いたか」が載る。
+  const hits = overlapBetween(db, selfId, target);
+  const sent = reportCollision(db, {
+    from: selfId,
+    with: target,
+    // 相手が次の仕事へ移れば改めて報せる
+    key: t.task_id,
+    detail:
+      `${selfId} が ${target} の持ち場を検めた。\n` +
+      `  理由: ${reason}\n` +
+      `  ${target}: ${t.task_id}（${t.cmd_id ?? '司令不明'}・${t.status}）\n` +
+      (hits.length > 0
+        ? `  取り置きが ${hits.length} 件重なっておる: ${hits.map((h) => h.theirs.value).join(' / ')}\n`
+        : '  取り置きの重なりは無い。宣言されておらぬ場所で重なっておる恐れがある。\n'),
+    now,
+  });
+  const told = sent ? '\n  ※ 家老へ報せた。' : '\n  ※ 家老へは既に報せてある。';
+
   return {
     ok: true,
     out: [
@@ -128,7 +168,7 @@ export function peek(
       `    最後の動き: ${t.updated_at}`,
       claims.length > 0 ? `    握っておる場所:\n${claims.join('\n')}` : '    握っておる場所: なし',
       '',
-      '  調整が要るなら家老へ回されよ。相手へ直に手を出すことはできぬ。',
+      `  調整が要るなら家老へ回されよ。相手へ直に手を出すことはできぬ。${told}`,
     ].join('\n'),
   };
 }
@@ -184,4 +224,65 @@ export function history(db: Database, kind: Kind, value: string): PeerResult {
   }
 
   return { ok: true, out: lines.join('\n') };
+}
+
+
+/**
+ * 二人の間に、生きた取り置きの重なりがあるか。
+ *
+ * ## 常は空である
+ *
+ * 振る門 (src/dispatch.ts) が重なる取り置きを作らせないので、
+ * 正しく回っている限りここは何も返さない。**返したなら、
+ * その門を通らずに取り置きが入ったということ**で、上流が壊れている。
+ *
+ * 消さずに残すのは、壊れた時に黙って通り過ぎぬため。
+ * 報せの中で「重なっておる場所」として名指しされる。
+ */
+export function overlapBetween(db: Database, a: string, b: string): { mine: Claim; theirs: Claim }[] {
+  const q = (agent: string) =>
+    db
+      .query(
+        'SELECT id, kind, value, agent, task_id taskId, cmd_id cmdId, at FROM claim WHERE agent = ? AND released_at IS NULL',
+      )
+      .all(agent) as Claim[];
+  const mine = q(a);
+  const theirs = q(b);
+  const out: { mine: Claim; theirs: Claim }[] = [];
+  for (const m of mine) for (const t of theirs) if (overlaps(m, t)) out.push({ mine: m, theirs: t });
+  return out;
+}
+
+/**
+ * 家老へ報せる。
+ *
+ * 同じ重なりを何度も報せない。**同じ取り置きが握られておる間は一度だけ。**
+ * 相手が握り直せば `at` が変わるので、新しい重なりとして改めて報せる。
+ */
+export function reportCollision(
+  db: Database,
+  opts: { from: string; with: string; key: string | null; detail: string; now?: Date },
+): boolean {
+  const now = opts.now ?? new Date();
+  const key = `${opts.from}|${opts.with}|${opts.key ?? '-'}`;
+  const dup = db
+    .query("SELECT id FROM ledger WHERE action = 'collision.report' AND detail LIKE ?")
+    .get(`key=${key}%`) as { id: number } | null;
+  if (dup) return false;
+
+  const at = now.toISOString();
+  deliver(db, {
+    id: `msg_${Date.now().toString(36)}_col`,
+    agent: ASSIGNER,
+    at,
+    type: 'report_received',
+    sender: opts.from,
+    body:
+      `場所の重なりを疑う者がおる。調整を仰ぐ。\n\n` +
+      `${opts.detail}\n` +
+      `honden history で経緯を辿れる。譲らせるなら honden claim release <番号> --force --reason "…"。`,
+  });
+  journal(db, { actor: opts.from, action: 'collision.report', target: opts.with, detail: `key=${key}` });
+  signal(db);
+  return true;
 }
