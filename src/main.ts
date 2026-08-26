@@ -20,11 +20,13 @@ import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './repor
 import { plan, send, record, startClocks } from './nudge';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
+import { get as configGet, load as configLoad, dig as configDig, SETTINGS_PATH_KEY } from './config';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
 import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
 import { readNorms, select, PROMPT_TIERS } from './norms';
 import { normsRoot, setSetting } from './settings';
+import { resolve as resolvePath } from 'node:path';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
 import { roster as rosterOf, roleOf as roleOfId } from './roster';
@@ -99,6 +101,11 @@ export function runRosterSync(dbPath: string | undefined, settingsPath: string |
   tx(db, () => {
     syncRoster(db, entries);
     syncLimits(db, limits);
+    // 設定の在り処をここで覚える。
+    //
+    // honden config が引数でファイルを取らぬのは、取れば汎用の YAML 読み口に
+    // なり、honden を迂回する道が開くゆえ。入口はここ一つにする。
+    setSetting(db, SETTINGS_PATH_KEY, resolvePath(settingsPath), 'roster');
   });
   const w = entries.filter((e) => e.role === 'worker');
   return {
@@ -106,7 +113,8 @@ export function runRosterSync(dbPath: string | undefined, settingsPath: string |
     out:
       `  ${entries.length} 人（上役 ${entries.length - w.length} / 足軽 ${w.length}）\n` +
       entries.map((e) => `    ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n') +
-      `\n  能力制限 ${limits.filter((l) => l.maxBloom < 6).length} 件（表に無いモデルは制限なし）`,
+      `\n  能力制限 ${limits.filter((l) => l.maxBloom < 6).length} 件（表に無いモデルは制限なし）` +
+      `\n  設定の在り処を覚えた: ${resolvePath(settingsPath)}`,
   };
 }
 
@@ -364,6 +372,8 @@ const USAGE = `honden — 多エージェント運用の差配層
 
   honden roster sync --settings <settings.yaml>        顔ぶれを入れ替える
   honden roster                                        いまの顔ぶれ
+  honden config                                        設定の在り処と上の段
+  honden config get <鍵>                               設定を一つ引く（値だけ返す）
   honden import [--root PATH] [--sub queue,saytask]   shogun の YAML を取り込む
   honden cmd new <<'EOF'                               司令を書く（将軍だけ）
     north_star: …
@@ -886,6 +896,28 @@ export function runPatch(diff: string | undefined, root: string | undefined, dry
   return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
 }
 
+/**
+ * `honden config get <鍵>` — 環境の設定を一つ引く。
+ *
+ * 値は飾らずに返す。shell が `$(honden config get …)` で受けるゆえ。
+ */
+export function runConfig(dbPath: string | undefined, key: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  if (key === undefined) {
+    const doc = configLoad(db);
+    if (!doc.ok) return { code: EXIT_INVALID, err: doc.message };
+    const top = configDig(doc.doc, '');
+    return {
+      code: EXIT_OK,
+      out:
+        `  設定: ${doc.path}\n` +
+        (top.kind === 'branch' ? `  上の段: ${top.keys.join(' / ')}` : '  中身が対応でない'),
+    };
+  }
+  const r = configGet(db, key);
+  return r.ok ? { code: EXIT_OK, out: r.value } : { code: EXIT_INVALID, err: r.message };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -1009,6 +1041,11 @@ export async function main(argv: string[]): Promise<number> {
     delete flags['wake-shogun'];
     delete flags['reason'];
     return emit(await runNudge(dbPath, dryRun, wakeShogun, reason, selfId()));
+  }
+
+  if (rest[0] === 'config') {
+    if (rest[1] === 'get') return emit(runConfig(dbPath, rest[2] ?? ''));
+    return emit(runConfig(dbPath, undefined));
   }
 
   if (rest[0] === 'patch') {

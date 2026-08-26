@@ -216,6 +216,32 @@ honden report qc <<'EOF' … EOF                    軍師 → 家老へ自動
 段は覚えず、時刻の差から毎回計算する。覚えと実際がずれた時に
 どちらが正しいか決まらなくなるゆえ。
 
+### 設定を読む狭い口
+
+```
+honden config                    在り処と上の段
+honden config get cli.agents.karo.model    →  auto
+```
+
+現行では shell が YAML を直に読んでいる。`lib/cli_adapter.sh` の python 呼び出し
+17 箇所は、**すべて `config/settings.yaml` を読むため**（実測 2026-08-26）。
+そのために PyYAML だけを入れた venv が要る。
+
+honden は `Bun.YAML` を内に持つので、その venv は要らなくなる。
+だが**汎用の YAML 読み口は開けない**——`honden yaml get <ファイル> <path>` を作ると、
+それが honden を迂回する道になる。誰かが `queue/tasks/ashigaru1.yaml` を直に読み、
+`honden task` を通らなくなる。閉じたかったのは、まさにその経路である。
+
+| | |
+|---|---|
+| 在り処 | `roster sync --settings` で覚える。ここでファイルは取らぬ |
+| 値 | 飾らずに返す。`$(honden config get …)` で受けるゆえ |
+| 枝 | 返さぬ。下に在るものだけ示す |
+| 無い鍵 | どこで途切れたかを言う |
+
+**枝を返さないのが肝。** YAML や JSON を吐くと、受け取った shell がそれを解きにかかる
+——解く仕事を shell へ戻してしまう。それが venv の要る理由であった。
+
 ### ファイルへ差分を当てる
 
 ```
