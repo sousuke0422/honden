@@ -9,6 +9,7 @@
  */
 
 import { openStore, search, tx, type Hit } from './store';
+import { resolve as resolveIdentity, type Identity } from './identity';
 import { readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
@@ -822,20 +823,23 @@ export async function main(argv: string[]): Promise<number> {
   const dbPath = flags['db'];
   delete flags['db'];
 
-  // 名乗りは環境から取る。引数では取らない。
-  let _self: string | undefined | null = null;
-  const selfId = (): string | undefined => {
-    if (_self !== null) return _self;
-    const pane = process.env.TMUX_PANE ?? '';
-    let id = process.env.HONDEN_AGENT_ID?.trim();
-    if (!id && pane !== '') {
-      const p = Bun.spawnSync(['tmux', 'display-message', '-t', pane, '-p', '#{@agent_id}']);
-      const got = p.success ? new TextDecoder().decode(p.stdout).trim() : '';
-      id = got === '' ? undefined : got;
-    }
-    _self = id;
-    return id;
+  // 名乗りは環境から取る。引数では取らない。決め方は src/identity.ts。
+  let _who: Identity | null = null;
+  const who = (): Identity => {
+    if (_who) return _who;
+    _who = resolveIdentity({
+      tmuxPane: process.env.TMUX_PANE,
+      agentIdEnv: process.env.HONDEN_AGENT_ID,
+      lookup: (pane) => {
+        const p = Bun.spawnSync(['tmux', 'display-message', '-t', pane, '-p', '#{@agent_id}']);
+        return p.success ? new TextDecoder().decode(p.stdout) : '';
+      },
+    });
+    // 食い違いは黙って解かぬ。片方を静かに採ると、誤りが誤りのまま通る。
+    if (_who.conflict) console.error(`  ※ 名乗りが食い違っておる。\n  ${_who.conflict}`);
+    return _who;
   };
+  const selfId = (): string | undefined => who().id;
 
 
   /**
@@ -1007,19 +1011,14 @@ export async function main(argv: string[]): Promise<number> {
       return EXIT_INVALID;
     }
     const stdin = await readStdin();
-    const pane = process.env.TMUX_PANE ?? '';
-    const insideFormation = pane !== '';
-    // 名乗りは環境から取る。引数の from とは突き合わせるだけで、信じない。
-    // skills/external-to-shogun の Step 0 と同じ。TMUX_PANE が空のまま
-    // tmux display-message を打つと、アクティブな他人の @agent_id を返す。
-    let selfId = process.env.HONDEN_AGENT_ID?.trim();
-    if (!selfId && insideFormation) {
-      const p = Bun.spawnSync(['tmux', 'display-message', '-t', pane, '-p', '#{@agent_id}']);
-      const got = p.success ? new TextDecoder().decode(p.stdout).trim() : '';
-      selfId = got === '' ? undefined : got;
-    }
+    // 名乗りの決め方は一箇所（src/identity.ts）。ここで別に書くと、
+    // 片方だけ直る筋ができる。
+    const me = who();
     return emit(
-      inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun, { insideFormation, selfId }),
+      inboxWrite(dbPath, { flags: positional ?? flags, stdin }, dryRun, {
+        insideFormation: me.insideFormation,
+        selfId: me.id,
+      }),
     );
   }
 
