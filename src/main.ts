@@ -17,6 +17,7 @@ import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, forget, markSince } from './nudge';
+import { getMode, setMode, describe as describeMode } from './mode';
 import { summarize as summarizeInbox } from './inbox';
 import { roster as rosterOf } from './roster';
 import { leaseState, expired, release } from './lease';
@@ -503,7 +504,7 @@ export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined
 export async function runNudge(
   dbPath: string | undefined,
   dryRun: boolean,
-  wakeShogun: boolean,
+  autonomous: boolean | undefined,
 ): Promise<RunResult> {
   const db = openStore({ path: dbPath });
   const now = new Date();
@@ -524,7 +525,7 @@ export async function runNudge(
   // 片付いた者の覚えは消す。残すと、次の未読がいきなり段 3 から始まる。
   forget(db, quiet);
 
-  const plans = plan(db, now, { wakeShogun });
+  const plans = plan(db, now, { autonomous });
   const lines: string[] = [];
 
   if (plans.length === 0) {
@@ -555,6 +556,22 @@ export async function runNudge(
   // 芯への返事。人が読む行に混ざってよいが、必ず最後に置く。
   lines.push(JSON.stringify({ next_wake_ms: soonest }));
   return { code: EXIT_OK, out: lines.join('\n') };
+}
+
+/** `honden mode` — 殿が在席かどうか。合図を将軍へ撃つかがこれで決まる。 */
+export function runMode(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  want: string | undefined,
+  until: string | undefined,
+): RunResult {
+  const db = openStore({ path: dbPath });
+  if (!want) {
+    return { code: EXIT_OK, out: describeMode(getMode(db)) };
+  }
+  const r = setMode(db, selfId, want, { until });
+  if (!r.ok) return { code: EXIT_INVALID, err: r.message };
+  return { code: EXIT_OK, out: describeMode(r.state!) + (r.message ?? '') };
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -616,10 +633,19 @@ export async function main(argv: string[]): Promise<number> {
     return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
+  if (rest[0] === 'mode') {
+    const until = flags['until'];
+    delete flags['until'];
+    return emit(runMode(dbPath, selfId(), rest[1], until));
+  }
+
   if (rest[0] === 'nudge') {
-    const wakeShogun = flags['wake-shogun'] === 'true';
-    delete flags['wake-shogun'];
-    return emit(await runNudge(dbPath, dryRun, wakeShogun));
+    // 様態は正本から引く。旗は素振りのための上書きだけ。
+    const forced =
+      flags['autonomous'] === 'true' ? true : flags['attended'] === 'true' ? false : undefined;
+    delete flags['autonomous'];
+    delete flags['attended'];
+    return emit(await runNudge(dbPath, dryRun, forced));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'done') {

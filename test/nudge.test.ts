@@ -19,13 +19,18 @@ import {
   forget,
   markSince,
   levelFor,
-  NEVER_NUDGE,
+  ATTENDED_SILENT,
   LEVEL_2_AFTER_MS,
   LEVEL_3_AFTER_MS,
   RESET_COOLDOWN_MS,
   REPEAT_MS,
 } from '../src/nudge';
 import type { Pane } from '../src/pane';
+import { setMode, getMode, parseUntil } from '../src/mode';
+import { inboxWrite } from '../src/cli';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const PANES = new Map<string, Pane>([
   ['shogun', { id: '%0', label: 'shogun:main.0' }],
@@ -78,22 +83,98 @@ describe('段の数え方', () => {
   });
 });
 
-describe('将軍への手当て', () => {
-  test('将軍へは撃たぬ', () => {
+describe('殿が在席かで宛先が変わる', () => {
+  const withShogunUnread = () => {
     const db = seeded();
-    unreadFor(db, NEVER_NUDGE);
-    markSince(db, NEVER_NUDGE, T0);
-    const p = find(plan(db, T0, { panes: PANES }), NEVER_NUDGE)!;
+    unreadFor(db, ATTENDED_SILENT);
+    markSince(db, ATTENDED_SILENT, T0);
+    return db;
+  };
+
+  test('在席の間は将軍へ撃たぬ', () => {
+    const db = withShogunUnread();
+    const p = find(plan(db, T0, { panes: PANES }), ATTENDED_SILENT)!;
     expect(p.send).toBe(false);
-    expect(p.reason).toContain('殿の入力');
+    expect(p.reason).toContain('殿が在席');
   });
 
-  test('夜間の旗があれば撃つ', () => {
-    const db = seeded();
-    unreadFor(db, NEVER_NUDGE);
-    markSince(db, NEVER_NUDGE, T0);
-    const p = find(plan(db, T0, { panes: PANES, wakeShogun: true }), NEVER_NUDGE)!;
+  test('自律運用では将軍も起こす。これが前提であって例外ではない', () => {
+    const db = withShogunUnread();
+    setMode(db, 'shogun', 'autonomous', { until: '6h', now: T0 });
+    const p = find(plan(db, T0, { panes: PANES }), ATTENDED_SILENT)!;
     expect(p.send).toBe(true);
+  });
+
+  test('様態は正本から引く。旗を渡さずとも効く', () => {
+    const db = withShogunUnread();
+    setMode(db, 'shogun', 'autonomous', { now: T0 });
+    // opts に何も渡していない
+    expect(find(plan(db, T0, { panes: PANES }), ATTENDED_SILENT)!.send).toBe(true);
+  });
+
+  test('期限が切れれば在席へ戻り、また撃たぬ', () => {
+    // 戻し忘れの害は、まさにこの守りが防ごうとしているもの
+    const db = withShogunUnread();
+    setMode(db, 'shogun', 'autonomous', { until: '6h', now: T0 });
+    expect(find(plan(db, at(5 * 3_600_000), { panes: PANES }), ATTENDED_SILENT)!.send).toBe(true);
+    expect(find(plan(db, at(7 * 3_600_000), { panes: PANES }), ATTENDED_SILENT)!.send).toBe(false);
+  });
+
+  test('自律でも他の者への扱いは変わらぬ', () => {
+    const db = seeded();
+    unreadFor(db, 'karo');
+    markSince(db, 'karo', T0);
+    setMode(db, 'shogun', 'autonomous', { now: T0 });
+    expect(find(plan(db, T0, { panes: PANES }), 'karo')!.send).toBe(true);
+  });
+});
+
+describe('様態そのもの', () => {
+  test('既定は在席。何も決めておらぬなら潰さぬほうを採る', () => {
+    const db = seeded();
+    expect(getMode(db, T0).mode).toBe('attended');
+  });
+
+  test('知らぬ様態は弾く', () => {
+    const db = seeded();
+    const r = setMode(db, 'shogun', '夜', { now: T0 });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('attended');
+  });
+
+  test('期限は時刻でも長さでも書ける', () => {
+    // 夜に「朝 8 時まで」と書いたら翌朝を指すこと
+    const night = new Date('2026-08-26T23:00:00');
+    const d = parseUntil('08:00', night)!;
+    expect(d.getTime()).toBeGreaterThan(night.getTime());
+    expect(d.getHours()).toBe(8);
+
+    expect(parseUntil('6h', T0)!.getTime()).toBe(T0.getTime() + 6 * 3_600_000);
+    expect(parseUntil('30m', T0)!.getTime()).toBe(T0.getTime() + 30 * 60_000);
+  });
+
+  test('読めぬ期限と過ぎた期限は弾く', () => {
+    const db = seeded();
+    expect(setMode(db, 'shogun', 'autonomous', { until: 'あした', now: T0 }).ok).toBe(false);
+    expect(setMode(db, 'shogun', 'autonomous', { until: '2020-01-01T00:00:00Z', now: T0 }).ok).toBe(false);
+  });
+
+  test('期限なしの自律には断りを添える', () => {
+    const db = seeded();
+    const r = setMode(db, 'shogun', 'autonomous', { now: T0 });
+    expect(r.ok).toBe(true);
+    expect(r.message).toContain('戻し忘れる');
+  });
+
+  test('様態の切り替えは台帳に残る', () => {
+    const db = seeded();
+    setMode(db, 'shogun', 'autonomous', { until: '6h', now: T0 });
+    const led = db.query("SELECT action, detail FROM ledger WHERE action = 'mode.autonomous'").all() as {
+      action: string;
+      detail: string;
+    }[];
+    expect(led.length).toBe(1);
+    expect(led[0]!.detail).toContain('until=');
   });
 });
 
@@ -218,5 +299,57 @@ describe('ペインが引けぬとき', () => {
     const p = find(plan(db, T0, { panes: PANES }), 'gunshi')!;
     expect(p.send).toBe(false);
     expect(p.reason).toContain('ペインが見つからぬ');
+  });
+});
+
+describe('書き込み側も同じ様態で判ずる', () => {
+  const write = (db: ReturnType<typeof openStore>, dbPath: string, from: string, to: string) =>
+    inboxWrite(dbPath, { flags: { to, from, type: 'report_received', body: '裁定を仰ぐ' } }, false, {
+      insideFormation: true,
+      selfId: from,
+    });
+
+  test('在席の間、家老から将軍へは書けぬ', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-mode-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+      ]);
+    });
+    const r = write(db, dbPath, 'karo', 'shogun');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('dashboard');
+    expect((db.query('SELECT count(*) c FROM inbox').get() as { c: number }).c).toBe(0);
+  });
+
+  test('自律運用なら開く。これが escalation の路になる', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-mode2-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+      ]);
+    });
+    setMode(db, 'shogun', 'autonomous', { until: '6h' });
+    const r = write(db, dbPath, 'karo', 'shogun');
+    expect(r.code).toBe(0);
+  });
+
+  test('他の者から将軍へは平時でも通る（塞いだのは家老の路だけ）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-mode3-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'gunshi', role: 'commander', cli: 'claude', model: null },
+      ]);
+    });
+    expect(write(db, dbPath, 'gunshi', 'shogun').code).toBe(0);
   });
 });

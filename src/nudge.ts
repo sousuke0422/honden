@@ -17,10 +17,16 @@
  * 段は覚えず、時刻の差から毎回計算する。段を持つと、覚えと実際がずれた時に
  * どちらが正しいか決まらない。
  *
- * ## 将軍へは撃たない
+ * ## 将軍へ撃つかは、殿が在席かで決まる
  *
- * 殿の入力を割り込みで潰すゆえ。現行 karo.md の `to_shogun: false` と同じ理由で、
- * こちらは配達の側から塞ぐ。夜間の自律運用だけが例外で、明示の旗が要る。
+ * 撃たぬのは将軍が特別だからではなく、**殿がいま打ち込んでおる最中を潰す**ゆえ。
+ * 殿が席を外しておられる間——夜間や仕事中——は潰す入力が無く、
+ * **将軍を起こすのが前提になる**。起こさねば家老からの escalation が
+ * 誰にも届かず、パイプラインが朝まで止まる
+ * (memory: shogun_night_autonomous_escalation)。
+ *
+ * 判断は運用の様態 (src/mode.ts) 一つで決まる。旗にすると「例外的に起こす」と
+ * 読めるが、自律運用では起こすのが常道であって例外ではない。
  */
 
 import type { Database } from 'bun:sqlite';
@@ -28,9 +34,12 @@ import { journal } from './store';
 import { summarize, nudgeText, type Summary } from './inbox';
 import { roster } from './roster';
 import { panes, type Pane } from './pane';
+import { isAutonomous } from './mode';
 
-/** 殿の入力を潰さぬため、既定では撃たぬ相手。 */
-export const NEVER_NUDGE = 'shogun';
+/** 殿が在席の間は撃たぬ相手。殿の入力と同じ場所に居るゆえ。 */
+export const ATTENDED_SILENT = 'shogun';
+/** 旧名。呼び出し側の移行が済むまで残す。 */
+export const NEVER_NUDGE = ATTENDED_SILENT;
 
 export const LEVEL_2_AFTER_MS = 2 * 60_000;
 export const LEVEL_3_AFTER_MS = 4 * 60_000;
@@ -103,9 +112,11 @@ export function plan(
   now: Date = new Date(),
   // ペインの一覧は差し替えられるようにする。試験が tmux の在り様に
   // 左右されると、布陣が動くたびに赤くなる。
-  opts: { wakeShogun?: boolean; panes?: Map<string, Pane> } = {},
+  opts: { autonomous?: boolean; panes?: Map<string, Pane> } = {},
 ): Plan[] {
   const p = opts.panes ?? panes();
+  // 様態は正本から引く。旗で上書きできるのは試験と素振りのため。
+  const autonomous = opts.autonomous ?? isAutonomous(db, now);
   const out: Plan[] = [];
 
   for (const entry of roster(db)) {
@@ -122,9 +133,11 @@ export function plan(
     let send = true;
     let reason: string | undefined;
 
-    if (entry.id === NEVER_NUDGE && !opts.wakeShogun) {
+    if (entry.id === ATTENDED_SILENT && !autonomous) {
       send = false;
-      reason = '将軍へは撃たぬ。殿の入力を割り込みで潰すゆえ。';
+      reason =
+        '殿が在席ゆえ撃たぬ。打ち込んでおる最中を潰す。' +
+        '（席を外されるなら honden mode autonomous --until 08:00）';
     } else if (!pane) {
       send = false;
       reason = `${entry.id} のペインが見つからぬ。布陣に居らぬか、@agent_id が付いておらぬ。`;

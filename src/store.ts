@@ -305,6 +305,18 @@ CREATE TABLE IF NOT EXISTS report_check (
   PRIMARY KEY (report_id, idx)
 );
 
+-- 環境そのものの決め事。いまのところ運用の様態だけ。
+--
+-- 正本に置くのは、芯も手も家老も同じものを見る必要があるゆえ。
+-- 設定ファイルへ置くと、書き換えても走っておるものが拾わない。
+CREATE TABLE IF NOT EXISTS setting (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  at    TEXT NOT NULL,
+  by    TEXT,
+  until TEXT          -- この時刻を過ぎたら既定へ戻る。null なら戻らぬ
+);
+
 -- 合図の段の覚え。
 --
 -- 「いつから未読が続いておるか」「最後にいつ撃ったか」を持つ。

@@ -30,6 +30,7 @@
 import { openStore, tx, journal } from './store';
 import { roster, isEmpty } from './roster';
 import { summarize, nudgeText, deliver, signal } from './inbox';
+import { isAutonomous } from './mode';
 import { validate, explain, type Schema } from './validate';
 
 export const EXIT_OK = 0;
@@ -218,6 +219,30 @@ export function inboxWrite(
   }
 
   const v = picked.value as { to: string; from: string; type: string; body: string };
+
+  // 家老から将軍への報せは、殿が在席の間は開けぬ。
+  //
+  // 現行 instructions/karo.md の `to_shogun: false` と同じ決め。
+  // 将軍のペインは殿の入力と同じ場所ゆえ、報せが届けば合図が飛び、
+  // 打ち込んでおる最中を潰す。平時は dashboard を通す。
+  //
+  // 殿が席を外しておられる間は逆になる。家老が escalation を書けねば、
+  // 裁ける者が誰も起きず、パイプラインが朝まで止まる
+  // (memory: shogun_night_autonomous_escalation)。
+  //
+  // 撃つ側 (src/nudge.ts) と同じ様態で判ずる。片方だけ開くと、
+  // 書けるのに誰も起きない、あるいはその逆になる。
+  if (v.from === 'karo' && v.to === 'shogun' && !isAutonomous(db)) {
+    return {
+      code: EXIT_INVALID,
+      err:
+        '家老から将軍への報せは、殿が在席の間は開けておらぬ。\n' +
+        '  将軍のペインは殿の入力と同じ場所ゆえ、打ち込んでおる最中を潰す。\n' +
+        '  平時は dashboard を通されよ。\n' +
+        '  殿が席を外しておられるなら honden mode autonomous --until 08:00 で開く。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
 
   if (!FROM_SHAPE.test(v.from)) {
     return {
