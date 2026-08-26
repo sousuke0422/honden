@@ -20,6 +20,7 @@ import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './repor
 import { plan, send, record, startClocks } from './nudge';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
+import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
 import { get as configGet, load as configLoad, dig as configDig, SETTINGS_PATH_KEY } from './config';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
@@ -414,6 +415,14 @@ const USAGE = `honden — 多エージェント運用の差配層
       +足す行
        後の行
   EOF
+  honden decisions                                     殿の裁定を待っておるもの（開いておる分だけ）
+  honden decision raise <<'EOF'                        裁定を仰ぐ（上役だけ）
+    question: 32 を入れ直すか
+    choices: ["いま入れる", "次の区切りまで待つ", "取り下げる"]
+    fallback: 次の区切りまで待つ
+    until: 08:00
+  EOF
+  honden decide <番号> "<選び>" [--note "…"]           一語で下ろす（将軍だけ）
   honden cmd show <cmd_id>                             受け入れ条件と覆い具合
   honden cmd done <cmd_id> [--bypass --reason "…"]     司令を閉じる（家老だけ・門あり）
   honden report submit <<'EOF'                          足軽が報せる → 軍師へ自動で行く
@@ -918,6 +927,56 @@ export function runConfig(dbPath: string | undefined, key: string | undefined): 
   return r.ok ? { code: EXIT_OK, out: r.value } : { code: EXIT_INVALID, err: r.message };
 }
 
+/** `honden decisions` — いま殿の裁定を待っておるもの。**開いておるものだけ。** */
+export function runDecisions(dbPath: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  const list = openDecisions(db);
+  if (list.length === 0) return { code: EXIT_OK, out: '  殿の裁定を待っておるものは無い。' };
+  const lines: string[] = [];
+  for (const d of list) {
+    lines.push(`  #${d.id}  ${d.question}`);
+    lines.push(`      上げた者: ${d.raisedBy}  ${d.at}${d.cmdId ? `  ${d.cmdId}` : ''}`);
+    for (const c of d.choices) lines.push(`      - ${c}${c === d.fallback ? '  ← 既定' : ''}`);
+    lines.push(d.fallback ? `      ${d.expiresAt} まで。過ぎれば既定へ倒れる。` : '      決まるまで止まる。');
+  }
+  lines.push('');
+  lines.push('  honden decide <番号> "<選び>" [--note "…"]');
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
+
+/** `honden decision raise` — 裁定を仰ぐ。上役だけ。 */
+export function runDecisionRaise(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  src: InputSource,
+  dryRun: boolean,
+): RunResult {
+  const picked = pickInput(src);
+  if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
+  if (dryRun) {
+    return { code: EXIT_OK, out: `  読み取り: ${Object.keys(picked.value).join(' / ')}\n  → 書き込んでおらぬ (--dry-run)` };
+  }
+  const db = openStore({ path: dbPath });
+  const r = raiseDecision(db, selfId, picked.value);
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
+/** `honden decide <番号> <選び>` — 一語で下ろす。 */
+export function runDecide(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  id: string | undefined,
+  choice: string | undefined,
+  note: string | undefined,
+): RunResult {
+  const n = Number(id);
+  if (!Number.isInteger(n)) return { code: EXIT_INVALID, err: `裁定の番号が数でない: ${JSON.stringify(id)}` };
+  if (!choice) return { code: EXIT_INVALID, err: '選びを渡されよ。honden decisions で選択肢が見られる。' };
+  const db = openStore({ path: dbPath });
+  const r = decideOne(db, selfId, n, choice, note);
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -1041,6 +1100,19 @@ export async function main(argv: string[]): Promise<number> {
     delete flags['wake-shogun'];
     delete flags['reason'];
     return emit(await runNudge(dbPath, dryRun, wakeShogun, reason, selfId()));
+  }
+
+  if (rest[0] === 'decisions') return emit(runDecisions(dbPath));
+
+  if (rest[0] === 'decision' && rest[1] === 'raise') {
+    const stdin = await readStdin();
+    return emit(runDecisionRaise(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'decide') {
+    const note = flags['note'];
+    delete flags['note'];
+    return emit(runDecide(dbPath, selfId(), rest[1], rest[2], note));
   }
 
   if (rest[0] === 'config') {

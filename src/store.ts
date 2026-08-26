@@ -159,6 +159,35 @@ CREATE TABLE IF NOT EXISTS cmd_acceptance (
   PRIMARY KEY (cmd_id, idx)
 );
 
+-- 殿の裁定を仰ぐもの。
+--
+-- 現行は dashboard.md の 🚨要対応 節に散文で積む。実測（2026-08-26）:
+--
+--   352 項目のうち  未決 57 / 済んだまま残存 95 / 決裁でない覚え書き 83 / 印なし 117
+--   節そのものが 2 つに増えていた（手で書き換えて重複した）
+--
+-- **本物の決裁が 16% しかない。** 散文には状態が無いので、消すには判断が要り、
+-- 誰も消さない。積むだけで判定に使わぬ型がここにも出ている。
+--
+-- 状態を持たせれば、絞り込みで消える。
+CREATE TABLE IF NOT EXISTS decision (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  cmd_id      TEXT,
+  raised_by   TEXT NOT NULL,
+  at          TEXT NOT NULL,
+  question    TEXT NOT NULL,
+  choices     TEXT NOT NULL,          -- JSON の一覧。自由文は決裁の問いではない
+  fallback    TEXT,                   -- 何も決まらぬ時に採るもの。null なら止まる
+  expires_at  TEXT,                   -- fallback を採る時刻
+  status      TEXT NOT NULL DEFAULT 'open'
+              CHECK (status IN ('open','decided','expired','withdrawn')),
+  chose       TEXT,
+  decided_by  TEXT,
+  decided_at  TEXT,
+  note        TEXT                    -- 殿の言葉をそのまま置く所
+);
+CREATE INDEX IF NOT EXISTS ix_decision_open ON decision(status, id);
+
 -- 司令の書き換えの跡。追記専用。
 --
 -- 現行はこれを散文で守っている——instructions/shogun_at.md の
