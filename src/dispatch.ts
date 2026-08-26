@@ -45,6 +45,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { deliver, signal } from './inbox';
+import { take as takeClaim, type Kind } from './claim';
 import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
@@ -155,6 +156,8 @@ const ASSIGN_SCHEMA: Schema = {
   minutes: { about: '貸与の長さ（分）。既定 30' },
   bypass: { about: '家老を通さず将軍が直に振る。理由が要る' },
   reason: { about: '迂回の理由。何が起きて迂回するのかを書く' },
+  workspace: { about: '触る場所（worktree など）。重なれば振れぬ' },
+  branch: { about: '触る枝。重なれば振れぬ' },
 };
 
 /**
@@ -259,28 +262,53 @@ export function assignTask(
   // 時刻だけでは足りない。同じミリ秒に 2 件振ると同じ番号になり、
   // inbox の主キーが衝突して 2 件目の割り当てが丸ごと落ちる（試験で実際に出た）。
   const stamp = `${Date.now().toString(36)}${Bun.hash(`${v.agent}${v.title}${Math.random()}`).toString(36).slice(0, 4)}`;
+  // 場所が重なっておらぬか、振る前に検める。
+  //
+  // 現行はこれを家老の記憶に頼っている (karo.md RACE-001)。
+  // 足軽は他人の持ち場を読めぬので、振られた後に気づく手立てが無い。
+  // 実際に worktree を重ねて merge commit を生んだ (2026-08-25)。
+  const wants: { kind: Kind; value: string }[] = [];
+  if (typeof input['workspace'] === 'string' && input['workspace'].trim() !== '') {
+    wants.push({ kind: 'path', value: input['workspace'] });
+  }
+  if (typeof input['branch'] === 'string' && input['branch'].trim() !== '') {
+    wants.push({ kind: 'branch', value: input['branch'] });
+  }
   const taskId = `subtask_${v.cmd_id.replace(/^cmd_/, '')}_${stamp}`;
   const minutes = v.minutes ? Number(v.minutes) : DEFAULT_LEASE_MINUTES;
   let result: DispatchResult = { ok: false };
-  tx(db, () => {
-    const got = acquire(db, { agent: v.agent, taskId, holder: v.agent, minutes, force: true });
-    if (!got.ok) {
-      result = { ok: false, message: got.message };
-      return;
-    }
-    db.prepare('UPDATE task SET cmd_id = ?, raw = ? WHERE agent = ?').run(
-      v.cmd_id,
-      JSON.stringify({ ...input, task_id: taskId }),
-      v.agent,
-    );
-    deliver(db, {
-      id: `msg_${Date.now().toString(36)}_${taskId}`,
-      agent: v.agent,
-      at: new Date().toISOString(),
-      type: 'task_assigned',
-      sender: actor,
-      body: `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}`,
+  try {
+    tx(db, () => {
+      const got = acquire(db, { agent: v.agent, taskId, holder: v.agent, minutes, force: true });
+      if (!got.ok) {
+        result = { ok: false, message: got.message };
+        return;
+      }
+      db.prepare('UPDATE task SET cmd_id = ?, raw = ? WHERE agent = ?').run(
+        v.cmd_id,
+        JSON.stringify({ ...input, task_id: taskId }),
+        v.agent,
+      );
+      deliver(db, {
+        id: `msg_${Date.now().toString(36)}_${taskId}`,
+        agent: v.agent,
+        at: new Date().toISOString(),
+        type: 'task_assigned',
+        sender: actor,
+        body: `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}`,
     });
+    for (const w of wants) {
+      const got = takeClaim(db, { ...w, agent: v.agent, taskId, cmdId: v.cmd_id });
+      if (!got.ok) {
+        // 取引ごと巻き戻す。半端に取り置いたまま振らぬため。
+        //
+        // 検めと取り置きを別に書かない。別に書くと二つの経路が生まれ、
+        // 片方だけ直る筋ができる（実際、先に書いた前検めは
+        // ここと同じことをしており、外しても試験が赤にならなかった）。
+        result = { ok: false, message: `${got.message}\n\n  振っておらぬ。` };
+        throw new Error('claim-conflict');
+      }
+    }
     journal(db, {
       actor,
       action: wantsBypass ? 'task.assign.bypass' : 'task.assign',
@@ -291,8 +319,12 @@ export function assignTask(
           ? ` reason=${JSON.stringify(input['reason'])} 迂回時の家老=[${observeBypassed(db, ASSIGNER)}]`
           : ''),
     });
-    result = { ok: true, id: taskId };
-  });
+      result = { ok: true, id: taskId };
+    });
+  } catch (e) {
+    // 取り置きの割り込みは result に理由が入っておる。それ以外は投げ直す。
+    if (!(e instanceof Error) || e.message !== 'claim-conflict') throw e;
+  }
   if (result.ok) signal(db);
   // 取引の中で断った場合はここへ落ちる（acquire が false を返した筋）。
   return result;

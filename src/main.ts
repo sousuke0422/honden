@@ -18,6 +18,7 @@ import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, forget, markSince } from './nudge';
 import { getMode, setMode, describe as describeMode } from './mode';
+import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
 import { roster as rosterOf } from './roster';
 import { leaseState, expired, release } from './lease';
@@ -362,6 +363,10 @@ const USAGE = `honden — 多エージェント運用の差配層
     priority: high
   EOF
   honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
+                     [--workspace .worktrees/x] [--branch feat/y]   重なれば振れぬ
+  honden claim                                         誰がどこを握っておるか
+  honden claim check [path|branch] <場所>              そこが空いておるか
+  honden claim release <番号> [--force --reason "…"]   手放す／譲らせる
   honden task assign … --bypass --reason "…"                 家老を通さぬ迂回（将軍だけ）
   honden cmd show <cmd_id>                             受け入れ条件と覆い具合
   honden cmd done <cmd_id> [--bypass --reason "…"]     司令を閉じる（家老だけ・門あり）
@@ -578,6 +583,56 @@ export function runMode(
   return { code: EXIT_OK, out: describeMode(r.state!) + (r.message ?? '') };
 }
 
+/** `honden claim` — いま誰がどこを握っておるか。 */
+export function runClaimList(dbPath: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  const held = liveClaims(db);
+  if (held.length === 0) return { code: EXIT_OK, out: '  握られておる場所は無い。' };
+  const lines = held.map(
+    (c) => `  #${c.id} [${c.kind}] ${c.value}\n      ${c.agent} が ${c.at} から（${c.taskId ?? '仕事不明'}）`,
+  );
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
+
+/**
+ * `honden claim check <場所>` — そこが空いておるか。
+ *
+ * 足軽が自分で問える。他人の持ち場を読まずに重なりの有無だけ分かるので、
+ * 現行の「衝突の恐れに気づけ、だが他人のファイルは読むな」という
+ * 守れぬ決めが守れる形になる。
+ */
+export function runClaimCheck(dbPath: string | undefined, kind: string | undefined, value: string | undefined): RunResult {
+  if (!value) {
+    return {
+      code: EXIT_INVALID,
+      err: '検める場所を渡されよ。例: honden claim check path .worktrees/vrt-fix32',
+    };
+  }
+  const k = (kind ?? 'path') as Kind;
+  const db = openStore({ path: dbPath });
+  const held = claimConflicts(db, k, value);
+  if (held.length === 0) {
+    return { code: EXIT_OK, out: `  空いておる: ${normClaim(k, value)}` };
+  }
+  return { code: EXIT_INVALID, err: explainConflict(k, normClaim(k, value), held) };
+}
+
+/** `honden claim release <番号>` — 手放す。他人のものは force と理由が要る。 */
+export function runClaimRelease(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  id: string | undefined,
+  force: boolean,
+  reason: string | undefined,
+): RunResult {
+  if (!selfId) return { code: EXIT_INVALID, err: '誰であるか確かめられぬ。HONDEN_AGENT_ID を置かれよ。' };
+  const n = Number(id);
+  if (!Number.isInteger(n)) return { code: EXIT_INVALID, err: `取り置きの番号が数でない: ${JSON.stringify(id)}` };
+  const db = openStore({ path: dbPath });
+  const r = releaseClaim(db, { id: n, by: selfId, force, reason });
+  return r.ok ? { code: EXIT_OK, out: `  #${n} を手放した。` } : { code: EXIT_INVALID, err: r.message };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -635,6 +690,22 @@ export async function main(argv: string[]): Promise<number> {
   if (rest[0] === 'cmd' && rest[1] === 'new') {
     const stdin = await readStdin();
     return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'claim') {
+    if (rest[1] === 'check') {
+      // kind を省けば path。worktree の話が大半ゆえ。
+      const hasKind = rest[2] === 'path' || rest[2] === 'branch';
+      return emit(runClaimCheck(dbPath, hasKind ? rest[2] : 'path', hasKind ? rest[3] : rest[2]));
+    }
+    if (rest[1] === 'release') {
+      const force = flags['force'] === 'true';
+      const reason = flags['reason'];
+      delete flags['force'];
+      delete flags['reason'];
+      return emit(runClaimRelease(dbPath, selfId(), rest[2], force, reason));
+    }
+    return emit(runClaimList(dbPath));
   }
 
   if (rest[0] === 'mode') {

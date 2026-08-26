@@ -41,6 +41,7 @@ import { tx, journal } from './store';
 import { validate, explain, checkReason, type Schema } from './validate';
 import { roster, roleOf } from './roster';
 import { deliver, signal } from './inbox';
+import { releaseAllOf } from './claim';
 
 /** 足軽の報せ先。現行 F001 と同じ。 */
 export const WORKER_REPORTS_TO = 'gunshi';
@@ -278,11 +279,16 @@ export function submitReport(
       sender: selfId,
       body: `${selfId}、${v.task_id} を ${v.status} として報せる。品質の検めを仰ぐ。\n\n${v.summary}`,
     });
+    // 納めたら場所を手放す。解かぬと、その worktree が永久に握られたままになり、
+    // 次の仕事が振れなくなる。blocked は握ったまま——まだ仕掛かっておるゆえ。
+    const freed = v.status === 'blocked' ? 0 : releaseAllOf(db, selfId, new Date(at));
     journal(db, {
       actor: selfId,
       action: `report.submit.${v.status}`,
       target: v.task_id,
-      detail: `cmd=${cmdId ?? 'なし'} 覆った条件=[${[...norm.map.keys()].sort((a, b) => a - b).join(',')}]`,
+      detail:
+        `cmd=${cmdId ?? 'なし'} 覆った条件=[${[...norm.map.keys()].sort((a, b) => a - b).join(',')}]` +
+        (freed > 0 ? ` 手放した場所=${freed}件` : ''),
     });
   });
 

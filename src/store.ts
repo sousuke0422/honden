@@ -305,6 +305,31 @@ CREATE TABLE IF NOT EXISTS report_check (
   PRIMARY KEY (report_id, idx)
 );
 
+-- 場所の取り置き。
+--
+-- 貸与 (task.holder) が答えるのは「その足軽が塞がっておるか」であって、
+-- 「その worktree を誰が握っておるか」ではない。別の足軽が同じ木を触れる。
+--
+-- 現行はこれを散文で守っている。だが守れない。
+--   instructions/ashigaru.md:168  他の足軽のファイルを絶対に読むな
+--   instructions/ashigaru.md RACE-001  衝突の恐れがあれば家老へ伺え
+-- 足軽は他人の持ち場を見られぬので、恐れに気づけない。見えるのは家老だけで、
+-- その拠り所は記憶しかない。実際に merge commit を生んだ (2026-08-25)。
+--
+-- 取り置きは重なりで判ずる。path は前置きの一致まで見る——
+-- .worktrees/x を握っておる者が居れば .worktrees/x/apps も重なる。
+CREATE TABLE IF NOT EXISTS claim (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind        TEXT NOT NULL CHECK (kind IN ('path','branch')),
+  value       TEXT NOT NULL,
+  agent       TEXT NOT NULL,
+  task_id     TEXT,
+  cmd_id      TEXT,
+  at          TEXT NOT NULL,
+  released_at TEXT              -- null なら握っておる
+);
+CREATE INDEX IF NOT EXISTS ix_claim_live ON claim(released_at, kind);
+
 -- 環境そのものの決め事。いまのところ運用の様態だけ。
 --
 -- 正本に置くのは、芯も手も家老も同じものを見る必要があるゆえ。
