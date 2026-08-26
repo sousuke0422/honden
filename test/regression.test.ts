@@ -16,6 +16,10 @@ import { setMode } from '../src/mode';
 import { take, live as liveClaims, release as releaseClaim } from '../src/claim';
 import { release as releaseLease, renew as renewLease } from '../src/lease';
 import { ingestTask } from '../src/ingest';
+import { inboxWrite } from '../src/cli';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { reportCollision } from '../src/peer';
 import type { Pane } from '../src/pane';
 
@@ -370,5 +374,85 @@ describe('案内した道が実在すること', () => {
     const r = assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: cmdId, title: '一', minutes: 'いっぱい' });
     expect(r.ok).toBe(false);
     expect(r.message).toContain('正の数');
+  });
+});
+
+describe('指揮系統を宛先の検めへ（F001）', () => {
+  const dir = () => mkdtempSync(join(tmpdir(), 'honden-route-'));
+  function withDb() {
+    const path = join(dir(), 'h.db');
+    const db = openStore({ path });
+    tx(db, () =>
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+        { id: 'gunshi', role: 'commander', cli: 'claude', model: null },
+        { id: 'ashigaru1', role: 'worker', cli: 'claude', model: null },
+        { id: 'ashigaru2', role: 'worker', cli: 'claude', model: null },
+      ]),
+    );
+    return { db, path };
+  }
+  const write = (path: string, from: string, to: string, type = 'report_received') =>
+    inboxWrite(path, { flags: { to, from, type, body: '用件' } }, false, {
+      insideFormation: true,
+      selfId: from,
+    });
+
+  test('足軽は将軍へ直に報せられぬ', () => {
+    const { path } = withDb();
+    const r = write(path, 'ashigaru1', 'shogun');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('F001');
+    expect(r.err).toContain('report submit');
+  });
+
+  test('足軽から足軽へは直に送れぬ', () => {
+    const { path } = withDb();
+    const r = write(path, 'ashigaru1', 'ashigaru2');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('家老の役目');
+    expect(r.err).toContain('peek');
+  });
+
+  test('足軽は clear_command を撃てぬ', () => {
+    const { path } = withDb();
+    const r = write(path, 'ashigaru1', 'ashigaru2', 'clear_command');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('文脈が消える');
+  });
+
+  test('足軽から軍師への報せは通る。それが常道ゆえ', () => {
+    const { path } = withDb();
+    expect(write(path, 'ashigaru1', 'gunshi').code).toBe(0);
+  });
+
+  test('足軽から家老への報せも通る', () => {
+    const { path } = withDb();
+    expect(write(path, 'ashigaru1', 'karo').code).toBe(0);
+  });
+
+  test('家老は clear_command を撃てる', () => {
+    const { path } = withDb();
+    expect(write(path, 'karo', 'ashigaru1', 'clear_command').code).toBe(0);
+  });
+
+  test('布陣の外からの差出人は、この検めで縛らぬ', () => {
+    // review_session のような外の名は名簿に無い。指揮系統の中に居らぬので
+    // 上下を当てはめようがなく、外からの守りは別に在る
+    // （役職を騙れぬ・clear_command を撃てぬ）。
+    const { path } = withDb();
+    const r = inboxWrite(
+      path,
+      { flags: { to: 'shogun', from: 'review_session', type: 'report_received', body: '外からの報せ' } },
+      false,
+      { insideFormation: false, selfId: undefined },
+    );
+    expect(r.code).toBe(0);
+  });
+
+  test('将軍から足軽へは通る（指揮系統は下りゆえ）', () => {
+    const { path } = withDb();
+    expect(write(path, 'shogun', 'ashigaru1', 'cmd_new').code).toBe(0);
   });
 });

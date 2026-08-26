@@ -28,7 +28,7 @@
  */
 
 import { openStore, tx, journal } from './store';
-import { roster, isEmpty } from './roster';
+import { roster, isEmpty, roleOf } from './roster';
 import { summarize, nudgeText, deliver, signal } from './inbox';
 import { isAutonomous } from './mode';
 import { validate, explain, type Schema } from './validate';
@@ -220,6 +220,16 @@ export function inboxWrite(
 
   const v = picked.value as { to: string; from: string; type: string; body: string };
 
+  // 指揮系統を、宛先の検めとして置く。
+  //
+  // report submit は宛先を取らぬので飛び越えようがないが、**inbox write は
+  // 宛先を取る**。塞がねば、report 経路の守りがこちらで迂回できる。
+  // 現行 instructions/ashigaru.md の F001（将軍へ直に報せるな）は散文のままで、
+  // 足軽→将軍の直訴も、足軽→足軽の clear_command（他人のセッションを消す）も
+  // 布陣の中なら通っていた。
+  const routing = checkRoute(v.from, v.to, v.type, known);
+  if (routing) return { code: EXIT_INVALID, err: `${routing}\n  書き込みは行っておらぬ。` };
+
   // 家老から将軍への報せは、殿が在席の間は開けぬ。
   //
   // 現行 instructions/karo.md の `to_shogun: false` と同じ決め。
@@ -388,4 +398,57 @@ export function inboxUnread(dbPath: string | undefined, agent: string): RunResul
   // 合図の形は 1 つに揃える（src/inbox.ts の nudgeText）。同じものに 2 つの
   // 書き方があると、指示書とツールの出力が食い違う。
   return { code: EXIT_OK, out: `  ${agent}: ${nudgeText(summarize(db, agent))}` };
+}
+
+
+/**
+ * 誰が誰へ、どの種別を送れるか。
+ *
+ * 現行の指揮系統をそのまま写す。禁じておるのは 3 つ。
+ *
+ *   一、足軽から将軍への直訴（F001）——軍師へ回す
+ *   二、足軽から足軽への差し向け——調整は家老の役目
+ *   三、上役以外からの clear_command——相手のセッションを消すゆえ
+ *
+ * 布陣の外からの差出人（review_session など）は名簿に無いので、
+ * ここでは縛らない。外からの守りは別に在る（役職を騙れぬ・clear_command を撃てぬ）。
+ */
+export function checkRoute(
+  from: string,
+  to: string,
+  type: string,
+  known: readonly string[],
+): string | null {
+  const isAgent = (x: string) => known.includes(x);
+  if (!isAgent(from)) return null; // 布陣の外。別の守りが効く
+
+  const fromRole = roleOf(from);
+
+  if (type === 'clear_command' && fromRole !== 'commander') {
+    return (
+      `${from} は clear_command を撃てぬ。相手の文脈が消えるゆえ。\n` +
+      '  やり直させたいなら家老へ回されよ。新しい仕事として振り直すのが常道である\n' +
+      '  （現行 CLAUDE.md の Redo Protocol）。'
+    );
+  }
+
+  if (fromRole !== 'worker') return null;
+
+  if (to === 'shogun') {
+    return (
+      `${from} が将軍へ直に報せることはできぬ（現行 ashigaru.md の F001）。\n` +
+      '  軍師へ回されよ: honden report submit（宛先は要らぬ）。\n' +
+      '  軍師が検め、家老が裁き、将軍へは dashboard を通る。'
+    );
+  }
+
+  if (isAgent(to) && roleOf(to) === 'worker' && to !== from) {
+    return (
+      `${from} から ${to} へ直に送ることはできぬ。\n` +
+      '  足軽同士の調整は家老の役目である。重なりを見つけたなら\n' +
+      `  honden peek ${to} --reason "…" で検めよ——家老へは自ずと報せが行く。`
+    );
+  }
+
+  return null;
 }

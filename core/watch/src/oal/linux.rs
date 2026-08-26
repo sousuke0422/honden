@@ -11,6 +11,29 @@ pub struct Linux;
 
 pub struct LinuxWatch {
     ino: Inotify,
+    /// 見張る先。起きるたびに付け直すために持つ。
+    paths: Vec<PathBuf>,
+    mask: u32,
+}
+
+impl LinuxWatch {
+    /// 見張りを付け直す。
+    ///
+    /// **inotify の見張りは inode に付く。** 見張っておるファイルが消されて
+    /// 作り直されると、新しい inode には何も付いておらず、以後は静かに黙る。
+    /// 合図の口 (`<正本>.signal`) は書き換えで作り直されうるので、この筋は実際に起きる。
+    ///
+    /// `inotify_add_watch` は同じ inode へ付け直すと同じ番号を返すだけで、
+    /// 何度呼んでも害が無い。ゆえに起きるたびに無条件で付け直す——
+    /// どの名が動いたかを見て分岐すると、見落とした名が黙って落ちる。
+    ///
+    /// 付け直しに失敗しても倒れない。**芯が落ちると誰も起こせなくなる。**
+    /// 次に起きた時にまた試す。
+    fn rearm(&self) {
+        for p in &self.paths {
+            let _ = self.ino.add(p, self.mask);
+        }
+    }
 }
 
 impl Watch for LinuxWatch {
@@ -19,7 +42,10 @@ impl Watch for LinuxWatch {
             None => -1,
             Some(d) => d.as_millis().min(i32::MAX as u128) as i32,
         };
-        self.ino.wait(ms)
+        let got = self.ino.wait(ms)?;
+        // 起きた後で付け直す。消して作り直されておっても、次からは拾える。
+        self.rearm();
+        Ok(got)
     }
 }
 
@@ -49,7 +75,7 @@ impl Oal for Linux {
         if ok == 0 {
             return Err(io::Error::new(io::ErrorKind::NotFound, "見張れる先が一つも無い"));
         }
-        Ok(LinuxWatch { ino })
+        Ok(LinuxWatch { ino, paths: paths.to_vec(), mask })
     }
 
     fn single_instance(&self, path: &Path) -> io::Result<Option<FileLock>> {
@@ -68,5 +94,42 @@ impl Oal for Linux {
             ok: o.status.success(),
             status: o.status.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// 実の inotify を使う。時間に依るので待ちは長めに取り、
+    /// 回る数は必ず有限にする（無限に回して機械を焼いた前例がある）。
+    #[test]
+    fn 消して作り直されても見張り続ける() {
+        let dir = std::env::temp_dir().join(format!("honden-watch-rearm-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("x.signal");
+        fs::write(&f, "1").unwrap();
+
+        let mut w = Linux.watch(&[f.clone()]).unwrap();
+
+        // 合図の口を消して作り直す。新しい inode には何も付いておらぬ。
+        fs::remove_file(&f).unwrap();
+        fs::write(&f, "2").unwrap();
+        // 消えたことの通知を吸う（ここで付け直しが走る）
+        let _ = w.wait(Some(Duration::from_millis(300))).unwrap();
+
+        // 新しい inode へ書く。付け直しておらねば、ここで黙る。
+        fs::write(&f, "3").unwrap();
+        let got = w.wait(Some(Duration::from_millis(1500))).unwrap();
+
+        let _ = fs::remove_dir_all(&dir);
+        assert!(got, "作り直された後の書き込みを拾えておらぬ");
+    }
+
+    #[test]
+    fn 見張れる先が一つも無ければ断る() {
+        assert!(Linux.watch(&[PathBuf::from("/そのような先は無い")]).is_err());
     }
 }

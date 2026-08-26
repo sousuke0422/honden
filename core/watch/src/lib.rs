@@ -362,9 +362,9 @@ fn spin<O: Oal>(
                     spins += 1;
                     if spins >= SPIN_LIMIT {
                         return Err(format!(
-                            "待っても時が進まぬ。{SPIN_LIMIT} 回続いたゆえ止める。\n\
-                             　見張る口が timeout ぶん眠っておらぬ（Watch::wait の約束）。\n\
-                             　このまま回すと密なループになり、機械ごと持っていかれる。"
+                            "待っても時が進まぬ。{SPIN_LIMIT} 回続いたゆえ止める。\n  \
+                             見張る口が timeout ぶん眠っておらぬ（Watch::wait の約束）。\n  \
+                             このまま回すと密なループになり、機械ごと持っていかれる。"
                         ));
                     }
                 }
