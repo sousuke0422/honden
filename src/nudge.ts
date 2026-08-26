@@ -25,8 +25,17 @@
  * 誰にも届かず、パイプラインが朝まで止まる
  * (memory: shogun_night_autonomous_escalation)。
  *
- * 判断は運用の様態 (src/mode.ts) 一つで決まる。旗にすると「例外的に起こす」と
+ * 判断は運用の様態 (src/mode.ts) で決まる。旗にすると「例外的に起こす」と
  * 読めるが、自律運用では起こすのが常道であって例外ではない。
+ *
+ * ## 一回きりの明示は、様態とは別に要る
+ *
+ * 「いまこの件だけ将軍を起こせ」と明示の指示が出ることがある。
+ * これを様態の切り替えで代用すると、**戻し忘れが常態化する**——
+ * 一件のために自律へ移し、そのまま殿が席へ戻られる。
+ *
+ * ゆえに `--wake-shogun` を別に置く。効くのはその一回だけで、
+ * 正本には何も残さない（様態は動かない）。台帳には別の名で残す。
  */
 
 import type { Database } from 'bun:sqlite';
@@ -77,6 +86,13 @@ export interface Plan {
   hardRecovery: boolean;
   /** 次にこの相手を見るまでの間 (ms)。 */
   nextInMs: number;
+  /**
+   * 様態ではなく一回きりの明示で撃つのか。
+   *
+   * 台帳へ別の名で残すために持つ。後から「なぜ殿の在席中に
+   * 将軍が起こされたか」を辿れるようにする。
+   */
+  byExplicitWake?: boolean;
 }
 
 interface State {
@@ -112,10 +128,10 @@ export function plan(
   now: Date = new Date(),
   // ペインの一覧は差し替えられるようにする。試験が tmux の在り様に
   // 左右されると、布陣が動くたびに赤くなる。
-  opts: { autonomous?: boolean; panes?: Map<string, Pane> } = {},
+  opts: { autonomous?: boolean; wakeShogun?: boolean; panes?: Map<string, Pane> } = {},
 ): Plan[] {
   const p = opts.panes ?? panes();
-  // 様態は正本から引く。旗で上書きできるのは試験と素振りのため。
+  // 様態は正本から引く。opts.autonomous は試験のための差し替え。
   const autonomous = opts.autonomous ?? isAutonomous(db, now);
   const out: Plan[] = [];
 
@@ -133,11 +149,11 @@ export function plan(
     let send = true;
     let reason: string | undefined;
 
-    if (entry.id === ATTENDED_SILENT && !autonomous) {
+    if (entry.id === ATTENDED_SILENT && !autonomous && !opts.wakeShogun) {
       send = false;
       reason =
         '殿が在席ゆえ撃たぬ。打ち込んでおる最中を潰す。' +
-        '（席を外されるなら honden mode autonomous --until 08:00）';
+        '（この一件だけなら --wake-shogun、席を外されるなら honden mode autonomous --until 08:00）';
     } else if (!pane) {
       send = false;
       reason = `${entry.id} のペインが見つからぬ。布陣に居らぬか、@agent_id が付いておらぬ。`;
@@ -156,15 +172,23 @@ export function plan(
       if (now.getTime() - last < RESET_COOLDOWN_MS) {
         // 文脈を消すのは重い。連発すると仕掛かりを繰り返し捨てる。
         // 消せぬ間は素の合図へ落とす。黙るのではない。
-        out.push(build(entry.id, entry.cli, pane, s, 2, true, undefined, now, st));
+        out.push(mark(build(entry.id, entry.cli, pane, s, 2, true, undefined, now, st)));
         continue;
       }
     }
 
-    out.push(build(entry.id, entry.cli, pane, s, level, send, reason, now, st));
+    out.push(mark(build(entry.id, entry.cli, pane, s, level, send, reason, now, st)));
   }
 
   return out;
+
+  /** 一回きりの明示で撃った将軍の分に印をつける。 */
+  function mark(pl: Plan): Plan {
+    if (pl.agent === ATTENDED_SILENT && pl.send && !autonomous && opts.wakeShogun) {
+      pl.byExplicitWake = true;
+    }
+    return pl;
+  }
 }
 
 function build(
@@ -196,7 +220,7 @@ function build(
 }
 
 /** 撃った跡を残す。 */
-export function record(db: Database, p: Plan, now: Date): void {
+export function record(db: Database, p: Plan, now: Date, reason?: string): void {
   const at = now.toISOString();
   db.prepare(
     `INSERT INTO nudge(agent, since, last_at, last_level, last_reset_at)
@@ -210,9 +234,11 @@ export function record(db: Database, p: Plan, now: Date): void {
 
   journal(db, {
     actor: 'nudge',
-    action: p.level === 3 ? 'nudge.reset' : `nudge.L${p.level}`,
+    action: p.byExplicitWake ? 'nudge.wake_shogun' : p.level === 3 ? 'nudge.reset' : `nudge.L${p.level}`,
     target: p.agent,
-    detail: `unread=${p.unread} pane=${p.pane?.label ?? 'なし'} ${JSON.stringify(p.text)}`,
+    detail:
+      `unread=${p.unread} pane=${p.pane?.label ?? 'なし'} ${JSON.stringify(p.text)}` +
+      (p.byExplicitWake && reason ? ` reason=${JSON.stringify(reason)}` : ''),
   });
 }
 

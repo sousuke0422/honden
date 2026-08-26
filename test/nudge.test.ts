@@ -353,3 +353,60 @@ describe('書き込み側も同じ様態で判ずる', () => {
     expect(write(db, dbPath, 'gunshi', 'shogun').code).toBe(0);
   });
 });
+
+describe('一回きりの明示（--wake-shogun）', () => {
+  const withShogunUnread = () => {
+    const db = seeded();
+    unreadFor(db, ATTENDED_SILENT);
+    markSince(db, ATTENDED_SILENT, T0);
+    return db;
+  };
+
+  test('在席のままでも、明示があれば起こす', () => {
+    const db = withShogunUnread();
+    const p = find(plan(db, T0, { panes: PANES, wakeShogun: true }), ATTENDED_SILENT)!;
+    expect(p.send).toBe(true);
+    expect(p.byExplicitWake).toBe(true);
+  });
+
+  test('正本の様態は動かさぬ。次に呼べばまた撃たぬ', () => {
+    // 様態の切り替えで代用すると、一件のために自律へ移し、
+    // そのまま殿が席へ戻られる——戻し忘れが常態化する。
+    const db = withShogunUnread();
+    plan(db, T0, { panes: PANES, wakeShogun: true });
+    expect(getMode(db, T0).mode).toBe('attended');
+    expect(find(plan(db, T0, { panes: PANES }), ATTENDED_SILENT)!.send).toBe(false);
+  });
+
+  test('台帳には別の名で残る', () => {
+    const db = withShogunUnread();
+    const p = find(plan(db, T0, { panes: PANES, wakeShogun: true }), ATTENDED_SILENT)!;
+    record(db, p, T0, '殿の明示: cmd_710 の裁定を仰げ');
+    const led = db.query("SELECT action, detail FROM ledger WHERE action = 'nudge.wake_shogun'").all() as {
+      action: string;
+      detail: string;
+    }[];
+    expect(led.length).toBe(1);
+    expect(led[0]!.detail).toContain('殿の明示');
+  });
+
+  test('自律運用では印がつかぬ。そちらは常道ゆえ', () => {
+    const db = withShogunUnread();
+    setMode(db, 'shogun', 'autonomous', { until: '6h', now: T0 });
+    const p = find(plan(db, T0, { panes: PANES, wakeShogun: true }), ATTENDED_SILENT)!;
+    expect(p.send).toBe(true);
+    expect(p.byExplicitWake).toBeUndefined();
+    record(db, p, T0);
+    const led = db.query("SELECT action FROM ledger WHERE action LIKE 'nudge.%'").all() as { action: string }[];
+    expect(led.map((l) => l.action)).toEqual(['nudge.L1']);
+  });
+
+  test('明示があっても、ほかの門は生きておる', () => {
+    const db = seeded();
+    unreadFor(db, 'gunshi'); // PANES に居らぬ
+    markSince(db, 'gunshi', T0);
+    const p = find(plan(db, T0, { panes: PANES, wakeShogun: true }), 'gunshi')!;
+    expect(p.send).toBe(false);
+    expect(p.reason).toContain('ペインが見つからぬ');
+  });
+});

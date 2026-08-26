@@ -504,7 +504,8 @@ export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined
 export async function runNudge(
   dbPath: string | undefined,
   dryRun: boolean,
-  autonomous: boolean | undefined,
+  wakeShogun: boolean,
+  reason: string | undefined,
 ): Promise<RunResult> {
   const db = openStore({ path: dbPath });
   const now = new Date();
@@ -525,7 +526,7 @@ export async function runNudge(
   // 片付いた者の覚えは消す。残すと、次の未読がいきなり段 3 から始まる。
   forget(db, quiet);
 
-  const plans = plan(db, now, { autonomous });
+  const plans = plan(db, now, { wakeShogun });
   const lines: string[] = [];
 
   if (plans.length === 0) {
@@ -540,14 +541,17 @@ export async function runNudge(
       lines.push(`${head} → 撃たぬ（${p.reason}）`);
       continue;
     }
+    const why = p.byExplicitWake ? ' ※ 殿の在席中に、明示の指示で起こす' : '';
     if (dryRun) {
-      lines.push(`${head} → ${JSON.stringify(p.text)}${p.hardRecovery ? ' (先に Escape×2 + Ctrl-C)' : ''} [--dry-run ゆえ撃たぬ]`);
+      lines.push(
+        `${head} → ${JSON.stringify(p.text)}${p.hardRecovery ? ' (先に Escape×2 + Ctrl-C)' : ''}${why} [--dry-run ゆえ撃たぬ]`,
+      );
       continue;
     }
     const r = await send(p);
     if (r.ok) {
-      record(db, p, now);
-      lines.push(`${head} → 撃った: ${JSON.stringify(p.text)}`);
+      record(db, p, now, reason);
+      lines.push(`${head} → 撃った: ${JSON.stringify(p.text)}${why}`);
     } else {
       lines.push(`${head} → 撃てぬ: ${r.err}`);
     }
@@ -640,12 +644,12 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (rest[0] === 'nudge') {
-    // 様態は正本から引く。旗は素振りのための上書きだけ。
-    const forced =
-      flags['autonomous'] === 'true' ? true : flags['attended'] === 'true' ? false : undefined;
-    delete flags['autonomous'];
-    delete flags['attended'];
-    return emit(await runNudge(dbPath, dryRun, forced));
+    // 様態は正本から引く。--wake-shogun はこの一回だけの明示で、正本を動かさぬ。
+    const wakeShogun = flags['wake-shogun'] === 'true';
+    const reason = flags['reason'];
+    delete flags['wake-shogun'];
+    delete flags['reason'];
+    return emit(await runNudge(dbPath, dryRun, wakeShogun, reason));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'done') {
