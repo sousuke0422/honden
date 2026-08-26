@@ -10,12 +10,16 @@ import { expect, test, describe } from 'bun:test';
 import { openStore, tx, search as searchDocs, SearchError } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
-import { submitReport, submitQc, cmdDone } from '../src/report';
+import { submitReport, submitQc, cmdDone, coverageOf } from '../src/report';
 import { plan, record, markSince, startClocks, LEVEL_3_AFTER_MS, REPEAT_MS, ATTENDED_SILENT } from '../src/nudge';
 import { setMode } from '../src/mode';
 import { take, live as liveClaims, release as releaseClaim, normalize as normalizeClaim, caseInsensitiveAt } from '../src/claim';
+import { patchFiles } from '../src/patchfile';
+import { resolve as resolveIdentity } from '../src/identity';
+import { raise as raiseDecision, sweep as sweepDecisions } from '../src/decision';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { release as releaseLease, renew as renewLease } from '../src/lease';
-import { ingestTask } from '../src/ingest';
+import { ingestTask, ingestReport } from '../src/ingest';
 import { inboxWrite } from '../src/cli';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -539,5 +543,128 @@ describe('土地の測り方（推し量らぬこと）', () => {
         throw new Error('ENOENT');
       }),
     ).toBe(false);
+  });
+});
+
+describe('二度目の外部レビュー（2026-08-27）', () => {
+  test('影の取り込みが、honden の報告を潰さぬ', () => {
+    // 潰すと raw が YAML 原文へ化け、coverageOf の json_extract が倒れて
+    // その司令の門が丸ごと止まる。
+    const { db, cmdId } = seeded();
+    const a = assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: cmdId, title: '一' });
+    const r = submitReport(db, 'ashigaru1', {
+      task_id: a.id!,
+      status: 'done',
+      summary: '納めた',
+      acceptance: { 1: EV[1] },
+    });
+    submitQc(db, 'gunshi', { report_id: r.id, verdict: 'APPROVED', summary: '検めた' });
+    expect(coverageOf(db, cmdId).covered.size).toBe(1);
+
+    const n = ingestReport(
+      db,
+      '/q/reports/ashigaru1_report.yaml',
+      { worker_id: 'ashigaru1', task_id: a.id!, status: 'done' },
+      'worker_id: ashigaru1\n',
+    );
+    expect(n).toBe(0); // 影が退いておること
+    expect(() => coverageOf(db, cmdId)).not.toThrow();
+    expect(coverageOf(db, cmdId).covered.size).toBe(1);
+  });
+
+  test('行頭が -- の削除行を、ファイル頭と取り違えぬ', () => {
+    // SQL のコメント（-- ）を消す行は、差分上で「--- 」になる。
+    // ファイル頭と読むと hunk が打ち切られ、当たったと言いながら何も変えぬ。
+    const root = mkdtempSync(join(tmpdir(), 'honden-rx-'));
+    const body = ['前', '-- old comment', '後'].join('\n');
+    writeFileSync(join(root, 'a.sql'), body);
+    const r = patchFiles(
+      ['--- a/a.sql', '+++ b/a.sql', '@@ -1,3 +1,2 @@', ' 前', '--- old comment', ' 後'].join('\n'),
+      { root },
+    );
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(root, 'a.sql'), 'utf8')).not.toBe(body);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('同じファイルが差分に二度出ても、前の変更が消えぬ', () => {
+    const root = mkdtempSync(join(tmpdir(), 'honden-rx2-'));
+    writeFileSync(join(root, 'a.txt'), ['one', 'two', 'three', 'four'].join('\n'));
+    const r = patchFiles(
+      [
+        '--- a/a.txt', '+++ b/a.txt', '@@ -1,1 +1,1 @@', '-one', '+ONE',
+        '--- a/a.txt', '+++ b/a.txt', '@@ -4,1 +4,1 @@', '-four', '+FOUR',
+      ].join('\n'),
+      { root },
+    );
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(root, 'a.txt'), 'utf8').split('\n')).toEqual(['ONE', 'two', 'three', 'FOUR']);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('pane に問えなかった時、環境変数の名乗りへ落ちぬ', () => {
+    // 落ちると TMUX_PANE=%9999 HONDEN_AGENT_ID=karo で karo を騙れる。
+    const r = resolveIdentity({ tmuxPane: '%9999', agentIdEnv: 'karo', lookup: () => null });
+    expect(r.id).toBeUndefined();
+    expect(r.conflict).toContain('答えが返らぬ');
+  });
+
+  test('pane に名が無いのと、問えなかったのは別', () => {
+    const r = resolveIdentity({ tmuxPane: '%9', agentIdEnv: 'review_session', lookup: () => '' });
+    expect(r.id).toBe('review_session');
+  });
+
+  test('期限で倒れたら、上げた者へ返る', () => {
+    const { db } = seeded();
+    const T = new Date('2026-08-27T10:00:00Z');
+    const r = raiseDecision(db, 'karo', {
+      question: '入れ直すか',
+      choices: ['いま入れる', '待つ'],
+      fallback: '待つ',
+      until: '6h',
+    }, T);
+    const before = (db.query("SELECT count(*) c FROM inbox WHERE agent='karo'").get() as { c: number }).c;
+    sweepDecisions(db, new Date(T.getTime() + 7 * 3_600_000));
+    const after = (db.query("SELECT count(*) c FROM inbox WHERE agent='karo'").get() as { c: number }).c;
+    expect(after).toBe(before + 1);
+    const m = db.query("SELECT body FROM inbox WHERE agent='karo' ORDER BY rowid DESC LIMIT 1").get() as {
+      body: string;
+    };
+    expect(m.body).toContain('時間切れ');
+    void r;
+  });
+
+  test('sweep を二度回しても、倒れは一度きり', () => {
+    // これが検めておるのは冪等であって、競り合いではない。
+    // 競り合いの門（UPDATE の status 条件）は、SELECT が open だけを拾うゆえ
+    // 一つのプロセスからは届かぬ。src/decision.ts の註に残してある。
+    const { db } = seeded();
+    const T = new Date('2026-08-27T10:00:00Z');
+    raiseDecision(db, 'karo', { question: 'x', choices: ['a', 'b'], fallback: 'b', until: '6h' }, T);
+    const later = new Date(T.getTime() + 7 * 3_600_000);
+    sweepDecisions(db, later);
+    sweepDecisions(db, later);
+    const n = (db.query("SELECT count(*) c FROM ledger WHERE action='decision.expired'").get() as { c: number }).c;
+    expect(n).toBe(1);
+  });
+
+  test('遠隔の場所は cwd で汚さぬ', () => {
+    // coder:ws:/dir を path として均すと、起動ディレクトリが変わるたび別物になる。
+    expect(normalizeClaim('path', 'coder:yellow-louse-10:/home/coder/task')).toBe(
+      'coder:yellow-louse-10:/home/coder/task',
+    );
+  });
+
+  test('取り止めた司令は閉じられぬ', () => {
+    const { db, cmdId } = seeded();
+    db.run("UPDATE cmd SET status='cancelled' WHERE id=?", [cmdId]);
+    const d = cmdDone(db, 'karo', { cmd_id: cmdId });
+    expect(d.ok).toBe(false);
+    expect(d.message).toContain('cancelled');
+  });
+
+  test('布陣の外の名で門を叩いても、素の例外で落ちぬ', () => {
+    const { db } = seeded();
+    expect(() => releaseClaim(db, { id: 999, by: 'review_session' })).not.toThrow();
   });
 });

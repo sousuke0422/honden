@@ -29,6 +29,9 @@
 export interface Hunk {
   /** `@@ -a,b +c,d @@` の a。1 始まり。目安として使う。 */
   oldStart: number;
+  /** `@@ -a,b +c,d @@` の b と d。**hunk の終わりを知るために要る。** */
+  oldCount: number;
+  newCount: number;
   /** ' ' 文脈 / '-' 消す / '+' 足す。 */
   lines: { kind: ' ' | '-' | '+'; text: string }[];
 }
@@ -47,6 +50,9 @@ export function parseUnified(text: string): ParseResult {
   const patches: FilePatch[] = [];
   let cur: FilePatch | null = null;
   let hunk: Hunk | null = null;
+  // いま読んでおる hunk の、残りの旧行数と新行数。
+  let oldLeft = 0;
+  let newLeft = 0;
 
   const nameOf = (l: string): string =>
     l
@@ -57,6 +63,56 @@ export function parseUnified(text: string): ParseResult {
 
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i]!;
+    // hunk の中身を読んでおる間は、行頭が --- や +++ でもファイル頭とは見ない。
+    //
+    // 差分の中身にはそういう行がふつうに出る。SQL のコメント（`-- `）を消す行は
+    // 差分上で `--- ` になり、`++ x` を足す行は `+++ x` になる。
+    // 見分けるには **hunk の行数を数える**しかない——`@@ -a,b +c,d @@` の b と d である。
+    //
+    // 数えずにおったため、`-- ` を消す差分が「当たった」と言いながら
+    // 黙って何も変えなかった（外部レビューで再現・2026-08-27）。
+    // 「全部当たるか何も書かぬか」という約束を、静かに破っておった。
+    if (hunk) {
+      // @@ と diff --git は紛れようがない。中身の行は必ず ' ' '-' '+' が前に付くゆえ、
+      // 素の @@ や diff --git は境目である。
+      const isBoundary =
+        l.startsWith('@@') ||
+        l.startsWith('diff --git ') ||
+        // `--- ` の次が `+++ ` なら、それはファイルの頭。
+        // 中身の `-- x` と `++ y` が並ぶことは無いとは言えぬが、稀である。
+        (l.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ '));
+
+      if (!isBoundary) {
+        const k = l[0];
+        if (k === ' ' || k === '-' || k === '+') {
+          hunk.lines.push({ kind: k, text: l.slice(1) });
+          if (k !== '+') oldLeft--;
+          if (k !== '-') newLeft--;
+          continue;
+        }
+        if (l === '') {
+          // 末尾の空行は中身ではない
+          if (i === lines.length - 1) continue;
+          hunk.lines.push({ kind: ' ', text: '' });
+          oldLeft--;
+          newLeft--;
+          continue;
+        }
+        if (l.startsWith('\\')) continue; // "\ No newline at end of file"
+        // 印の無い行。数がまだ残っておるなら、それは壊れた差分である。
+        // 黙って閉じると fail-open になる——読めなかったものを、
+        // 「hunk が終わった」と取り違えて通してしまう。
+        if (oldLeft > 0 || newLeft > 0) {
+          return { ok: false, message: `hunk の中に読めぬ行がある: ${JSON.stringify(l)}` };
+        }
+        // 数を使い切った後の印の無い行は、差分の後ろに付いた文である。閉じてよい。
+      }
+      // 境目に来た。hunk を閉じる。
+      hunk = null;
+      oldLeft = 0;
+      newLeft = 0;
+    }
+
     if (l.startsWith('--- ')) {
       hunk = null;
       continue; // 名は +++ 側で採る
@@ -68,25 +124,20 @@ export function parseUnified(text: string): ParseResult {
       continue;
     }
     if (l.startsWith('@@')) {
-      const m = /^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@/.exec(l);
+      const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(l);
       if (!m) return { ok: false, message: `hunk の頭が読めぬ: ${l}` };
       if (!cur) return { ok: false, message: '--- / +++ より先に @@ が来ておる。どの欄への差分か分からぬ。' };
-      hunk = { oldStart: Number(m[1]), lines: [] };
+      // 数を省いた `@@ -1 +1 @@` は 1 行の意。
+      const oc = m[2] === undefined ? 1 : Number(m[2]);
+      const nc = m[4] === undefined ? 1 : Number(m[4]);
+      hunk = { oldStart: Number(m[1]), oldCount: oc, newCount: nc, lines: [] };
+      oldLeft = oc;
+      newLeft = nc;
       cur.hunks.push(hunk);
       continue;
     }
-    if (!hunk) continue; // 前置きは読み飛ばす
-    if (l === '' && i === lines.length - 1) continue; // 末尾の空行
-    if (l.startsWith('\\')) continue; // "\ No newline at end of file"
-    const k = l[0];
-    if (k === ' ' || k === '-' || k === '+') {
-      hunk.lines.push({ kind: k, text: l.slice(1) });
-    } else if (l === '') {
-      // 空の文脈行。diff は ' ' を落とすことがある
-      hunk.lines.push({ kind: ' ', text: '' });
-    } else {
-      return { ok: false, message: `hunk の中に読めぬ行がある: ${JSON.stringify(l)}` };
-    }
+    // ここへ来るのは hunk の外。前置き（diff --git など）は読み飛ばす。
+    void i;
   }
 
   if (patches.length === 0) return { ok: false, message: '差分に --- / +++ の組が無い。どの欄への差分か分からぬ。' };

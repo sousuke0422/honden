@@ -29,6 +29,22 @@ export interface RosterEntry {
 export class RosterError extends Error {}
 
 /** 名を役へ振り分ける。振り分けられない名は受け付けない。 */
+/**
+ * 名簿に置けぬ名なら null を返す。**投げぬ。**
+ *
+ * 門の中で `roleOf` を直に呼ぶと、布陣の外の名
+ * （`HONDEN_AGENT_ID=review_session`）で叩かれた時に、整えた断り文ではなく
+ * 素の例外で落ちる（外部レビューで指摘・2026-08-27）。
+ * 門は「上役か否か」を知りたいだけで、名簿に置けるかは別の問いである。
+ */
+export function roleOrNull(id: string): 'commander' | 'worker' | null {
+  try {
+    return roleOf(id);
+  } catch {
+    return null;
+  }
+}
+
 export function roleOf(id: string): 'commander' | 'worker' {
   if ((COMMANDERS as readonly string[]).includes(id)) return 'commander';
   const m = WORKER_RE.exec(id);

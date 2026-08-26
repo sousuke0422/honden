@@ -297,7 +297,9 @@ CREATE TABLE IF NOT EXISTS inbox (
   msg_type   TEXT NOT NULL,
   sender     TEXT NOT NULL,
   body       TEXT NOT NULL,
-  read       INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0,1))
+  read       INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0,1)),
+  -- report と同じ理由。影が実運用の報せを上書きせぬため。
+  origin     TEXT NOT NULL DEFAULT 'native' CHECK (origin IN ('native','import'))
 );
 CREATE INDEX IF NOT EXISTS ix_inbox_unread ON inbox(agent, read, created_at);
 
@@ -323,6 +325,12 @@ CREATE TABLE IF NOT EXISTS report (
   verdict    TEXT CHECK (verdict IS NULL OR verdict IN
                ('APPROVED','APPROVED_WITH_CONCERNS','CHANGES_REQUESTED','REJECTED')),
   cmd_id     TEXT,                     -- どの司令の下の報告か。門はここで引く
+  -- native: honden が受けた報告 / import: shogun 側 YAML から写したもの
+  --
+  -- 影が実運用の行を上書きすると、raw が YAML 原文に化けて
+  -- coverageOf の json_extract が倒れ、**その司令の門が丸ごと止まる**
+  -- （外部レビューで再現・2026-08-27）。影は影の行だけを触る。
+  origin     TEXT NOT NULL DEFAULT 'native' CHECK (origin IN ('native','import')),
   raw        TEXT NOT NULL,
   legacy     TEXT                      -- 型に収まらなかったものの JSON。null なら無し
 );
@@ -530,6 +538,8 @@ function migrate(db: Database): void {
   addColumn(db, 'report', 'cmd_id', 'TEXT');
   addColumn(db, 'claim', 'source', "TEXT NOT NULL DEFAULT 'declared'");
   addColumn(db, 'cmd_acceptance', 'changed_at', 'TEXT');
+  addColumn(db, 'report', 'origin', "TEXT NOT NULL DEFAULT 'native'");
+  addColumn(db, 'inbox', 'origin', "TEXT NOT NULL DEFAULT 'native'");
 
   // 受け入れ条件の番号を 1 始まりへ揃える。
   // 初期は配列の添字をそのまま入れており「条件 0」という言い方になっていた。

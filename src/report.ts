@@ -693,7 +693,11 @@ export function cmdDone(
     | { id: string; status: string }
     | null;
   if (!cmd) return { ok: false, message: `そのような司令は無い: ${cmdId}` };
-  if (cmd.status === 'done') return { ok: false, message: `${cmdId} は既に閉じてある。` };
+  if (cmd.status === 'done' || cmd.status === 'cancelled') {
+    // amend は done も cancelled も弾いておる。こちらだけ cancelled を通すと、
+    // 取り止めた司令を「閉じた」ことにできてしまう。揃える。
+    return { ok: false, message: `${cmdId} は既に ${cmd.status} である。` };
+  }
 
   const cov = coverageOf(db, cmdId);
   const blockers: string[] = [];

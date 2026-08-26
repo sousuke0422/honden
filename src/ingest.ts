@@ -57,12 +57,15 @@ export function ingestInbox(db: Database, path: string, doc: unknown): number {
   const msgs = (doc as { messages?: unknown[] })?.messages;
   if (!Array.isArray(msgs)) return 0;
 
+  // 影は影の報せだけを触る。実運用の報せに当たると、届いた本文が
+  // YAML から写したもので置き換わり、誰宛の何であったかが消える。
   const ins = db.prepare(
-    `INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,?)
+    `INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read, origin) VALUES (?,?,?,?,?,?,?,'import')
      ON CONFLICT(id) DO UPDATE SET
        agent = excluded.agent, created_at = excluded.created_at,
        msg_type = excluded.msg_type, sender = excluded.sender,
-       body = excluded.body, read = excluded.read`,
+       body = excluded.body, read = excluded.read
+     WHERE inbox.origin = 'import'`,
   );
   let n = 0;
   for (const raw of msgs) {
@@ -132,9 +135,22 @@ export function ingestReport(db: Database, path: string, doc: unknown, raw: stri
   const ok = v !== null && VERDICTS.has(v);
 
   // 同じ報告を二度入れない。task_id と agent で見分ける。
+  //
+  // **影の行だけを触る。** honden が受けた報告に当てると、raw が YAML 原文へ化け、
+  // coverageOf の json_extract が倒れて**その司令の門が丸ごと止まる**
+  // （外部レビューで再現・2026-08-27）。
+  //
+  // ingestTask には同じ門を足しておきながら、その註が名指ししておった
+  // report と inbox には足しておらなんだ。同じ型の見落としである。
   const dup = db
-    .query('SELECT id FROM report WHERE agent = ? AND task_id IS ?')
+    .query("SELECT id FROM report WHERE agent = ? AND task_id IS ? AND origin = 'import'")
     .get(agent, str(d['task_id'])) as { id: number } | null;
+
+  // 実運用の行が既に在るなら、影は退く。
+  const native = db
+    .query("SELECT id FROM report WHERE agent = ? AND task_id IS ? AND origin = 'native'")
+    .get(agent, str(d['task_id'])) as { id: number } | null;
+  if (native) return 0;
   const extra = legacy({ ...rest(d, REPORT_KEYS), ...(ok ? {} : { verdict: v }) });
 
   if (dup) {
@@ -147,7 +163,7 @@ export function ingestReport(db: Database, path: string, doc: unknown, raw: stri
     );
   } else {
     db.prepare(
-      'INSERT INTO report(agent, task_id, created_at, verdict, raw, legacy) VALUES (?,?,?,?,?,?)',
+      "INSERT INTO report(agent, task_id, created_at, verdict, raw, legacy, origin) VALUES (?,?,?,?,?,?,'import')",
     ).run(agent, str(d['task_id']), str(d['timestamp']), ok ? v : null, raw, extra);
   }
   return 1;

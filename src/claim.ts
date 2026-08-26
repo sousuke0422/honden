@@ -33,7 +33,7 @@
 import type { Database } from 'bun:sqlite';
 import { journal } from './store';
 import { checkReason } from './validate';
-import { roleOf } from './roster';
+import { roleOf, roleOrNull } from './roster';
 import { resolve, dirname, basename, join } from 'node:path';
 import { statSync, realpathSync } from 'node:fs';
 
@@ -83,6 +83,12 @@ export interface Claim {
 export function normalize(kind: Kind, value: string, cwd?: string): string {
   const v = value.trim();
   if (kind !== 'path') return v;
+  // `coder:<workspace>:<dir>` のような、この機の上に無い場所。
+  //
+  // cwd を前置すると「/tmp/coder:yellow-louse-10:/home/coder/task」になり、
+  // **家老の起動ディレクトリが変わるたび別の値**になる。見えるようにするという
+  // 唯一の目的が、同じ案件同士で一致せず崩れる（外部レビューで再現・2026-08-27）。
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v) && !v.startsWith('/')) return v;
   let p = resolve(cwd ?? process.cwd(), v).replace(/\/+$/, '');
   // symlink は実在する時だけ辿れる。これから切る worktree は実在せぬので、
   // 辿れぬことは異常ではない。
@@ -305,7 +311,7 @@ export function release(
     //
     // 案内文は「家老が」と言うておったのに、実装はどの名乗りでも通っていた。
     // 散文の禁止を構造へ移したと言いながら、移っておらなんだ。
-    if (roleOf(opts.by) !== 'commander') {
+    if (roleOrNull(opts.by) !== 'commander') {
       return {
         ok: false,
         held: [c],

@@ -993,7 +993,9 @@ export async function main(argv: string[]): Promise<number> {
       agentIdEnv: process.env.HONDEN_AGENT_ID,
       lookup: (pane) => {
         const p = Bun.spawnSync(['tmux', 'display-message', '-t', pane, '-p', '#{@agent_id}']);
-        return p.success ? new TextDecoder().decode(p.stdout) : '';
+        // 失敗を空文字にしてはならぬ。「引けなかった」と
+        // 「pane に @agent_id が無い」は別物である（src/identity.ts）。
+        return p.success ? new TextDecoder().decode(p.stdout) : null;
       },
     });
     // 食い違いは黙って解かぬ。片方を静かに採ると、誤りが誤りのまま通る。

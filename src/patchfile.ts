@@ -79,16 +79,28 @@ export function patchFiles(diff: string, opts: Options = {}): PatchFileResult {
       return { ok: false, message: `宛先がディレクトリである: ${fp.field}` };
     }
 
-    const original = readFileSync(target, 'utf8');
+    // 同じファイルが差分に二度出ることがある。二つの差分を繋いだ時や、
+    // git diff が同じ path を複数の塊で出す時。
+    //
+    // 毎回**元のファイル**から当てると、書き込みは後勝ちになり、
+    // 「2 本へ当てた」と言いながら**前の変更が黙って消える**
+    // （外部レビューで再現・2026-08-27）。既に staged なら、その結果へ重ねる。
+    const prior = staged.find((s) => s.path === target);
+    const original = prior ? prior.text : readFileSync(target, 'utf8');
     const got = applyHunks(original, fp.hunks, fp.field);
     if (!got.ok) return { ok: false, message: got.message };
 
-    staged.push({
-      path: target,
-      text: got.text,
-      before: original.split('\n').length,
-      after: got.text.split('\n').length,
-    });
+    if (prior) {
+      prior.text = got.text;
+      prior.after = got.text.split('\n').length;
+    } else {
+      staged.push({
+        path: target,
+        text: got.text,
+        before: original.split('\n').length,
+        after: got.text.split('\n').length,
+      });
+    }
   }
 
   const changed = staged.map((s) => ({ path: relative(root, s.path), before: s.before, after: s.after }));

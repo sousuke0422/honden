@@ -14,7 +14,8 @@
  * ## 食い違いは黙って解かない
  *
  * pane が言う名と env が言う名が違うなら、**どちらかが誤っている**。
- * 片方を静かに採ると、誤りが誤りのまま通る。断って人に見せる。
+ * 片方を静かに採ると、誤りが誤りのまま通る。
+ * **pane を採ったうえで、断りを出す**（拒みはせぬ。拒むと仕事が止まる）。
  *
  * ## TMUX_PANE が空のとき display-message を打たない
  *
@@ -37,8 +38,18 @@ export interface Identity {
 export interface Env {
   tmuxPane?: string;
   agentIdEnv?: string;
-  /** pane から @agent_id を引く。空文字なら未設定。 */
-  lookup: (pane: string) => string;
+  /**
+   * pane から @agent_id を引く。
+   *
+   *   文字列  引けた（空文字 = pane に @agent_id が付いておらぬ）
+   *   null    **引けなかった**（tmux が答えぬ・pane が無い）
+   *
+   * この二つを分けねばならぬ。一緒くたにすると、引けなかった時に
+   * 環境変数の名乗りへ落ち、**布陣の中で他人を騙れる**——
+   * `TMUX_PANE=%9999 HONDEN_AGENT_ID=karo` で karo になれてしまう
+   * （外部レビューで再現・2026-08-27）。
+   */
+  lookup: (pane: string) => string | null;
 }
 
 export function resolve(env: Env): Identity {
@@ -51,7 +62,20 @@ export function resolve(env: Env): Identity {
     return { id: fromEnv, source: fromEnv ? 'env' : 'none', insideFormation: false };
   }
 
-  const fromPane = env.lookup(pane).trim() || undefined;
+  const looked = env.lookup(pane);
+  if (looked === null) {
+    // 引けなかった。**環境変数へ落ちてはならぬ。**
+    // 落ちると、pane を偽って他人を名乗る道が開く。
+    return {
+      source: 'none',
+      insideFormation: true,
+      conflict:
+        `pane ${pane} に問うたが答えが返らぬ。誰であるか確かめられぬ。\n` +
+        '  pane の名が正しいか確かめられよ。\n' +
+        '  引けなかった時に環境変数の名乗りを採ると、布陣の中で他人を騙れる。',
+    };
+  }
+  const fromPane = looked.trim() || undefined;
 
   if (fromPane && fromEnv && fromPane !== fromEnv) {
     return {

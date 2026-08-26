@@ -30,7 +30,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { tx, journal } from './store';
-import { roleOf } from './roster';
+import { roleOf, roleOrNull } from './roster';
 import { deliver, signal } from './inbox';
 import { parseUntil } from './mode';
 
@@ -88,7 +88,7 @@ export function raise(
   now: Date = new Date(),
 ): Result {
   if (!selfId) return { ok: false, message: '誰であるか確かめられぬ。' };
-  if (roleOf(selfId) !== CAN_RAISE) {
+  if (roleOrNull(selfId) !== CAN_RAISE) {
     return {
       ok: false,
       message:
@@ -203,12 +203,37 @@ export function sweep(db: Database, now: Date = new Date()): Decision[] {
       now.toISOString(),
     ) as Record<string, unknown>[]
   ).map(row2dec);
+  const at = now.toISOString();
   for (const d of due) {
-    db.prepare("UPDATE decision SET status='expired', chose=?, decided_at=? WHERE id=?").run(
-      d.fallback,
-      now.toISOString(),
-      d.id,
-    );
+    // status を条件に入れる。二つのプロセスが同時に見た時、
+    // 二度倒れて台帳が二重になるのを防ぐ。
+    //
+    // **一つのプロセスの試験では、この門へ届かない。** 上の SELECT が
+    // open だけを拾うので、二度目の sweep はそもそも回らない。
+    // 届くのは、SELECT と UPDATE の間に別のプロセスが割り込んだ時だけ。
+    // 消さずに残すのは、その時に黙って二重に書かぬため。
+    const changed = db
+      .prepare("UPDATE decision SET status='expired', chose=?, decided_at=? WHERE id=? AND status='open'")
+      .run(d.fallback, at, d.id);
+    if (changed.changes === 0) continue; // 誰かが先に倒した／決めた
+
+    // **倒れたことを、上げた者へ返す。**
+    //
+    // 返さねば、倒れは誰にも観測されぬ。上げた家老は「既定が発効した」ことを
+    // 知る経路が無く、しかも倒れた瞬間 open の一覧から消える
+    // （外部レビューで指摘・2026-08-27）。
+    // 「書き換えれば必ず知らせが飛ぶ」という amend の原理と揃える。
+    deliver(db, {
+      id: `msg_${Date.now().toString(36)}${Bun.hash(String(d.id) + at).toString(36).slice(0, 4)}_de`,
+      agent: d.raisedBy,
+      at,
+      type: 'cmd_update',
+      sender: 'decision',
+      body:
+        `#${d.id} は期限が来て既定へ倒れた。\n\n問い: ${d.question}\n` +
+        `採られた既定: ${d.fallback}\n期限: ${d.expiresAt}\n\n` +
+        '  殿が決めたのではない。時間切れである。',
+    });
     journal(db, {
       actor: 'decision',
       action: 'decision.expired',
@@ -216,6 +241,7 @@ export function sweep(db: Database, now: Date = new Date()): Decision[] {
       detail: `既定へ倒れた: ${JSON.stringify(d.fallback)}`,
     });
   }
+  if (due.length > 0) signal(db);
   return due;
 }
 
@@ -265,7 +291,11 @@ export function decide(
 
   const at = now.toISOString();
   tx(db, () => {
-    db.prepare("UPDATE decision SET status='decided', chose=?, decided_by=?, decided_at=?, note=? WHERE id=?").run(
+    // status を条件に入れる。sweep と競り合った時、倒れた上から決したと
+    // 書けてしまうのを防ぐ。
+    db.prepare(
+      "UPDATE decision SET status='decided', chose=?, decided_by=?, decided_at=?, note=? WHERE id=? AND status='open'",
+    ).run(
       choice,
       selfId,
       at,

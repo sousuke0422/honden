@@ -45,7 +45,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
-import { journal } from './store';
+import { journal, tx } from './store';
 import { normalize, overlaps, type Kind, type Claim } from './claim';
 import { deliver, signal } from './inbox';
 import { ASSIGNER } from './dispatch';
@@ -289,6 +289,10 @@ export function reportCollision(
   if (last && now.getTime() - new Date(last.at).getTime() < REPORT_COOLDOWN_MS) return false;
 
   const at = now.toISOString();
+  // 報せと跡を一つの取引に。途中で落ちると片肺が残る——
+  // inbox にだけ在って台帳に無い、あるいはその逆。
+  // 他の書き込みは皆 tx の中に在るゆえ、ここだけ外に置く理由が無い。
+  tx(db, () => {
   deliver(db, {
     // 時刻だけでは足りぬ。同じミリ秒に 2 件出ると主キーが衝突して
     // 報せが丸ごと落ちる（dispatch で一度潰した型の残党）。
@@ -302,7 +306,8 @@ export function reportCollision(
       `${opts.detail}\n` +
       `honden history で経緯を辿れる。譲らせるなら honden claim release <番号> --force --reason "…"。`,
   });
-  journal(db, { actor: opts.from, action: 'collision.report', target: opts.with, detail: `key=${key}` });
+    journal(db, { actor: opts.from, action: 'collision.report', target: opts.with, detail: `key=${key}` });
+  });
   signal(db);
   return true;
 }

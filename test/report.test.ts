@@ -349,7 +349,7 @@ describe('受け入れ条件の門', () => {
     const { db, cmdId, reportId } = ready();
     submitQc(db, 'gunshi', { report_id: String(reportId), verdict: 'APPROVED', summary: '検めた' });
     cmdDone(db, 'karo', { cmd_id: cmdId });
-    expect(cmdDone(db, 'karo', { cmd_id: cmdId }).message).toContain('既に閉じてある');
+    expect(cmdDone(db, 'karo', { cmd_id: cmdId }).message).toContain('既に done である');
   });
 
   test('閉じても将軍の inbox は鳴らさぬ', () => {
