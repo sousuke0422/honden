@@ -581,9 +581,14 @@ export function coverageOf(db: Database, cmdId: string): Coverage {
   const rows = db
     .query(
       `SELECT ra.idx idx, ra.evidence evidence, r.id rid, r.agent agent
-         FROM report_acceptance ra JOIN report r ON r.id = ra.report_id
+         FROM report_acceptance ra
+         JOIN report r ON r.id = ra.report_id
+         JOIN cmd_acceptance ca ON ca.cmd_id = r.cmd_id AND ca.idx = ra.idx
         WHERE r.cmd_id = ? AND r.verdict IS NULL
           AND json_extract(r.raw, '$.status') = 'done'
+          -- 条件の文言が変わる前に集めた証拠は、変わった後の条件を覆っておらぬ。
+          -- 消しはせぬ（なぜ覆いが減ったか分からなくなる）。数えぬだけである。
+          AND (ca.changed_at IS NULL OR r.created_at >= ca.changed_at)
           AND EXISTS (
             SELECT 1 FROM report q
              WHERE q.cmd_id = r.cmd_id AND q.task_id = r.task_id
@@ -600,8 +605,11 @@ export function coverageOf(db: Database, cmdId: string): Coverage {
     (
       db
         .query(
-          `SELECT DISTINCT ra.idx idx FROM report_acceptance ra JOIN report r ON r.id = ra.report_id
-            WHERE r.cmd_id = ? AND r.verdict IS NULL AND json_extract(r.raw, '$.status') = 'done'`,
+          `SELECT DISTINCT ra.idx idx FROM report_acceptance ra
+             JOIN report r ON r.id = ra.report_id
+             JOIN cmd_acceptance ca ON ca.cmd_id = r.cmd_id AND ca.idx = ra.idx
+            WHERE r.cmd_id = ? AND r.verdict IS NULL AND json_extract(r.raw, '$.status') = 'done'
+              AND (ca.changed_at IS NULL OR r.created_at >= ca.changed_at)`,
         )
         .all(cmdId) as { idx: number }[]
     ).map((r) => r.idx),

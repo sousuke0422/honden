@@ -18,6 +18,7 @@ import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
+import { amendCmd, workersOn } from './amend';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
 import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
@@ -385,6 +386,12 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden peek <agent> --reason "…"                     他の者の持ち場を覗く（理由必須・台帳に残る）
   honden history [path|branch] <場所>                  そこで何が起きたのかを辿る
   honden task assign … --bypass --reason "…"                 家老を通さぬ迂回（将軍だけ）
+  honden cmd amend <<'EOF'                             途中で書き換える（知らせが同時に飛ぶ）
+    cmd_id: cmd_713
+    reason: skills が whitelist gitignore であることを見落としておった
+    acceptance_criteria:
+      - …
+  EOF
   honden cmd show <cmd_id>                             受け入れ条件と覆い具合
   honden cmd done <cmd_id> [--bypass --reason "…"]     司令を閉じる（家老だけ・門あり）
   honden report submit <<'EOF'                          足軽が報せる → 軍師へ自動で行く
@@ -819,6 +826,32 @@ export function runLeaseRenew(
   return { code: EXIT_OK, out: `  ${selfId} の貸与を ${r.lease?.leaseUntil} まで延ばした。` };
 }
 
+/** `honden cmd amend` — 途中で書き換える。知らせは同じ取引で飛ぶ。 */
+export function runCmdAmend(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  src: InputSource,
+  dryRun: boolean,
+): RunResult {
+  const picked = pickInput(src);
+  if (!picked.ok) return { code: EXIT_INVALID, err: picked.message };
+  if (dryRun) {
+    const db = openStore({ path: dbPath });
+    const id = typeof picked.value['cmd_id'] === 'string' ? picked.value['cmd_id'] : '';
+    const w = id ? workersOn(db, id) : [];
+    return {
+      code: EXIT_OK,
+      out:
+        `  読み取り: ${Object.keys(picked.value).join(' / ')}\n` +
+        `  知らせる先: karo${w.length > 0 ? ' / ' + w.map((x) => x.agent).join(' / ') : '（働いておる者は無し）'}\n` +
+        '  → 書き込んでおらぬ (--dry-run)',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = amendCmd(db, selfId, picked.value);
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -942,6 +975,11 @@ export async function main(argv: string[]): Promise<number> {
     delete flags['wake-shogun'];
     delete flags['reason'];
     return emit(await runNudge(dbPath, dryRun, wakeShogun, reason, selfId()));
+  }
+
+  if (rest[0] === 'cmd' && rest[1] === 'amend') {
+    const stdin = await readStdin();
+    return emit(runCmdAmend(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'done') {

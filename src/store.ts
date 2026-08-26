@@ -147,12 +147,35 @@ CREATE TABLE IF NOT EXISTS cmd (
 );
 
 -- 受け入れ条件。cmd 1 件に対して順序つきで並ぶ。
+--
+-- changed_at は、その条件の文言が最後に変わった時刻。
+-- **文言が変わる前に集めた証拠は、変わった後の条件を覆っていない。**
+-- 覆いを数える所でここを見る (src/report.ts)。
 CREATE TABLE IF NOT EXISTS cmd_acceptance (
-  cmd_id  TEXT NOT NULL REFERENCES cmd(id) ON DELETE CASCADE,
-  idx     INTEGER NOT NULL,
-  text    TEXT NOT NULL,
+  cmd_id     TEXT NOT NULL REFERENCES cmd(id) ON DELETE CASCADE,
+  idx        INTEGER NOT NULL,
+  text       TEXT NOT NULL,
+  changed_at TEXT,
   PRIMARY KEY (cmd_id, idx)
 );
+
+-- 司令の書き換えの跡。追記専用。
+--
+-- 現行はこれを散文で守っている——instructions/shogun_at.md の
+-- 「cmd 修正後は必ず inbox_write で家老に通知せよ」。守られねば、
+-- 足軽が旧版の指示で動き続ける。実際に一巡無駄になっている
+-- (memory: 完了 cmd は編集で届かない・2026-07-14)。
+CREATE TABLE IF NOT EXISTS cmd_revision (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  cmd_id  TEXT NOT NULL REFERENCES cmd(id) ON DELETE CASCADE,
+  at      TEXT NOT NULL,
+  by      TEXT NOT NULL,
+  field   TEXT NOT NULL,
+  before  TEXT,
+  after   TEXT,
+  reason  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_cmd_revision ON cmd_revision(cmd_id, id);
 
 -- 顔ぶれ。
 --
@@ -477,6 +500,7 @@ function migrate(db: Database): void {
   // 既に走っている正本のための追い足し。新しい正本は SCHEMA 側で足りている。
   addColumn(db, 'report', 'cmd_id', 'TEXT');
   addColumn(db, 'claim', 'source', "TEXT NOT NULL DEFAULT 'declared'");
+  addColumn(db, 'cmd_acceptance', 'changed_at', 'TEXT');
 
   // 受け入れ条件の番号を 1 始まりへ揃える。
   // 初期は配列の添字をそのまま入れており「条件 0」という言い方になっていた。
