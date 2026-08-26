@@ -18,6 +18,7 @@ import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, forget, markSince } from './nudge';
 import { getMode, setMode, describe as describeMode } from './mode';
+import { peek, history } from './peer';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
 import { roster as rosterOf } from './roster';
@@ -367,6 +368,8 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden claim                                         誰がどこを握っておるか
   honden claim check [path|branch] <場所>              そこが空いておるか
   honden claim release <番号> [--force --reason "…"]   手放す／譲らせる
+  honden peek <agent> --reason "…"                     他の者の持ち場を覗く（理由必須・台帳に残る）
+  honden history [path|branch] <場所>                  そこで何が起きたのかを辿る
   honden task assign … --bypass --reason "…"                 家老を通さぬ迂回（将軍だけ）
   honden cmd show <cmd_id>                             受け入れ条件と覆い具合
   honden cmd done <cmd_id> [--bypass --reason "…"]     司令を閉じる（家老だけ・門あり）
@@ -633,6 +636,41 @@ export function runClaimRelease(
   return r.ok ? { code: EXIT_OK, out: `  #${n} を手放した。` } : { code: EXIT_INVALID, err: r.message };
 }
 
+/** `honden peek <agent> --reason "…"` — 他の者の持ち場を覗く。理由が要る。 */
+export function runPeek(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  target: string | undefined,
+  reason: string | undefined,
+): RunResult {
+  if (!target) {
+    return {
+      code: EXIT_INVALID,
+      err: '誰の持ち場を覗くのか渡されよ。例: honden peek ashigaru1 --reason "同じ枝を触っておらぬか検める"',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = peek(db, selfId, target, reason);
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
+/** `honden history <場所|枝>` — そこで何が起きたのかを辿る。 */
+export function runHistory(
+  dbPath: string | undefined,
+  kind: string | undefined,
+  value: string | undefined,
+): RunResult {
+  if (!value) {
+    return {
+      code: EXIT_INVALID,
+      err: '辿る場所を渡されよ。例: honden history branch fix32-rebase',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = history(db, (kind ?? 'path') as Kind, value);
+  return { code: EXIT_OK, out: r.out };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -690,6 +728,17 @@ export async function main(argv: string[]): Promise<number> {
   if (rest[0] === 'cmd' && rest[1] === 'new') {
     const stdin = await readStdin();
     return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+  }
+
+  if (rest[0] === 'peek') {
+    const reason = flags['reason'];
+    delete flags['reason'];
+    return emit(runPeek(dbPath, selfId(), rest[1], reason));
+  }
+
+  if (rest[0] === 'history') {
+    const hasKind = rest[1] === 'path' || rest[1] === 'branch';
+    return emit(runHistory(dbPath, hasKind ? rest[1] : 'path', hasKind ? rest[2] : rest[1]));
   }
 
   if (rest[0] === 'claim') {

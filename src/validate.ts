@@ -178,10 +178,17 @@ export function explain(problems: Problem[], retryHint?: string): string {
  * 空も、それらしいだけの短文も弾く。理由が形だけになると、
  * 後から「なぜ迂回したのか」が誰にも分からなくなる。
  */
-export function checkReason(reason: string | undefined, example?: string): string | null {
+/**
+ * 理由が理由になっているか。
+ *
+ * `what` は何のための理由かを言う言葉。既定は「迂回」だが、
+ * 迂回でない所——他の者の持ち場を覗くなど——でも使うので差し替えられる。
+ * 「迂回には理由が要る」と出しておいて迂回ではない、では読む者が混乱する。
+ */
+export function checkReason(reason: string | undefined, example?: string, what = '迂回'): string | null {
   const r = (reason ?? '').trim();
   if (r === '')
-    return `迂回には理由が要る。--reason "${example ?? '家老が沈黙して 40 分'}" のように書かれよ。`;
+    return `${what}には理由が要る。--reason "${example ?? '家老が沈黙して 40 分'}" のように書かれよ。`;
   if ([...r].length < 8) return `理由が短すぎる: ${JSON.stringify(r)}\n  何が起きて迂回するのかを書かれよ。`;
   if (/^(test|テスト|試験|tmp|x+|あ+)$/i.test(r)) {
     return `それは理由になっておらぬ: ${JSON.stringify(r)}`;
