@@ -143,10 +143,116 @@ smoke() {
   return 1
 }
 
+# ============================================================
+# to-shogun 経路（旧 inbox_write.sh / inbox_watcher.sh）の試験
+#
+# 本番リポジトリから**最小のファイル集合をコピー**して別 root に据える。
+# ディレクトリごとの symlink は禁物——SCRIPT_DIR の解決が実体側へ落ちた
+# 瞬間、**本番の queue へ黙って書く**。コピーなら構造的に起きぬ。
+# .venv だけは symlink でよい（読むだけで、書き込み先に効かぬ）。
+# ============================================================
+SHOGUN_SRC="${HONDEN_SHOGUN_SRC:-/mnt/c/Users/aki/work/multi-agent-shogun}"
+COMPAT="$TESTHOME/shogun-compat"
+
+up_shogun() {
+  tmux has-session -t "$SESSION" 2>/dev/null || die "先に up されよ（pane を使い回すゆえ）"
+  [ -d "$SHOGUN_SRC/scripts" ] || die "shogun 側が見つからぬ: $SHOGUN_SRC"
+
+  echo "── 最小集合をコピー ──"
+  mkdir -p "$COMPAT/scripts" "$COMPAT/lib" "$COMPAT/config" \
+           "$COMPAT/queue/inbox" "$COMPAT/queue/tasks" "$COMPAT/queue/metrics" "$COMPAT/flags"
+  cp "$SHOGUN_SRC/scripts/inbox_write.sh"   "$COMPAT/scripts/"
+  cp "$SHOGUN_SRC/scripts/inbox_watcher.sh" "$COMPAT/scripts/"
+  cp "$SHOGUN_SRC/lib/cli_adapter.sh"       "$COMPAT/lib/"
+  cp "$SHOGUN_SRC/lib/agent_status.sh"      "$COMPAT/lib/"
+  ln -sfn "$SHOGUN_SRC/.venv" "$COMPAT/.venv"   # 読むだけゆえ symlink 可
+  # agent 名は本番と**被らせない**（testkaro）。
+  #
+  # watcher の self-watch 検知は `pgrep -f "inotifywait.*inbox/<agent>.yaml"` で
+  # **path を見ない**。本番の watcher が inbox/karo.yaml を見張っておる機で
+  # 試験の agent も karo だと、本番の inotifywait を「karo の self-watch」と
+  # 誤認して nudge を永遠に SKIP する（実測 2026-08-27。ASW_PHASE でも切れぬ）。
+  # 名を分ければ pgrep のパターンが交わらぬ。
+  cat > "$COMPAT/config/settings.yaml" <<'YAML'
+# 試験用の最小 settings。cli_adapter の get_cli_type だけが読む。
+language: ja
+cli:
+  default: claude
+  agents:
+    testkaro: { type: claude }
+YAML
+
+  echo "── 分離の検め（コピーの SCRIPT_DIR が試験側を指すか） ──"
+  local probe
+  probe=$(bash -c 'cd / && source /dev/stdin <<EOF
+SCRIPT_DIR="\$(cd "\$(dirname "'"$COMPAT"'/scripts/inbox_write.sh")/.." && pwd)"
+echo "\$SCRIPT_DIR"
+EOF')
+  [ "$probe" = "$COMPAT" ] || die "SCRIPT_DIR が試験側を指さぬ: $probe"
+  echo "  ✓ SCRIPT_DIR=$probe"
+
+  echo "── watcher を起こす（karo 分・試験 pane 宛て） ──"
+  local karo_pane
+  karo_pane=$(tmux list-panes -t "$SESSION:agents" -F '#{pane_id} #{@agent_id}' | awk '$2=="karo"{print $1}')
+  [ -n "$karo_pane" ] && echo "  karo の pane: $karo_pane" || die "karo の pane が見つからぬ"
+  # ASW_PHASE=1: self-watch 前提の nudge 抑止を使わぬ。
+  #
+  # 抑止の検知は `pgrep -f "inotifywait.*inbox/karo.yaml"` で、**path を見ない**。
+  # 本番の watcher が隣で走っておる機では、本番の inotifywait を
+  # 「karo の self-watch」と誤認して nudge を永遠に SKIP する（実測 2026-08-27）。
+  # これは旧配達層の粗さそのもので、honden の docs/decisions.md 配達層要件に足す。
+  #
+  # remain-on-exit: watcher が死ぬと窓ごと消えて死因が読めぬ。遺骸を残す。
+  tmux new-window -t "$SESSION" -n compat \
+    "cd '$COMPAT' && IDLE_FLAG_DIR='$COMPAT/flags' ASW_PHASE=1 exec bash scripts/inbox_watcher.sh testkaro '$karo_pane' claude"
+  tmux set-option -t "$SESSION:compat" remain-on-exit on 2>/dev/null || true
+  # claude の busy 判定は idle flag を見る。試験の受け手は常に暇ゆえ、旗を立てる
+  touch "$COMPAT/flags/shogun_idle_testkaro"
+  sleep 1
+  tmux list-panes -t "$SESSION:compat" -F '  compat: #{pane_current_command}' 2>/dev/null || true
+}
+
+smoke_shogun() {
+  [ -d "$COMPAT/queue/inbox" ] || die "先に up-shogun されよ"
+  local stamp="smoke-shogun-$(date +%s)"
+  local before_lines
+  before_lines=$(wc -l < "$RECV/karo.log" 2>/dev/null || echo 0)
+
+  echo "── 旧経路（inbox_write.sh）で karo へ送る ──"
+  ( cd "$COMPAT" && bash scripts/inbox_write.sh testkaro "疎通試験 $stamp" report_received testenv_smoke ) \
+    | tail -2 | sed 's/^/  /'
+
+  echo "── 正本（YAML）へ書かれたか読み戻す ──"
+  grep -q "$stamp" "$COMPAT/queue/inbox/testkaro.yaml" \
+    && echo "  ✓ queue/inbox/testkaro.yaml に $stamp が在る" \
+    || { echo "  ✗ 書かれておらぬ"; return 1; }
+
+  echo "── 本番の queue に漏れておらぬか ──"
+  grep -qr "$stamp" "$SHOGUN_SRC/queue/inbox/" 2>/dev/null \
+    && { echo "  ✗ 本番へ漏れた！"; return 1; } \
+    || echo "  ✓ 本番の queue には無い（分離が効いておる）"
+
+  echo "── watcher の nudge（inboxN）が karo の受け手へ届くのを待つ（最大 40 秒） ──"
+  local waited=0
+  while [ $waited -lt 80 ]; do
+    if tail -n "+$((before_lines + 1))" "$RECV/karo.log" 2>/dev/null | grep -qE 'inbox[0-9]+'; then
+      echo "  ✓ 届いた:"
+      tail -n "+$((before_lines + 1))" "$RECV/karo.log" | grep -E 'inbox[0-9]+' | tail -1 | sed 's/^/    /'
+      return 0
+    fi
+    sleep 0.5; waited=$((waited+1))
+  done
+  echo "  ✗ 40 秒待ったが届かぬ。compat 窓と flags を検められよ"
+  tmux capture-pane -t "$SESSION:compat" -p 2>/dev/null | grep -v '^\s*$' | tail -5 | sed 's/^/    compat: /'
+  return 1
+}
+
 case "${1:-}" in
   up) up ;;
   down) down ;;
   status) status ;;
   smoke) smoke ;;
-  *) echo "使い方: $0 up|down|status|smoke"; exit 2 ;;
+  up-shogun) up_shogun ;;
+  smoke-shogun) smoke_shogun ;;
+  *) echo "使い方: $0 up|down|status|smoke|up-shogun|smoke-shogun"; exit 2 ;;
 esac
