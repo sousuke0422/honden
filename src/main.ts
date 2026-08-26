@@ -19,6 +19,7 @@ import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
 import { amendCmd, workersOn } from './amend';
+import { patchFiles } from './patchfile';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
 import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
@@ -429,6 +430,8 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden lease release <agent> [--force --reason "…"]  手放す
   honden route <1-6> [--role worker] [--providers ...] 誰に振れるかを挙げる
   honden search <語> [--limit N]                       取り込んだものを引く
+  honden patch [--root DIR] [--dry-run] < change.diff  ファイルへ差分を当てる
+                                                       （文脈が一意な時だけ・全部当たるか何も書かぬか）
   honden inbox write <宛先> <本文> <種別> <差出人>      旧 inbox_write.sh と同じ並び
   honden inbox write --to A --from B --type T --body 本文
   honden inbox write <<'EOF'
@@ -863,6 +866,26 @@ export function runCmdAmend(
   return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
 }
 
+/**
+ * `honden patch` — ファイルへ差分を当てる。
+ *
+ * 文脈が在り、かつ一意である時だけ当てる。`str.replace` は当てはまる所を
+ * 全部書き換えるが、こちらは曖昧なら断る。
+ */
+export function runPatch(diff: string | undefined, root: string | undefined, dryRun: boolean): RunResult {
+  if (!diff || diff.trim() === '') {
+    return {
+      code: EXIT_INVALID,
+      err:
+        '差分が無い。標準入力へ流されよ。\n' +
+        "  honden patch < change.diff\n" +
+        "  git diff | honden patch --dry-run",
+    };
+  }
+  const r = patchFiles(diff, { root, dryRun });
+  return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
 export async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   const dryRun = flags['dry-run'] === 'true';
@@ -986,6 +1009,13 @@ export async function main(argv: string[]): Promise<number> {
     delete flags['wake-shogun'];
     delete flags['reason'];
     return emit(await runNudge(dbPath, dryRun, wakeShogun, reason, selfId()));
+  }
+
+  if (rest[0] === 'patch') {
+    const root = flags['root'];
+    delete flags['root'];
+    const stdin = await readStdin();
+    return emit(runPatch(stdin, root, dryRun));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'amend') {
