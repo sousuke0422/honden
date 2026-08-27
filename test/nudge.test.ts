@@ -214,6 +214,24 @@ describe('撃つ中身', () => {
     expect(p.level).toBe(3);
     expect(p.text).toBe('/new'); // codex は /clear ではない
   });
+
+  test('段 3 の cursor は /new-chat（/clear は cursor に存在せぬ・旧 watcher 実証）', () => {
+    const db = seeded({ ashigaru1: 'cursor' });
+    unreadFor(db, 'ashigaru1');
+    markSince(db, 'ashigaru1', T0);
+    const p = find(plan(db, at(LEVEL_3_AFTER_MS), { panes: PANES }), 'ashigaru1')!;
+    expect(p.level).toBe(3);
+    expect(p.text).toBe('/new-chat');
+  });
+
+  test('段 3 の未知 CLI は /new へ倒す（codex に /clear を撃つと CLI ごと死ぬ）', () => {
+    const db = seeded({ ashigaru1: 'mystery-cli' });
+    unreadFor(db, 'ashigaru1');
+    markSince(db, 'ashigaru1', T0);
+    const p = find(plan(db, at(LEVEL_3_AFTER_MS), { panes: PANES }), 'ashigaru1')!;
+    expect(p.level).toBe(3);
+    expect(p.text).toBe('/new');
+  });
 });
 
 describe('うるさくせぬ手当て', () => {

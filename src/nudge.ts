@@ -59,14 +59,19 @@ export const RESET_COOLDOWN_MS = 5 * 60_000;
 
 /** 立て直しに Escape×2 と Ctrl-C を要する CLI。現行 CLAUDE.md より。 */
 const NEEDS_HARD_RECOVERY = new Set(['copilot', 'kimi']);
-/** 文脈を消す命令。CLI ごとに違う。 */
+/**
+ * 文脈を消す命令。CLI ごとに違う。
+ * cursor に /clear は無い——/new-chat を使う（旧 watcher L718 実証済み）。
+ * codex は /clear で CLI ごと終了するため、未知の CLI への既定も /new に倒す
+ * （旧 watcher の codex-safe fallback と同じ）。
+ */
 const RESET_COMMAND: Record<string, string> = {
   claude: '/clear',
   copilot: '/clear',
   kimi: '/clear',
   codex: '/new',
   opencode: '/new',
-  cursor: '/clear',
+  cursor: '/new-chat',
 };
 
 export type Level = 1 | 2 | 3;
@@ -212,7 +217,7 @@ function build(
   st: State,
   escalationLevel: Level,
 ): Plan {
-  const text = level === 3 ? RESET_COMMAND[cli ?? ''] ?? '/clear' : nudgeText(s);
+  const text = level === 3 ? RESET_COMMAND[cli ?? ''] ?? '/new' : nudgeText(s);
   const hardRecovery = level === 2 && NEEDS_HARD_RECOVERY.has(cli ?? '');
 
   // 次にこの相手を見るまで。段が上がる時刻か、撃ち直せる時刻の早いほう。
