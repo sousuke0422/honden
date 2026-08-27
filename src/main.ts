@@ -8,7 +8,7 @@
  * 切り替えの日を決めるまでは、影に徹するのが安全になる。
  */
 
-import { openStore, search, tx, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
+import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
 import { resolve as resolveIdentity, type Identity } from './identity';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -252,10 +252,26 @@ export function runInboxRead(
   const db = openStore({ path: dbPath });
   const msgs = list(db, agent, { all });
   const s = summarize(db, agent);
+  const peeking = target !== undefined && target !== selfId;
+  // 他人の受け渡しを覗いたなら跡を残す。
+  //
+  // 旧環境は queue/inbox/* を **役ごとに read_deny** で塞いでいた
+  // （config/opencode-permissions.yaml）。正本を一つの DB に寄せた時、
+  // その境界は消える——**構造の変更が、静かに縛りを解いた**。
+  // 覗くこと自体は禁じぬ（honden peek と同じく、突き合わせに要る）が、
+  // 跡の残らぬ道は残さぬ。peek は跡を残し、こちらは残らぬ——
+  // 同じ部屋への戸が二つあって片方だけ帳面に載る、では帳面が嘘になる。
+  if (peeking) {
+    journal(db, {
+      actor: selfId ?? '名乗り無し',
+      action: 'inbox.peek',
+      target: agent,
+      detail: `未読 ${s.total} 件を覗いた`,
+    });
+  }
   if (msgs.length === 0) {
     return { code: EXIT_OK, out: `  ${agent}: ${all ? '一件も無い' : nudgeText(s)}` };
   }
-  const peeking = target !== undefined && target !== selfId;
   const head = `  ${agent}: ${nudgeText(s)}` + (peeking ? '（覗いておるだけ。既読にはできぬ）' : '');
   const body = msgs
     .map((m) => {
