@@ -1761,3 +1761,17 @@ Messages to be submitted after next tool call (press esc to interrupt and send)
 | claude | nudge をそのまま切りのいい所で読む |
 | cursor | nudge + Enter 添え押し → 次のツール境界（発射 11 秒） |
 | codex | nudge + Tab 添え押し → 次のツール境界（再打ち後 21 秒） |
+
+### 十、CLI サポート三階層（殿裁定 2026-08-27）
+
+| 階層 | CLI | 根拠 |
+|---|---|---|
+| **T1 一級** | claude / cursor / codex | この環境で使え、**急報経路・busy 判定・reset を実測で校正済み**（六〜九） |
+| **T2 二級** | opencode | この環境で使えるが、実測は未実施。紋様（busy の ■⬝ 帯・/new）は旧 watcher からの移植 |
+| **T3 純 port** | copilot / kimi | この環境では使えぬ。旧 watcher からの**純移植のみ**（Escape×2 + C-c・/clear）。実測の裏付け無し |
+
+運用上の含意:
+- T1 は挙動を仕様として扱ってよい（数値つきの実測がある）
+- T2 は使う前に idle 疎通（D-1 相当）だけでも通すこと
+- T3 は使う時が来たら T1 と同じ実測（idle 疎通 → busy 中急報 → 段梯子）で
+  再校正するのが前提。移植した紋様を無検証で信じてはならない

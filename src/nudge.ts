@@ -57,7 +57,12 @@ export const REPEAT_MS = 60_000;
 /** 文脈を消させるのは 5 分に一度まで。 */
 export const RESET_COOLDOWN_MS = 5 * 60_000;
 
-/** 立て直しに Escape×2 と Ctrl-C を要する CLI。現行 CLAUDE.md より。 */
+/**
+ * 立て直しに Escape×2 と Ctrl-C を要する CLI。現行 CLAUDE.md より。
+ * copilot / kimi は T3（純 port・実測の裏付け無し）——この環境では
+ * 使えぬゆえ旧 watcher の作法を写しただけである。使う時は再校正せよ
+ * （docs/decisions.md 十）。
+ */
 const NEEDS_HARD_RECOVERY = new Set(['copilot', 'kimi']);
 /**
  * 急ぎの合図の後に添え押しする「follow-up 確認キー」。

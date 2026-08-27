@@ -15,6 +15,10 @@
  *
  * 画面の文字列に頼る検知は脆い——それは承知の上で持ち込む。旧環境で
  * 実戦を経た紋様であり、誤りの向きも安全側（false-busy = 延期）に倒れる。
+ *
+ * CLI サポート階層（殿裁定 2026-08-27・docs/decisions.md 十）:
+ *   T1 実測済み = claude / cursor / codex。T2 = opencode（移植・未実測）。
+ *   T3 = copilot / kimi（純 port・この環境では使えぬ。使う時は再校正）。
  */
 import type { Pane } from './pane';
 
