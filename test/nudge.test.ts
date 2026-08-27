@@ -510,9 +510,9 @@ describe('急ぎの合図と follow-up 確認キー', () => {
     expect(p.urgent).toBe(false);
   });
 
-  test('確認キー表: codex は Tab（仮置き・実測校正待ち）、cursor と claude は無し', () => {
+  test('確認キー表: cursor は Enter 二度目（changelog 2026-08-19 のステアリング）・codex は Tab 仮置き・claude は無し', () => {
+    expect(FOLLOWUP_KEY['cursor']).toBe('Enter');
     expect(FOLLOWUP_KEY['codex']).toBe('Tab');
-    expect(FOLLOWUP_KEY['cursor']).toBeUndefined();
     expect(FOLLOWUP_KEY['claude']).toBeUndefined();
   });
 });

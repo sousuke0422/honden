@@ -61,13 +61,16 @@ export const RESET_COOLDOWN_MS = 5 * 60_000;
 const NEEDS_HARD_RECOVERY = new Set(['copilot', 'kimi']);
 /**
  * 急ぎの合図の後に添え押しする「follow-up 確認キー」。
- * codex は作業中に届いた入力をこのキーで確かめられる（Tab は仮置き・
- * codex を布陣へ座らせた時に実測で校正する）。claude は押さずとも
- * 切りのいい所で読む。cursor に該当キーは無い——完了まで読まぬゆえ、
- * 急報は honden コマンド出力への横乗せ（src/main.ts ridealong）が拾う。
+ *
+ * cursor は Enter をもう一度（計 2 回）で follow-up がステアリングになり、
+ * 「完了まで待つ」が「次のツール呼び出しで読む」へ変わる（作業は中断されぬ・
+ * cursor changelog 2026-08-19）。codex の Tab は仮置きで、布陣へ座らせた時に
+ * 実測で校正する。claude は押さずとも切りのいい所で読む。
+ * 押しても急報の第一経路は横乗せ（src/main.ts ridealong）のまま。
  */
 export const FOLLOWUP_KEY: Record<string, string> = {
   codex: 'Tab',
+  cursor: 'Enter',
 };
 /**
  * 文脈を消す命令。CLI ごとに違う。
