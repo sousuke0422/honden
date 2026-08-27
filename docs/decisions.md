@@ -1939,3 +1939,47 @@ nudge と違って代は無視できる**。見合わぬのは頻度が上がっ
 **やらぬ理由が今のところ無い**が、門の第一形が出たばかりゆえ、
 実際の直訴を数件見てから型を決めるのが順である（何を渡せば足りるかは、
 実物を見ぬと決められぬ）。
+
+### 十五、検分者の器 — plugin.json は要らぬ。要るのは道具の剥奪（2026-08-27）
+
+十四の「別の器」を Claude Code でどう建てるか、公式仕様を当たった。
+
+**plugin.json は要らぬ**。`~/.claude/agents/<name>.md` を置けば全ての作業場で
+subagent として名乗れる（`.claude/agents/` は作業場限定で、そちらが優先）。
+`.claude-plugin/plugin.json` が要るのは **束ねて配る時**——複数の skill や
+agent や hook を一つの plugin として渡す、marketplace に出す、版を切る、
+といった場合だけである。将軍が自分の machine で使う分には不要。
+（配置の罠: plugin 化する時 `agents/` と `skills/` は plugin **root** に置く。
+`.claude-plugin/` の中ではない。）
+
+**skill は別文脈を作らぬ**——十四で警戒した落とし穴は公式仕様として裏が
+取れた。skill の中身は**親のセッションへ読み込まれる**。図にあった
+`skills/*/agents/*.md` は、その skill を plugin 化して初めて subagent として
+起きる。置いただけでは隔離にならぬ。
+`/subtask` は**親の会話履歴を引き継ぐ** fork ゆえ、我らの用には使えぬ。
+
+**道具の剥奪は仕掛けで効く**（十四の要点の裏取り）。frontmatter で
+`tools:`（allowlist）・`disallowedTools:`（denylist）・`permissionMode: plan`
+（読むだけ）が指定できる。
+
+**そして、ここで一つ気づいた穴がある。**
+
+`honden guard grant` は「将軍のみ」を **pane の @agent_id** で見ておる。
+subagent は将軍と同じ pane に居るゆえ、**Bash さえ持たせれば検分者も
+「将軍」として手形を切れてしまう**。名乗りでは守れぬ。
+
+ゆえに検分者に **Bash を持たせてはならぬ**:
+
+```yaml
+tools: Read          # これだけ。Bash なし＝手形を切れぬ
+permissionMode: plan
+```
+
+事実の束は**親（将軍）が先に作って置く**:
+```
+将軍:   honden guard appeal show <id> --facts > <束>
+検分者: その束を Read するだけ
+```
+これは十四で書いた「事実集めを検分者の裁量にしてはならぬ」と同じ形に
+自然に落ちる——検分者は自分で調べられぬゆえ、都合の悪い証拠を避けることも、
+手形を切ることもできぬ。**道具の不在が、そのまま権限の境界になる。**
