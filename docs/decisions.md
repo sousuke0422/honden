@@ -1653,3 +1653,37 @@ honden は裸の reset を送るのみで、再装填の層が丸ごと欠けて
 方向: 受け手の作法を workspace の指示書（AGENTS.md 等・指示書統一 cmd_712 と
 同根）へ常設し、自動読込の無い CLI には reset 直後の nudge に作法の一行を
 添える（旧 send_startup_prompt の honden 版）。切り替え前に埋める。
+
+### 七、急報の二本立て — reset せずに作業中の者へ届ける（2026-08-27）
+
+殿の求め: 「リセットはしたくないが、作業範囲の増減のような急報は速く
+届けたい。claude は切りのいい所で見るが、cursor は完了まで見ない」。
+
+CLI ごとに「作業中の入力」の扱いが違うことが実測で判っておる:
+
+| CLI | 作業中に send-keys で届いた文 |
+|---|---|
+| claude | 切りのいい所（ツールの合間）で読む |
+| codex | 完了まで読まぬが、確認キーで見られる（Tab 仮置き・実測校正待ち） |
+| cursor | 完了まで読まぬ。確認キーも無い |
+
+答えは push と pull の二本立てにした。
+
+**push（nudge の添え押し）**: 急ぎ（URGENT_TYPES = clear_command / cmd_new /
+cmd_update）の合図に限り、本文 + Enter の後に CLI 別の follow-up 確認キーを
+添え押しする（FOLLOWUP_KEY・今は codex: Tab のみ）。急ぎでない合図には
+押さぬ——UI の状態を無闇に触らぬ。
+
+**pull（出力への横乗せ）**: cursor は作業中も**ツールとして honden は叩く**。
+そこで全コマンドの出力の尻に、呼び出し主の急ぎ未読を一行だけ横乗せする
+（urgentRideAlong / main.ts ridealong）。作業の真っ最中でも、次に honden を
+叩いた瞬間に「⚠ 急ぎの未読（cmd_update=1）」が目に入る。除外は inbox 系
+（見に行く行為そのもの）と nudge（末尾 JSON が芯への返事）。急ぎでなければ
+載せぬ——毎回うるさくすると読み飛ばしが癖になり、いざの一行まで死ぬ。
+
+実機の陽性対照: ashigaru2（cursor）に cmd_update を積み、ashigaru2 として
+claim check を叩く → 出力の尻に ⚠ 行が載った。inbox unread には載らぬ。
+
+これで梯子が揃う: 急報は横乗せ+添え押しで作業を壊さず届き、
+それでも無反応なら段梯子（L1→L2→busy 延期つき L3）が控える。
+reset は最後の砦であり、初手ではない。

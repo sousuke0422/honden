@@ -25,6 +25,7 @@ import {
   RESET_COOLDOWN_MS,
   REPEAT_MS,
   stateOf,
+  FOLLOWUP_KEY,
 } from '../src/nudge';
 import type { Pane } from '../src/pane';
 import { setMode, getMode, parseUntil } from '../src/mode';
@@ -488,5 +489,30 @@ describe('様態を切り替えられるのは将軍だけ', () => {
     setMode(db, 'ashigaru1', 'autonomous', { now: T0 });
     const led = db.query("SELECT action FROM ledger WHERE action LIKE 'mode.%'").all() as { action: string }[];
     expect(led.length).toBe(0);
+  });
+});
+
+
+describe('急ぎの合図と follow-up 確認キー', () => {
+  test('cmd_update の未読は plan に urgent が立つ', () => {
+    const db = seeded({ ashigaru1: 'codex' });
+    tx(db, () => {
+      deliver(db, { id: 'u1', agent: 'ashigaru1', at: T0.toISOString(), type: 'cmd_update', sender: 'karo', body: '範囲の増減' });
+    });
+    const p = find(plan(db, at(1000), { panes: PANES }), 'ashigaru1')!;
+    expect(p.urgent).toBe(true);
+  });
+
+  test('report_received だけなら urgent は立たぬ', () => {
+    const db = seeded();
+    unreadFor(db, 'ashigaru1');
+    const p = find(plan(db, at(1000), { panes: PANES }), 'ashigaru1')!;
+    expect(p.urgent).toBe(false);
+  });
+
+  test('確認キー表: codex は Tab（仮置き・実測校正待ち）、cursor と claude は無し', () => {
+    expect(FOLLOWUP_KEY['codex']).toBe('Tab');
+    expect(FOLLOWUP_KEY['cursor']).toBeUndefined();
+    expect(FOLLOWUP_KEY['claude']).toBeUndefined();
   });
 });

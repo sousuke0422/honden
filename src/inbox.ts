@@ -74,6 +74,25 @@ export interface Summary {
  */
 const URGENT_TYPES = new Set(['clear_command', 'cmd_new', 'cmd_update']);
 
+/**
+ * 出力の尻に横乗せする急報の一行。
+ *
+ * cursor は作業中に届く send-keys を完了まで読まぬ（殿実測 2026-08-27）。
+ * だが作業中もツールとして honden は叩く。ならばどのコマンドの出力にも
+ * 急ぎの未読を一行添えれば、次に叩いた瞬間に気づく——push（nudge）に
+ * 頼らぬ pull の裏路。急ぎでなければ載せぬ。毎回うるさくすると
+ * 読み飛ばしが癖になり、いざの一行まで死ぬ。
+ */
+export function urgentRideAlong(db: Database, agent: string): string | null {
+  const s = summarize(db, agent);
+  if (!s.urgent) return null;
+  const types = s.byType
+    .filter((t) => URGENT_TYPES.has(t.type))
+    .map((t) => `${t.type}=${t.count}`)
+    .join(' ');
+  return `  ⚠ ${agent} に急ぎの未読（${types}）— honden inbox read で確かめよ`;
+}
+
 export function summarize(db: Database, agent: string): Summary {
   const rows = db
     .query('SELECT msg_type, count(*) c FROM inbox WHERE agent = ? AND read = 0 GROUP BY msg_type ORDER BY c DESC, msg_type')

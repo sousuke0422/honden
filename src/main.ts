@@ -8,13 +8,13 @@
  * 切り替えの日を決めるまでは、影に徹するのが安全になる。
  */
 
-import { openStore, search, tx, SearchError, type Hit } from './store';
+import { openStore, search, tx, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
 import { resolve as resolveIdentity, type Identity } from './identity';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
-import { list, summarize, nudgeText, ack, ackAll } from './inbox';
+import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong } from './inbox';
 import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
@@ -1030,9 +1030,32 @@ export async function main(argv: string[]): Promise<number> {
     return await Bun.stdin.text();
   };
 
+  /**
+   * どのコマンドの出力にも、呼び出し主の急ぎ未読を一行だけ横乗せする。
+   *
+   * cursor は作業中に届く send-keys を完了まで読まぬ（殿実測 2026-08-27）が、
+   * 作業中もツールとして honden は叩く。急報（cmd_update = 範囲の増減など）を
+   * ここへ載せれば、reset で仕掛かりを捨てずに作業中の者へ届く。
+   * inbox 系（見に行く行為そのもの）と nudge（末尾の JSON 行が芯への返事）には
+   * 載せぬ。横乗せの失敗で本務を落とさぬ。
+   */
+  const ridealong = (): void => {
+    if (rest[0] === 'inbox' || rest[0] === 'nudge' || rest.length === 0) return;
+    try {
+      const id = selfId();
+      if (!id) return;
+      const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+      if (path !== ':memory:' && !existsSync(path)) return; // 正本を作ってまで見ぬ
+      const line = urgentRideAlong(openStore({ path }), id);
+      if (line) console.log(line);
+    } catch {
+      /* 横乗せは本務ではない */
+    }
+  };
   const emit = (r: RunResult): number => {
     if (r.out) console.log(r.out);
     if (r.err) console.error(r.err);
+    ridealong();
     return r.code;
   };
 

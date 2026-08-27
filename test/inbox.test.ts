@@ -14,7 +14,7 @@ import { inboxWrite } from '../src/cli';
 import { existsSync, statSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { list, summarize, nudgeText, ack, ackAll } from '../src/inbox';
+import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong } from '../src/inbox';
 
 const seeded = () => {
   const db = openStore({ path: ':memory:' });
@@ -206,5 +206,41 @@ describe('合図の口', () => {
     summarize(db2, 'karo');
 
     expect(statSync(sig).mtimeMs).toBe(before);
+  });
+});
+
+
+describe('urgentRideAlong — 出力への横乗せ', () => {
+  const empty = () => openStore({ path: ':memory:' });
+  const put = (db: ReturnType<typeof openStore>, id: string, type: string, read = 0) =>
+    tx(db, () => {
+      db.prepare(
+        'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,?)',
+      ).run(id, 'ashigaru1', '2026-08-27T00:00', type, 'karo', '用件', read);
+    });
+
+  test('急ぎ（cmd_update）の未読があれば一行返す', () => {
+    const db = empty();
+    put(db, 'm1', 'cmd_update');
+    const line = urgentRideAlong(db, 'ashigaru1')!;
+    expect(line).toContain('急ぎの未読');
+    expect(line).toContain('cmd_update=1');
+    expect(line).toContain('honden inbox read');
+  });
+
+  test('急ぎでない未読だけなら載せぬ（毎回うるさくすると読み飛ばしが癖になる）', () => {
+    const db = empty();
+    put(db, 'm2', 'report_received');
+    expect(urgentRideAlong(db, 'ashigaru1')).toBeNull();
+  });
+
+  test('未読が無ければ載せぬ', () => {
+    expect(urgentRideAlong(empty(), 'ashigaru1')).toBeNull();
+  });
+
+  test('既読の急ぎは数えぬ', () => {
+    const db = empty();
+    put(db, 'm3', 'cmd_update', 1);
+    expect(urgentRideAlong(db, 'ashigaru1')).toBeNull();
   });
 });

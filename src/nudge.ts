@@ -60,6 +60,16 @@ export const RESET_COOLDOWN_MS = 5 * 60_000;
 /** 立て直しに Escape×2 と Ctrl-C を要する CLI。現行 CLAUDE.md より。 */
 const NEEDS_HARD_RECOVERY = new Set(['copilot', 'kimi']);
 /**
+ * 急ぎの合図の後に添え押しする「follow-up 確認キー」。
+ * codex は作業中に届いた入力をこのキーで確かめられる（Tab は仮置き・
+ * codex を布陣へ座らせた時に実測で校正する）。claude は押さずとも
+ * 切りのいい所で読む。cursor に該当キーは無い——完了まで読まぬゆえ、
+ * 急報は honden コマンド出力への横乗せ（src/main.ts ridealong）が拾う。
+ */
+export const FOLLOWUP_KEY: Record<string, string> = {
+  codex: 'Tab',
+};
+/**
  * 文脈を消す命令。CLI ごとに違う。
  * cursor に /clear は無い——/new-chat を使う（旧 watcher L718 実証済み）。
  * codex は /clear で CLI ごと終了するため、未知の CLI への既定も /new に倒す
@@ -81,6 +91,8 @@ export interface Plan {
   pane?: Pane;
   cli: string | null;
   unread: number;
+  /** 急ぎ（URGENT_TYPES）の未読を含むか。follow-up 確認キーの添え押しに使う。 */
+  urgent: boolean;
   level: Level;
   /** 実際に撃つか。撃たぬ時は理由がつく。 */
   send: boolean;
@@ -247,7 +259,7 @@ function build(
         : RESET_COOLDOWN_MS;
   const nextInMs = Math.max(1000, Math.min(toNextLevel, REPEAT_MS));
 
-  return { agent, pane, cli, unread: s.total, level, escalationLevel, send, reason, text, hardRecovery, nextInMs };
+  return { agent, pane, cli, unread: s.total, urgent: s.urgent, level, escalationLevel, send, reason, text, hardRecovery, nextInMs };
 }
 
 /** 撃った跡を残す。 */
@@ -343,6 +355,16 @@ export async function send(p: Plan): Promise<{ ok: boolean; err?: string }> {
   if (!run(['send-keys', '-t', target, '-l', p.text])) return { ok: false, err: '本文を送れぬ' };
   await Bun.sleep(300);
   if (!run(['send-keys', '-t', target, 'Enter'])) return { ok: false, err: 'Enter を送れぬ' };
+
+  // 急ぎなら、CLI が作業中でも合図に気づける確認キーを添え押しする。
+  // 段 3 は文脈消しゆえ添えぬ。
+  if (p.urgent && p.level !== 3) {
+    const key = FOLLOWUP_KEY[p.cli ?? ''];
+    if (key) {
+      await Bun.sleep(300);
+      run(['send-keys', '-t', target, key]); // 押せずとも合図自体は届いておる
+    }
+  }
   return { ok: true };
 }
 
