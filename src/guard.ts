@@ -224,3 +224,71 @@ export function verify(db: Database, code: string, cmd: string, agent: string, n
   });
   return { ok: true, message: '手形を検めた。この一度だけ通る' };
 }
+
+/**
+ * 検分のための事実の束。**正本からだけ引く。**
+ *
+ * 直訴を裁く時、弁明を鵜呑みにせず系譜を突き合わせよ——という作法を、
+ * 心得ではなく手続きにする。将軍が自分で裁く時も、別の器（十四・十五）に
+ * 渡す時も、同じ束を見る。
+ *
+ * 別の器へ渡す時が肝要である: 検分者は Bash を持たぬ（持たせれば同じ pane
+ * ゆえ「将軍」として手形を切れてしまう）。ゆえに**自分では調べられぬ**。
+ * この束が検分者の見る世界のすべてになる——だからこそ、集める側が
+ * 機械でなければならない。
+ *
+ * 弁明（appeal_reason）は入れてよいが、必ず「申し立て」として畳んで渡す。
+ * 検分者への指示として読ませてはならぬ。
+ */
+export interface Facts {
+  command: string;
+  verdict: Verdict;
+  agent: string;
+  appeal_reason: string | null;
+  task: { task_id: string | null; status: string; cmd_id: string | null; updated_at: string } | null;
+  cmd: { id: string; purpose: string | null; north_star: string | null; status: string; project: string | null } | null;
+  claims: { kind: string; value: string; source: string; at: string }[];
+  recent_reports: { at: string; summary: string }[];
+  recent_guard: { at: string; action: string; detail: string }[];
+}
+
+export function facts(db: Database, agent: string, cmd: string, appealReason?: string): Facts {
+  const body = stripEnvPrefix(normalize(cmd));
+  const task = db
+    .query('SELECT task_id, status, cmd_id, updated_at FROM task WHERE agent = ?')
+    .get(agent) as Facts['task'];
+  const cmdRow = task?.cmd_id
+    ? (db
+        .query('SELECT id, purpose, north_star, status, project FROM cmd WHERE id = ?')
+        .get(task.cmd_id) as Facts['cmd'])
+    : null;
+  const claims = db
+    .query(
+      'SELECT kind, value, source, at FROM claim WHERE agent = ? AND released_at IS NULL ORDER BY at DESC LIMIT 20',
+    )
+    .all(agent) as Facts['claims'];
+  const recent_reports = db
+    .query(
+      `SELECT COALESCE(created_at, '') at, substr(raw, 1, 200) summary FROM report
+       WHERE agent = ? ORDER BY created_at DESC LIMIT 3`,
+    )
+    .all(agent) as Facts['recent_reports'];
+  const recent_guard = db
+    .query(
+      `SELECT at, action, detail FROM ledger
+       WHERE action LIKE 'guard%' AND (actor = ? OR target = ?) ORDER BY at DESC LIMIT 5`,
+    )
+    .all(agent, agent) as Facts['recent_guard'];
+
+  return {
+    command: body,
+    verdict: judge(body),
+    agent,
+    appeal_reason: appealReason ?? null,
+    task,
+    cmd: cmdRow,
+    claims,
+    recent_reports,
+    recent_guard,
+  };
+}

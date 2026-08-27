@@ -19,7 +19,7 @@ import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
 import { captureBusy } from './busy';
-import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, OTP_DEFAULT_TTL_MS } from './guard';
+import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
@@ -760,6 +760,23 @@ export async function runGuardHookCodex(dbPath: string | undefined, selfId: stri
 }
 
 /**
+ * `honden guard facts --agent <者> --cmd "<命>"` — 検分の材料を正本から集める。
+ *
+ * 将軍が自分で裁く時も、道具を剥いだ検分者へ渡す時も、見るのは同じ束。
+ * 出力は JSON——人が読む形に崩さぬのは、検分者へ file 渡しするためである。
+ */
+export function runGuardFacts(
+  dbPath: string | undefined,
+  agent: string | undefined,
+  cmd: string | undefined,
+  reason: string | undefined,
+): RunResult {
+  if (!agent || !cmd) return { code: EXIT_INVALID, err: '--agent と --cmd を渡されよ' };
+  const db = openStore({ path: dbPath });
+  return { code: EXIT_OK, out: JSON.stringify(guardFacts(db, agent, cmd, reason), null, 2) };
+}
+
+/**
  * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
  */
 export function runGuardGrant(
@@ -1288,7 +1305,8 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'grant')
       return emit(runGuardGrant(dbPath, selfId(), flags['cmd'], flags['agent'], flags['reason'], flags['ttl-min']));
     if (rest[1] === 'appeal') return emit(runGuardAppeal(dbPath, selfId(), flags['cmd'], flags['reason']));
-    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex / guard grant / guard appeal のいずれかである' });
+    if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, flags['agent'], flags['cmd'], flags['reason']));
+    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex / guard grant / guard appeal / guard facts のいずれかである' });
   }
 
   if (rest[0] === 'peek') {
