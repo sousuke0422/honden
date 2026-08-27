@@ -1775,3 +1775,40 @@ Messages to be submitted after next tool call (press esc to interrupt and send)
 - T2 は使う前に idle 疎通（D-1 相当）だけでも通すこと
 - T3 は使う時が来たら T1 と同じ実測（idle 疎通 → busy 中急報 → 段梯子）で
   再校正するのが前提。移植した紋様を無検証で信じてはならない
+
+### 十一、cursor hooks 調査と実測 — reset 後の再装填が公式機構で塞がる（2026-08-27 19:05）
+
+殿の指示で agy（Antigravity/Gemini・pro）に deep research を委譲し、
+公式 docs（https://cursor.com/docs/hooks）の直読と、試験環境 cursor での
+最小実験で裏取りした。
+
+**機構（docs 直読で確認）**: `<project>/.cursor/hooks.json`（または
+`~/.cursor/hooks.json`）・version 1。フックは任意の shell を子プロセスで
+実行し、stdio の JSON で双方向通信。イベントは sessionStart / sessionEnd /
+preToolUse / postToolUse / postToolUseFailure / beforeSubmitPrompt /
+beforeShellExecution / afterShellExecution / preCompact / stop(loop_limit) 等。
+**sessionStart と postToolUse は `additional_context` で会話へ文脈を注入できる**。
+
+**実測（cursor-agent v2026.08.25・試験環境）**:
+1. sessionStart フックは **CLI で発火する**——ただし**プロセス起動時に一度**。
+   走行中に hooks.json を置いても既存プロセスは拾わぬ（IDE の自動リロードと
+   違う）。再起動で発火（ログで証明）
+2. `additional_context` の注入は効く——合言葉「山吹」を仕込み、会話で
+   訊いたら一語で返った
+3. **`/new-chat`（= L3 reset）後の新会話にも注入が効き続ける**——バナー 2 つで
+   新会話を確認した上で、合言葉が再び返った。再発火はせぬが文脈は残る
+
+**含意——残る本丸「reset 後の再装填」の答え**:
+cursor（T1）は project の `.cursor/hooks.json` sessionStart に受け手作法を
+仕込めば、L3 reset 後も作法を失わぬ。九で見た「記憶喪失の大捜査」は
+この機構で塞がる。claude は CLAUDE.md 自動読込、codex は AGENTS.md が
+同じ役を担う——**三者三様の再装填経路が揃い、指示書統一（cmd_712）の
+設計に「CLI 別の常設経路」として組み込める**。
+
+agy の報せで未確認だった点の裏取り結果: 「事後フック出力が LLM に届かぬ
+バグ」は未検証のまま（我々は sessionStart しか使わぬので急がぬ）。
+「外部からの割り込み注入フックは無い」は docs のイベント表と整合——
+nudge / 横乗せの続投が正しい。
+
+実験に使った `.cursor/hooks.json` と `session-start.sh`（試験環境の受け手
+作法+合言葉つき）はリポジトリに残す。合言葉は将来の再検証の陽性対照。
