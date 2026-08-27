@@ -134,6 +134,23 @@ const RULES: Rule[] = [
     reason: 'gitignore には理由がある。秘密が履歴に入れば戻せない',
   },
   {
+    // 門そのものへの細工。
+    //
+    // 権限表の突き合わせ（2026-08-28）が最も重い穴として挙げた筋である:
+    // `.cursor/hooks.json` や `.codex/hooks.json`、hook のスクリプト、
+    // 判定器の binary を書き換えれば、門は**その場で外せる**。codex に
+    // 至っては書き換えるだけでハッシュが変わり、未信頼の hook は黙って
+    // 飛ばされる——**壊すまでもなく、触れば消える**。
+    //
+    // シェル経由の細工だけを止める。道具（Edit/Write）経由は CLI 側の
+    // 権限設定と hook の matcher が受け持つ——ここでは届かぬ。
+    // それでも置くのは、届く範囲を空けておく理由が無いからである。
+    id: 'D012',
+    pattern:
+      /(?:>|>>|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\bchmod\b|\brm\b|\btruncate\b)[^;&|]*(?:\.cursor\/hooks|\.codex\/hooks|\.claude\/settings\.json|bin\/honden|\bguard\.ts(?![\w.]))/,
+    reason: '門そのものを書き換える形である。門は門で守れぬゆえ、ここで止める',
+  },
+  {
     id: 'D010',
     pattern: /--break-system-packages\b|--trusted-host\b|--ignore-scripts=false\b|minimumReleaseAge=0/,
     reason: '包みの守りを外す旗である。止まったら報告せよ',

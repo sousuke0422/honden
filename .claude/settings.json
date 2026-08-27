@@ -29,7 +29,25 @@
       "Bash(mkfs*)",
       "Bash(dd if=*)",
       "Bash(chmod -R * /)",
-      "Bash(chown -R * /)"
+      "Bash(chown -R * /)",
+      "Edit(.cursor/hooks.json)",
+      "Write(.cursor/hooks.json)",
+      "Edit(.cursor/hooks/**)",
+      "Write(.cursor/hooks/**)",
+      "Edit(.codex/hooks.json)",
+      "Write(.codex/hooks.json)",
+      "Edit(.codex/hooks/**)",
+      "Write(.codex/hooks/**)",
+      "Edit(.claude/settings.json)",
+      "Write(.claude/settings.json)",
+      "Edit(src/guard.ts)",
+      "Write(src/guard.ts)",
+      "Edit(src/identity.ts)",
+      "Write(src/identity.ts)",
+      "Edit(config/opencode-permissions.yaml)",
+      "Write(config/opencode-permissions.yaml)",
+      "Edit(agents/**)",
+      "Write(agents/**)"
     ]
   },
   "attribution": {

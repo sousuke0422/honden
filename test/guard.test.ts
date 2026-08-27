@@ -163,6 +163,43 @@ describe('手形（OTP）', () => {
   });
 });
 
+describe('D012 門そのものへの細工', () => {
+  const tampers = [
+    'echo "{}" > .cursor/hooks.json',
+    'cat /dev/null > .codex/hooks.json',
+    'sed -i s/deny/allow/ .cursor/hooks/guard-shell.sh',
+    'rm bin/honden',
+    'mv bin/honden bin/honden.bak',
+    'chmod -x .codex/hooks/guard.sh',
+    'echo x >> .claude/settings.json',
+    'tee .cursor/hooks.json < /tmp/x',
+  ];
+  for (const cmd of tampers) {
+    test(`止める: ${cmd}`, () => {
+      const v = judge(cmd);
+      expect(v.permission).toBe('deny');
+      expect(v.rule).toBe('D012');
+    });
+  }
+
+  test('直訴はできる（絶対域ではない——門の更新は正当な仕事でもある）', () => {
+    expect(judge('echo "{}" > .cursor/hooks.json').appealable).toBe(true);
+  });
+
+  const fine = [
+    'cat .cursor/hooks.json',
+    'bun run build',
+    'git diff .claude/settings.json',
+    'echo x > src/guard.ts.md', // 名の頭が同じだけ。当ててはならぬ（試験が偽陽性を釣った）
+    './bin/honden guard check --cmd "ls"',
+  ];
+  for (const cmd of fine) {
+    test(`通す: ${cmd}`, () => {
+      expect(judge(cmd).permission).toBe('allow');
+    });
+  }
+});
+
 describe('env 前置回避（実弾試験が釣った穴）', () => {
   test('X=1 前置でも D006 は止まる', () => {
     expect(judge('X=1 pkill -f watcher').rule).toBe('D006');
