@@ -9,6 +9,7 @@
  */
 
 import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
+import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -33,7 +34,7 @@ import { normsRoot, setSetting } from './settings';
 import { resolve as resolvePath } from 'node:path';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
-import { roster as rosterOf, roleOf as roleOfId } from './roster';
+import { roster as rosterOf, roleOf as roleOfId, isWorker } from './roster';
 import { leaseState, expired, release, renew, DEFAULT_LEASE_MINUTES } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
@@ -48,12 +49,13 @@ export function runImport(
   dbPath: string | undefined,
   root: string,
   subdirs: string[],
+  selfId?: string,
 ): RunResult {
   const db = openStore({ path: dbPath });
   const t0 = Bun.nanoseconds();
   let r: ImportResult;
   try {
-    r = importTree(db, root, subdirs);
+    r = importTree(db, root, subdirs, { by: selfId });
   } catch (e) {
     return { code: EXIT_SYSTEM, err: `取り込みが止まった: ${String(e).slice(0, 300)}` };
   }
@@ -138,12 +140,26 @@ export function runRosterShow(dbPath: string | undefined): RunResult {
   };
 }
 
+/**
+ * 働く者が皆の分を見たなら刻む。
+ *
+ * 旧権限表は queue/tasks/* を役ごとに read_deny で塞いでいた。正本を DB へ
+ * 寄せて境界は消えたが、覗くこと自体は禁じぬ（突き合わせに要る・殿の下知）。
+ * ただし **跡の残らぬ道は残さぬ**——inbox.peek と同じ流儀で揃える。
+ * 差配役が全体を見るのは職分ゆえ刻まぬ。線の意味は「働く者が皆の分を見た」に残す。
+ */
+function markBroadView(db: Database, selfId: string | undefined, action: string, detail: string): void {
+  if (!isWorker(db, selfId)) return;
+  journal(db, { actor: selfId ?? '名乗り無し', action, target: '皆', detail });
+}
+
 /** `honden lease` — いまの持ち場と貸与。 */
-export function runLeaseShow(dbPath: string | undefined): RunResult {
+export function runLeaseShow(dbPath: string | undefined, selfId?: string): RunResult {
   const db = openStore({ path: dbPath });
   const rows = db
     .query('SELECT agent, task_id, status, holder, lease_until FROM task ORDER BY agent')
     .all() as { agent: string; task_id: string | null; status: string; holder: string | null; lease_until: string | null }[];
+  markBroadView(db, selfId, 'lease.view', `${rows.length} 名の持ち場を見た`);
   if (rows.length === 0) return { code: EXIT_OK, out: '  持ち場の記録が無い。' };
   const now = new Date();
   const lines = rows.map((r) => {
@@ -783,12 +799,17 @@ export async function runGuardHookCodex(dbPath: string | undefined, selfId: stri
  */
 export function runGuardFacts(
   dbPath: string | undefined,
+  selfId: string | undefined,
   agent: string | undefined,
   cmd: string | undefined,
   reason: string | undefined,
 ): RunResult {
   if (!agent || !cmd) return { code: EXIT_INVALID, err: '--agent と --cmd を渡されよ' };
   const db = openStore({ path: dbPath });
+  // 束には他人の任・司令・報告の抜粋が入る。他人の分を引いたなら刻む。
+  if (selfId && agent !== selfId) {
+    journal(db, { actor: selfId, action: 'guard.facts.peek', target: agent, detail: '検分の束を引いた' });
+  }
   return { code: EXIT_OK, out: JSON.stringify(guardFacts(db, agent, cmd, reason), null, 2) };
 }
 
@@ -882,9 +903,10 @@ export function runMode(
 }
 
 /** `honden claim` — いま誰がどこを握っておるか。 */
-export function runClaimList(dbPath: string | undefined): RunResult {
+export function runClaimList(dbPath: string | undefined, selfId?: string): RunResult {
   const db = openStore({ path: dbPath });
   const held = liveClaims(db);
+  markBroadView(db, selfId, 'claim.view', `${held.length} 件の取り置きを見た`);
   if (held.length === 0) return { code: EXIT_OK, out: '  握られておる場所は無い。' };
   const lines = held.map(
     (c) => `  #${c.id} [${c.kind}] ${c.value}\n      ${c.agent} が ${c.at} から（${c.taskId ?? '仕事不明'}）`,
@@ -1127,7 +1149,13 @@ export function runCmdAmend(
  * 文脈が在り、かつ一意である時だけ当てる。`str.replace` は当てはまる所を
  * 全部書き換えるが、こちらは曖昧なら断る。
  */
-export function runPatch(diff: string | undefined, root: string | undefined, dryRun: boolean): RunResult {
+export function runPatch(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  diff: string | undefined,
+  root: string | undefined,
+  dryRun: boolean,
+): RunResult {
   if (!diff || diff.trim() === '') {
     return {
       code: EXIT_INVALID,
@@ -1138,6 +1166,21 @@ export function runPatch(diff: string | undefined, root: string | undefined, dry
     };
   }
   const r = patchFiles(diff, { root, dryRun });
+  // 当てたなら跡を残す。honden 自身が提供する任意書き込みの道具ゆえ、
+  // 誰がどこへ当てたかが残らねば、正本の外で何が起きたか辿れぬ
+  // （権限表の突き合わせ 2026-08-28）。
+  if (r.ok && !dryRun) {
+    try {
+      journal(openStore({ path: dbPath }), {
+        actor: selfId ?? '名乗り無し',
+        action: 'patch.apply',
+        target: root ?? process.cwd(),
+        detail: `差分 ${diff.length} 字`,
+      });
+    } catch {
+      /* 跡を残せずとも当てた事実は変わらぬ */
+    }
+  }
   return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
 }
 
@@ -1301,7 +1344,7 @@ export async function main(argv: string[]): Promise<number> {
     const subs = (flags['sub'] ?? DEFAULT_SUBDIRS.join(',')).split(',').filter(Boolean);
     delete flags['root'];
     delete flags['sub'];
-    return emit(runImport(dbPath, root, subs));
+    return emit(runImport(dbPath, root, subs, selfId()));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'new') {
@@ -1335,7 +1378,7 @@ export async function main(argv: string[]): Promise<number> {
           runGuardGrant(dbPath, selfId(), flags['cmd'], flags['agent'], flags['reason'], flags['ttl-min']),
       );
     if (rest[1] === 'appeal') return emit(runGuardAppeal(dbPath, selfId(), flags['cmd'], flags['reason']));
-    if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, flags['agent'], flags['cmd'], flags['reason']));
+    if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex / guard grant / guard appeal / guard facts のいずれかである' });
   }
 
@@ -1368,7 +1411,7 @@ export async function main(argv: string[]): Promise<number> {
       delete flags['reason'];
       return emit(runClaimRelease(dbPath, selfId(), rest[2], force, reason));
     }
-    return emit(runClaimList(dbPath));
+    return emit(runClaimList(dbPath, selfId()));
   }
 
   if (rest[0] === 'mode') {
@@ -1408,7 +1451,7 @@ export async function main(argv: string[]): Promise<number> {
     const root = flags['root'];
     delete flags['root'];
     const stdin = await readStdin();
-    return emit(runPatch(stdin, root, dryRun));
+    return emit(runPatch(dbPath, selfId(), stdin, root, dryRun));
   }
 
   if (rest[0] === 'cmd' && rest[1] === 'amend') {
@@ -1447,7 +1490,7 @@ export async function main(argv: string[]): Promise<number> {
       delete flags['force']; delete flags['reason'];
       return emit(runLeaseRelease(dbPath, selfId(), rest[2], force, reason));
     }
-    return emit(runLeaseShow(dbPath));
+    return emit(runLeaseShow(dbPath, selfId()));
   }
 
   if (rest[0] === 'roster') {

@@ -163,6 +163,36 @@ describe('手形（OTP）', () => {
   });
 });
 
+describe('D013 名乗りの根への細工', () => {
+  const forge = [
+    'tmux set-option -p @agent_id karo',
+    'tmux set -p -t %5 @agent_id shogun',
+    'tmux setw @agent_cli claude',
+    'tmux set-window-option -p @agent_id gunshi',
+  ];
+  for (const cmd of forge) {
+    test(`止める: ${cmd}`, () => {
+      expect(judge(cmd).rule).toBe('D013');
+    });
+  }
+
+  test('直訴はできる（布陣を組み直す時は正当な仕事である）', () => {
+    expect(judge('tmux set-option -p @agent_id karo').appealable).toBe(true);
+  });
+
+  const fine = [
+    'tmux display-message -p "#{@agent_id}"', // 読むだけ
+    'tmux list-panes -a -F "#{@agent_id}"',
+    'tmux set-option -p @custom_thing x', // 名乗りとは関わらぬ属性
+    'tmux new-window',
+  ];
+  for (const cmd of fine) {
+    test(`通す: ${cmd}`, () => {
+      expect(judge(cmd).permission).toBe('allow');
+    });
+  }
+});
+
 describe('D012 門そのものへの細工', () => {
   const tampers = [
     'echo "{}" > .cursor/hooks.json',

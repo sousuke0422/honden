@@ -140,3 +140,17 @@ export function isKnown(db: Database, id: string): boolean {
 export function isEmpty(db: Database): boolean {
   return (db.query('SELECT count(*) c FROM roster').get() as { c: number }).c === 0;
 }
+
+/**
+ * 働く者か（役が worker か）。
+ *
+ * 旧権限表は「足軽は自分の持ち場だけ」と役で線を引いていた。
+ * 正本を DB へ寄せてその線は消えたが、**見た跡を残すかどうか**の
+ * 判じには今も要る。差配役（将軍・家老・軍師）が全体を見るのは職分ゆえ
+ * 逐一刻まぬ。働く者が皆の分を見たなら刻む——線の意味はそこに残す。
+ */
+export function isWorker(db: Database, id: string | undefined): boolean {
+  if (!id) return false;
+  const r = db.query('SELECT role FROM roster WHERE id = ?').get(id) as { role: string } | null;
+  return r?.role === 'worker';
+}

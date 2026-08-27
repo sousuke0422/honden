@@ -285,3 +285,12 @@ node_modules/
 !/core/**/Cargo.lock
 # 成果物は持たない
 core/**/target/
+
+# 門そのもの。**必ず追跡下に置く。**
+# 追跡外だと、門を外す細工をしても git diff に何も出ず、見張りの目が届かぬ
+# （権限表の突き合わせ 2026-08-28）。門は、外された時に気づけて初めて門である。
+!.cursor/hooks.json
+!.cursor/hooks/*.sh
+!.codex/hooks.json
+!.codex/hooks/*.sh
+!.claude/settings.json

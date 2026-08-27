@@ -102,6 +102,7 @@ export function importFile(
   db: Database,
   root: string,
   path: string,
+  opts?: { by?: string },
 ): { changed: boolean; issue?: { kind: string; detail: string } } {
   const rel = relative(root, path).split('\\').join('/');
   let text: string;
@@ -152,7 +153,9 @@ export function importFile(
     ).run(rel, hash, Buffer.byteLength(text), new Date().toISOString());
     db.prepare('DELETE FROM import_issue WHERE path = ?').run(rel);
     journal(db, {
-      actor: 'import',
+      // 誰が引き込んだかを残す。'import' 固定では、影を差し込んだ者が辿れぬ
+      // （権限表の突き合わせ 2026-08-28）。取り込みは正本を書き換える行いである。
+      actor: opts?.by ?? 'import',
       action: prev ? 'source.update' : 'source.add',
       target: rel,
       detail: `kind=${kind} shape=${shape}`,
@@ -165,13 +168,13 @@ export function importFile(
 }
 
 /** ディレクトリ配下をまとめて取り込む。 */
-export function importTree(db: Database, root: string, subdirs: string[]): ImportResult {
+export function importTree(db: Database, root: string, subdirs: string[], opts?: { by?: string }): ImportResult {
   const res: ImportResult = { scanned: 0, imported: 0, skipped: 0, issues: [], outstanding: 0 };
   for (const sub of subdirs) {
     for (const path of collectYaml(join(root, sub))) {
       res.scanned++;
       const rel = relative(root, path).split('\\').join('/');
-      const r = importFile(db, root, path);
+      const r = importFile(db, root, path, opts);
       if (r.changed) res.imported++;
       else if (!r.issue) res.skipped++;
       if (r.issue) {

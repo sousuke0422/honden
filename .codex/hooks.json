@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|Shell)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "HONDEN_GUARD_TRACE=\"$HOME/.honden/guard-trace.log\" bash /mnt/c/Users/aki/work/honden/.codex/hooks/guard.sh",
+            "timeout": 10,
+            "statusMessage": "禁じ手の門で検めておる"
+          }
+        ]
+      }
+    ]
+  }
+}
