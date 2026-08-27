@@ -116,7 +116,7 @@ interface State {
   last_reset_at: string | null;
 }
 
-function stateOf(db: Database, agent: string): State {
+export function stateOf(db: Database, agent: string): State {
   return (
     (db.query('SELECT since, last_at, last_level, last_reset_at FROM nudge WHERE agent = ?').get(agent) as
       | State
@@ -142,7 +142,13 @@ export function plan(
   now: Date = new Date(),
   // ペインの一覧は差し替えられるようにする。試験が tmux の在り様に
   // 左右されると、布陣が動くたびに赤くなる。
-  opts: { autonomous?: boolean; wakeShogun?: boolean; panes?: Map<string, Pane> } = {},
+  opts: {
+    autonomous?: boolean;
+    wakeShogun?: boolean;
+    panes?: Map<string, Pane>;
+    /** 手が塞がっておる者。段 3（文脈消し）を素の合図へ降ろして延期する。 */
+    busy?: Set<string>;
+  } = {},
 ): Plan[] {
   const p = opts.panes ?? panes();
   // 様態は正本から引く。opts.autonomous は試験のための差し替え。
@@ -187,6 +193,16 @@ export function plan(
         // 文脈を消すのは重い。連発すると仕掛かりを繰り返し捨てる。
         // 消せぬ間は素の合図へ落とす。黙るのではない。
         out.push(mark(build(entry.id, entry.cli, pane, s, 2, true, undefined, now, st, 3)));
+        continue;
+      }
+      if (opts.busy?.has(entry.id)) {
+        // 手が塞がっておる者に文脈消しは効かぬ。codex は仕事中の /new を
+        // 拒む（殿実測 2026-08-27）。旧 watcher と同じく次の周へ延期し、
+        // その間は素の合図で叩き続ける。reset の刻印を残さぬゆえ、
+        // 手すきになった最初の周で文脈消しが届く。
+        out.push(
+          mark(build(entry.id, entry.cli, pane, s, 2, true, '手が塞がっておるゆえ文脈消しを延期', now, st, 3)),
+        );
         continue;
       }
     }

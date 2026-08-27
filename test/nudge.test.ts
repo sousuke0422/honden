@@ -24,6 +24,7 @@ import {
   LEVEL_3_AFTER_MS,
   RESET_COOLDOWN_MS,
   REPEAT_MS,
+  stateOf,
 } from '../src/nudge';
 import type { Pane } from '../src/pane';
 import { setMode, getMode, parseUntil } from '../src/mode';
@@ -229,6 +230,31 @@ describe('撃つ中身', () => {
     unreadFor(db, 'ashigaru1');
     markSince(db, 'ashigaru1', T0);
     const p = find(plan(db, at(LEVEL_3_AFTER_MS), { panes: PANES }), 'ashigaru1')!;
+    expect(p.level).toBe(3);
+    expect(p.text).toBe('/new');
+  });
+
+  test('busy の者への段 3 は素の合図へ降ろして延期（codex は仕事中の /new を拒む）', () => {
+    const db = seeded({ ashigaru1: 'codex' });
+    unreadFor(db, 'ashigaru1');
+    markSince(db, 'ashigaru1', T0);
+    const busy = new Set(['ashigaru1']);
+    const p = find(plan(db, at(LEVEL_3_AFTER_MS), { panes: PANES, busy }), 'ashigaru1')!;
+    expect(p.level).toBe(2); // 撃つのは素の合図
+    expect(p.escalationLevel).toBe(3); // 段の時計は 3 のまま
+    expect(p.text).toContain('inbox_notice'); // /new ではない
+    expect(p.send).toBe(true); // 黙るのではない
+    // reset の刻印が残らぬこと = 手すきの周で文脈消しが届く
+    record(db, p, at(LEVEL_3_AFTER_MS));
+    const st = stateOf(db, 'ashigaru1');
+    expect(st.last_reset_at).toBeNull();
+  });
+
+  test('busy が明ければ段 3 の文脈消しがそのまま届く', () => {
+    const db = seeded({ ashigaru1: 'codex' });
+    unreadFor(db, 'ashigaru1');
+    markSince(db, 'ashigaru1', T0);
+    const p = find(plan(db, at(LEVEL_3_AFTER_MS), { panes: PANES, busy: new Set() }), 'ashigaru1')!;
     expect(p.level).toBe(3);
     expect(p.text).toBe('/new');
   });

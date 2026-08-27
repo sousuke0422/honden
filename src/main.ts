@@ -18,6 +18,7 @@ import { list, summarize, nudgeText, ack, ackAll } from './inbox';
 import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
+import { captureBusy } from './busy';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
@@ -593,7 +594,14 @@ export async function runNudge(
   // 前回の残りから始まってしまう。
   startClocks(db, now, { wakeShogun });
 
-  const plans = plan(db, now, { wakeShogun });
+  let plans = plan(db, now, { wakeShogun });
+  // 段 3 の的が手すきかを見る。busy の相手に文脈消しを撃っても拒まれる
+  // （codex 実測）ゆえ、塞がっておる者は素の合図へ降ろして延期する。
+  const busy = new Set<string>();
+  for (const p of plans) {
+    if (p.send && p.level === 3 && p.pane && captureBusy(p.pane, p.cli)) busy.add(p.agent);
+  }
+  if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy });
   const lines: string[] = [];
 
   if (plans.length === 0) {
