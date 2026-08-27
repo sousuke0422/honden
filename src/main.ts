@@ -573,6 +573,37 @@ export function runCmdDone(
 }
 
 /** `honden cmd show <id>` — 受け入れ条件と、いまどこまで覆っておるか。 */
+/**
+ * `honden cmd list` — 司令を並べる。既定は生きておるものだけ。
+ *
+ * **在るものと思って案内しておきながら、実は無かった**（指示書を移した
+ * 配下が見つけた・2026-08-28）。二つの hook が起動時の手順として
+ * `honden cmd list` を叩けと書いており、叩けば USAGE が出た。
+ * cmd_712 が戦った「案内と実物の割れ」を、将軍自身が作っていたことになる。
+ *
+ * 差配役が今何が動いておるかを見る道は要る。塞ぐのでなく、建てる。
+ */
+export function runCmdList(dbPath: string | undefined, all: boolean): RunResult {
+  const db = openStore({ path: dbPath });
+  const rows = db
+    .query(
+      all
+        ? 'SELECT id, status, priority, assigned_to, purpose FROM cmd ORDER BY created_at DESC LIMIT 50'
+        : `SELECT id, status, priority, assigned_to, purpose FROM cmd
+           WHERE status IN ('pending','in_progress') ORDER BY created_at DESC LIMIT 50`,
+    )
+    .all() as { id: string; status: string; priority: string; assigned_to: string | null; purpose: string | null }[];
+  if (rows.length === 0) {
+    return { code: EXIT_OK, out: all ? '  司令が一つも無い。' : '  動いておる司令は無い（済んだものも見るなら --all）。' };
+  }
+  const lines = rows.map((r) => {
+    const who = r.assigned_to ? ` → ${r.assigned_to}` : '';
+    const p = r.purpose ? ` ${r.purpose.split('\n')[0]!.slice(0, 46)}` : '';
+    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}`;
+  });
+  return { code: EXIT_OK, out: lines.join('\n') + `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` };
+}
+
 export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined): RunResult {
   if (!cmdId) return { code: EXIT_INVALID, err: '司令の番号を渡されよ。例: honden cmd show cmd_1' };
   const db = openStore({ path: dbPath });
@@ -1585,6 +1616,7 @@ export async function main(argv: string[]): Promise<number> {
     return emit(runCmdDone(dbPath, selfId(), input));
   }
 
+  if (rest[0] === 'cmd' && rest[1] === 'list') return emit(runCmdList(dbPath, flags['all'] === 'true'));
   if (rest[0] === 'cmd' && rest[1] === 'show') {
     return emit(runCmdShow(dbPath, rest[2]));
   }

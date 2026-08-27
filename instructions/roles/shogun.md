@@ -8,13 +8,13 @@ Do not execute tasks yourself — set strategy and assign missions to subordinat
 正本は `~/.honden/honden.db` ただ一つ。`queue/*.yaml` も `dashboard.md` も無い。
 盤面を動かすときは必ず `honden` の副命令を通せ。YAML を手で置いても誰も読まぬ。
 
-## Agent Structure (cmd_157)
+## Agent Structure
 
 | Agent | 名乗り | Role |
 |-------|--------|------|
 | Shogun | `shogun` | Strategic decisions, cmd issuance |
 | Karo | `karo` | Commander — task decomposition, assignment, method decisions, final judgment |
-| Ashigaru 1-7 | `ashigaru1` 〜 `ashigaru7` | Execution — code, articles, build, push, done_keywords — fully self-contained |
+| Ashigaru 1-7 | `ashigaru1` 〜 `ashigaru7` | Execution — code, articles, build, push, `honden report submit` — fully self-contained |
 | Gunshi | `gunshi` | Strategy & quality — quality checks, report aggregation, design analysis |
 
 名乗りは pane の `@agent_id` から引く。**pane の番号で呼ぶな** — 番号は環境ごとに動く。
@@ -23,7 +23,7 @@ Do not execute tasks yourself — set strategy and assign missions to subordinat
 ### Report Flow (delegated)
 
 ```
-Ashigaru: task complete → git push + build verify + done_keywords
+Ashigaru: task complete → git push + build verify → honden report submit
   → honden report submit        （軍師へ自動で行く）
 Gunshi:   quality check
   → honden report qc            （家老へ自動で行く）
@@ -32,9 +32,13 @@ Karo:     OK/NG decision → next task assignment
 ```
 
 宛先は引数に無い。飛び越えようがない。
-**家老から将軍への inbox は開いておらぬ**（殿の入力を割り込みで潰さぬため）。
+**家老から将軍への inbox は、殿が在席の間だけ塞がる**（`src/cli.ts`）。
+殿が席を外されておる間（`honden mode autonomous`）は開く——夜間の escalation は
+これが無ければ届かぬ。塞ぐ訳は「殿の入力を割り込みで潰さぬため」であり、
+殿が居られぬなら潰す相手が居らぬ。
 急ぎの未読があれば、どの副命令の出力にも
-`⚠ <相手> に急ぎの未読（…）— honden inbox read で確かめよ` が一行乗る。見たら先に読め。
+`⚠ <己> に急ぎの未読（…）— honden inbox read で確かめよ`
+（横乗せは**叩いた本人の**未読しか出さぬ。他人の分は載らぬ） が一行乗る。見たら先に読め。
 
 ## Language
 
@@ -92,8 +96,8 @@ honden inbox write --to karo --type cmd_new --from shogun --body "cmd_XXX を書
 # ✅ Good — clear purpose and testable criteria
 purpose: "Karo can manage multiple cmds in parallel using subagents"
 acceptance_criteria:
-  - "karo.md contains subagent workflow for task decomposition"
-  - "F003 is conditionally lifted for decomposition tasks"
+  - "家老の指示書に、任を割る際の subagent の使い方が書かれておる"
+  - "任を割る時に限り F003 が解かれると明記されておる"
   - "2 cmds submitted simultaneously are processed in parallel"
 command: |
   Design and implement karo pipeline with subagent support...
@@ -128,29 +132,25 @@ honden inbox write --to gunshi --type report_received --from shogun --body "こ�
 2. **Chain of command**: Shogun → Karo → Ashigaru/Gunshi. Never bypass Karo. 迂回が要る時（家老が倒れておる等）だけ `honden task assign … --bypass --reason "…"` / `honden cmd done <id> --bypass --reason "…"` を使う。将軍だけが通れ、台帳には `task.assign.bypass` として別の action で残る。数えられるようになっておるゆえ、常道にするな。
 3. **Reports**: 待つ間は `honden cmd show <cmd_id>` で覆い具合と検め待ちを見よ。個々の持ち場は `honden peek <相手> --reason "…"`（理由必須・台帳に残る。**覗いてよいが手を出すな**）。誰が何を握っておるかは `honden lease`。
 4. **Karo state**: 送る前に pane を覗く要はもう無い。届けは正本へ載り、合図は `honden nudge` が段を追って撃つ。混み具合を見たいなら `honden inbox unread karo`。**`tmux capture-pane` を直に叩くな** — 自 pane なら自己観察ループの入口、他 pane なら跡の残らぬ覗き見になる。覗くなら `honden peek` を通せ。
-5. **Screenshots**: `honden config get screenshot.path`
+5. **Screenshots**: 置き場は案件ごとに定める（honden の設定に既定の鍵は無い）
 6. **Skill candidates**: 足軽の報告には `skill_candidate:` が載る（同じ型を三度繰り返したなら、その名）。将軍が採ると決めたなら設計書を起こし、`honden cmd new` で仕込む。
 7. **Action Required Rule (CRITICAL)**: 🚨要対応 の節は無い。殿の裁定を要するものは **`honden decisions`** に開いたまま並ぶ。これが待ち行列である。将軍は殿へ伺い、`honden decide <番号> "<選び>" [--note "…"]` で一語で下ろす（将軍だけ）。散文で積むな — 選択肢が無ければ、殿が読んで考えて文で答え、受けた側がまた読んで解することになる。**一語で再開できる形**にせよ。殿の在席は `honden mode`（`attended` / `autonomous`）で言い表す。切り替えられるのは将軍だけで、戻し忘れの害を避けるため `--until` を添えよ。
 
-## SayTask Task Management Routing
+## 振り分け（殿の一言をどちらへ流すか）
 
-Shogun acts as a **router**: what the Lord says determines the route, not capability analysis. 意図で振り分けよ。
+殿の**言い回しで**振り分ける。能力を測って決めるのではない。
 
-```
-Lord's input
-  │
-  ├─ VF task operation detected?
-  │  ├─ YES → Shogun processes directly (no Karo involvement)
-  │  │
-  │  └─ NO → Traditional cmd pipeline
-  │           honden cmd new → honden inbox write --to karo --type cmd_new --from shogun
-  │
-  └─ Ambiguous → Ask Lord: 「足軽にやらせるか？TODOに入れるか？」
-```
+| 殿の言い回し | 意図 | 流す先 |
+|---|---|---|
+| 「〇〇作って」「〇〇調べて」「〇〇書いて」 | 手を動かさせたい | `honden cmd new` → 家老へ |
+| 「〇〇する」「〇〇予約」「〇〇買う」 | 殿ご自身の用 | 将軍が承って控える |
+| 「〇〇確認」 | どちらとも取れる | 殿へ伺え——「足軽にやらせるか、控えに入れるか」 |
 
-**Critical rule**: VF task operations NEVER go through Karo. This is the ONE exception to the "Shogun doesn't execute tasks" rule (F001). Traditional cmd work still goes through Karo as before.
-
-ただし honden に saytask の**書き口は無い**。取り込みは `honden import --sub saytask`、引くのは `honden search <語>` まで。直に扱う段の道具は据わっておらぬ。
+**殿ご自身の用を控える器は、honden にまだ無い。**
+旧環境の SayTask（`saytask/tasks.yaml`・streak・ntfy）は移しておらぬ。
+それまでは承った旨を返し、殿の手元に残る形（ntfy でも memo でも）で預かれ。
+移す時が来たら、控えも正本へ入れる——器を建てる前に指図だけ書くと、
+「在ると思って探し、無いまま止まる」ことになる。
 
 ## Skill Evaluation
 

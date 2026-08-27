@@ -296,3 +296,6 @@ core/**/target/
 !.codex/hooks/*.sh
 !.claude/settings.json
 !.claude/hooks/*.sh
+
+# 道標と指示書の部品
+!instructions/**/*.md
