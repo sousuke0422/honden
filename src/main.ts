@@ -12,6 +12,7 @@ import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit 
 import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { readFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
@@ -20,7 +21,7 @@ import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
 import { captureBusy } from './busy';
-import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, OTP_DEFAULT_TTL_MS } from './guard';
+import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
@@ -814,6 +815,55 @@ export function runGuardFacts(
 }
 
 /**
+ * `honden guard hook claude` — claude の PreToolUse をそのまま受ける。
+ *
+ * 受け答えの形は codex と同じである（codex が claude の形を写した）。
+ * ゆえに実装は一つで足りる——皮を分けるのは呼ばれ方の違いだけで、
+ * 判定器も応答も共有する。
+ */
+export const runGuardHookClaude = runGuardHookCodex;
+
+/**
+ * `honden guard selftest` — 門が生きておるかを、実際に叩いて確かめる。
+ *
+ * 据えた後に静かに消えるのが門の常である（信頼切れ・設定の書き換え・
+ * 名簿の読み込み時期）。定期的に叩くほかない。
+ */
+export function runGuardSelftest(root: string | undefined): RunResult {
+  const base = resolvePath(root ?? process.cwd());
+  const checks = guardSelftest({
+    root: base,
+    exists: (p) => existsSync(p),
+    run: (script, input) => {
+      const r = Bun.spawnSync(['bash', script], { stdin: Buffer.from(input) });
+      return r.success ? r.stdout.toString() : null;
+    },
+    codexTrusted: (cfg) => {
+      try {
+        const toml = readFileSync(join(homedir(), '.codex/config.toml'), 'utf8');
+        return toml.includes(cfg);
+      } catch {
+        return false;
+      }
+    },
+  });
+  const lines = checks.map((c) => {
+    const mark = c.denies ? '生きておる' : c.configured ? '**効いておらぬ**' : '据わっておらぬ';
+    return `  ${c.cli.padEnd(7)} ${mark}${c.note ? `  — ${c.note}` : ''}`;
+  });
+  const dead = checks.filter((c) => c.configured && !c.denies);
+  // 据わっておるのに効かぬのが最も危うい。据わっておらぬのは見れば分かるが、
+  // 「据えたつもりで効いておらぬ」は静かである。
+  return {
+    code: dead.length > 0 ? EXIT_INVALID : EXIT_OK,
+    out:
+      '  禁じ手の門\n' +
+      lines.join('\n') +
+      (dead.length > 0 ? `\n\n  ${dead.length} 件が据わっておるのに効いておらぬ。直すまで守りは無いと思え。` : ''),
+  };
+}
+
+/**
  * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
  */
 export function runGuardGrant(
@@ -1372,6 +1422,7 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'check') return emit(runGuardCheck(flags['cmd']));
     if (rest[1] === 'hook' && rest[2] === 'cursor') return emit(await runGuardHookCursor(dbPath, selfId()));
     if (rest[1] === 'hook' && rest[2] === 'codex') return emit(await runGuardHookCodex(dbPath, selfId()));
+    if (rest[1] === 'hook' && rest[2] === 'claude') return emit(await runGuardHookClaude(dbPath, selfId()));
     if (rest[1] === 'grant')
       return emit(
         actingAs('shogun') ??
@@ -1379,7 +1430,8 @@ export async function main(argv: string[]): Promise<number> {
       );
     if (rest[1] === 'appeal') return emit(runGuardAppeal(dbPath, selfId(), flags['cmd'], flags['reason']));
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
-    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex / guard grant / guard appeal / guard facts のいずれかである' });
+    if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
+    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard appeal / guard facts / guard selftest のいずれかである' });
   }
 
   if (rest[0] === 'peek') {

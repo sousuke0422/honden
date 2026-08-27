@@ -24,6 +24,7 @@
 # Claude Code settings (spinner verbs only, no secrets)
 !.claude/
 !.claude/settings.json
+!.claude/hooks/*.sh
 
 # Instructions (core OSS)
 !instructions/
@@ -294,3 +295,4 @@ core/**/target/
 !.codex/hooks.json
 !.codex/hooks/*.sh
 !.claude/settings.json
+!.claude/hooks/*.sh

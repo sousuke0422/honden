@@ -324,3 +324,66 @@ export function facts(db: Database, agent: string, cmd: string, appealReason?: s
     recent_guard,
   };
 }
+
+/** 門が生きておるかの検め。一つの CLI につき一行。 */
+export interface GateCheck {
+  cli: string;
+  /** 設定が据わっておるか。 */
+  configured: boolean;
+  /** 実際に禁じ手を差し出して deny が返るか。 */
+  denies: boolean;
+  /** 据わっておるのに効かぬ、等の但し書き。 */
+  note?: string;
+}
+
+/**
+ * 門が生きておるかを、実際に禁じ手を差し出して確かめる。
+ *
+ * **据えただけでは効かぬ**——本日だけで三度これに遭った:
+ *   一、codex は未信頼の hook を黙って飛ばす（`codex exec` に信頼の出口が無い）
+ *   二、hooks.json を書き換えるとハッシュが変わり、再信頼まで門が飛ぶ
+ *   三、agent の名簿はセッション開始時に読まれ、据えた後は呼べぬ
+ * いずれも **静かに** 門が消える形である。静かに消えるものは、
+ * 定期的に叩いて確かめるほかない。
+ *
+ * 設定の中身を読んで「据わっておる」と判ずるだけでは足りぬ。
+ * 皮を実際に走らせ、deny が返ることまで見る——それが陽性対照である。
+ */
+export function selftest(opts: {
+  root: string;
+  exists: (p: string) => boolean;
+  run: (script: string, input: string) => string | null;
+  /** codex の信頼記録があるか。無ければ黙って飛ばされる。 */
+  codexTrusted?: (hooksPath: string) => boolean;
+}): GateCheck[] {
+  const probe = 'rm -rf /'; // 絶対域。どの門でも必ず deny になる形
+  const out: GateCheck[] = [];
+
+  const cursorCfg = `${opts.root}/.cursor/hooks.json`;
+  const cursorSh = `${opts.root}/.cursor/hooks/guard-shell.sh`;
+  {
+    const configured = opts.exists(cursorCfg) && opts.exists(cursorSh);
+    const res = configured ? opts.run(cursorSh, JSON.stringify({ command: probe })) : null;
+    out.push({
+      cli: 'cursor',
+      configured,
+      denies: !!res && res.includes('"permission":"deny"'),
+      note: configured ? undefined : '設定か皮が無い',
+    });
+  }
+
+  for (const [cli, sh, cfg] of [
+    ['codex', `${opts.root}/.codex/hooks/guard.sh`, `${opts.root}/.codex/hooks.json`],
+    ['claude', `${opts.root}/.claude/hooks/guard.sh`, `${opts.root}/.claude/settings.json`],
+  ] as const) {
+    const configured = opts.exists(cfg) && opts.exists(sh);
+    const res = configured ? opts.run(sh, JSON.stringify({ tool_name: 'Bash', tool_input: { command: probe } })) : null;
+    const denies = !!res && res.includes('"permissionDecision":"deny"');
+    let note: string | undefined = configured ? undefined : '設定か皮が無い';
+    if (cli === 'codex' && configured && opts.codexTrusted && !opts.codexTrusted(cfg)) {
+      note = '**信頼の記録が無い。codex は未信頼の hook を黙って飛ばす**——対話で起こして /hooks で信頼を与えよ';
+    }
+    out.push({ cli, configured, denies, note });
+  }
+  return out;
+}

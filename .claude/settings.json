@@ -1059,5 +1059,19 @@
       "馬にスニーカー",
       "甲冑の下にヒートテック"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/guard.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
