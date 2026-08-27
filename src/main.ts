@@ -22,6 +22,7 @@ import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './repor
 import { plan, send, record, startClocks } from './nudge';
 import { captureBusy } from './busy';
 import { assemble as assembleBrief } from './brief';
+import { collect as collectStatus, render as renderStatus } from './status';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
@@ -905,6 +906,23 @@ export function runBrief(
   return { code: EXIT_OK, out: b.text };
 }
 
+/** `honden status` — 布陣の様子を一枚に並べる。 */
+export function runStatus(dbPath: string | undefined, json: boolean): RunResult {
+  const db = openStore({ path: dbPath });
+  const rows = collectStatus(db);
+  if (rows.length === 0) return { code: EXIT_OK, out: '  名簿が空である。honden roster sync を先に。' };
+  if (json) return { code: EXIT_OK, out: JSON.stringify(rows, null, 2) };
+  const absent = rows.filter((r) => r.pane === null).length;
+  const urgent = rows.filter((r) => r.urgent).length;
+  const tail: string[] = [];
+  if (absent > 0) tail.push(`${absent} 名が布陣に居らぬ`);
+  if (urgent > 0) tail.push(`${urgent} 名に急ぎの未読`);
+  return {
+    code: EXIT_OK,
+    out: renderStatus(rows) + (tail.length > 0 ? `\n\n  ${tail.join(' / ')}` : ''),
+  };
+}
+
 /**
  * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
  */
@@ -1474,6 +1492,10 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
     if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard appeal / guard facts / guard selftest のいずれかである' });
+  }
+
+  if (rest[0] === 'status') {
+    return emit(runStatus(dbPath, flags['json'] === 'true'));
   }
 
   if (rest[0] === 'brief') {
