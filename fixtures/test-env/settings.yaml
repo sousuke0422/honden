@@ -17,8 +17,8 @@ cli:
       type: claude
       model: claude-sonnet-5
     ashigaru1:
-      type: claude
-      model: claude-fable-5
+      type: codex
+      model: gpt-5.6-luna
     ashigaru2:
       type: cursor
       model: composer-2.5

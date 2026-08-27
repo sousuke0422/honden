@@ -1724,3 +1724,40 @@ step_12 まで完走して「全手完了」。途中読み・作業非破壊・
 | claude | nudge をそのまま切りのいい所で読む（実測済み） |
 | cursor | nudge + Enter 添え押し = 次のツール境界で読む（**実測済み**） |
 | codex | Tab 仮置き——布陣へ座らせた時に実測（殿: 枠は据え置き） |
+
+### 九、codex (gpt-5.6-luna) の受け手検証 — Tab 仮置きが的中（2026-08-27 18:35）
+
+殿裁可の下、試験環境 ashigaru1 を codex（gpt-5.6-luna low）に差し替えて
+実測した。gpt-5.3-mini は ChatGPT アカウントの codex では選べぬ
+（/model の札: 5.6-sol/terra/luna・5.5・5.4）→ 殿裁定で luna。
+
+**D-1（idle 疎通）**: 20 秒で read+ack。作法一段落の装填と pane 名乗りが
+codex でも通用する（cursor に続き二例目）。
+
+**D-2（busy 中の急報 + Tab）**: sleep 8×12 手の最中に cmd_update を発射。
+codex 自身の UI が答えを出した——
+
+```
+tab to queue message
+Messages to be submitted after next tool call (press esc to interrupt and send)
+```
+
+**Tab = 積む・積んだ文は次のツール呼び出し後に届く**。FOLLOWUP_KEY の
+仮置きがそのまま正解だった。esc は「中断して即送」で仕掛かりを壊す側——
+使わぬ判断も正しかった。
+
+時系列: 1 発目（作業 21 秒時点）は届いた形跡が無く、60 秒後の再打ち
+（2 発目 + Tab）から 21 秒 = **次のツール境界**で read+ack（10 手目付近）、
+残り 2 手を続けて「全手完了」。途中読みと再開の両立は codex でも成立。
+
+**含意**: 添え押しの初弾は取りこぼすことがある（原因未特定・composer の
+状態依存か）。だが再打ちが 60 秒毎にあるゆえ、実運用の最悪値は一周遅れ。
+急報の第一経路が横乗せ（共通ルート）である設計は、この取りこぼしにも
+保険として効く。
+
+| CLI | 急報の届き方（全て実測済み） |
+|---|---|
+| 全 CLI 共通 | 横乗せ（第一経路） |
+| claude | nudge をそのまま切りのいい所で読む |
+| cursor | nudge + Enter 添え押し → 次のツール境界（発射 11 秒） |
+| codex | nudge + Tab 添え押し → 次のツール境界（再打ち後 21 秒） |
