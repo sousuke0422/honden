@@ -65,11 +65,32 @@ up() {
   touch "$DB.signal"   # 芯の見張る先。先に無いと芯が開けぬ
 
   echo "── 布陣を起こす ──"
-  tmux new-session -d -s "$SESSION" -n agents \
-    "exec bash '$ROOT/scripts/testenv/recv.sh' '${AGENTS[0]}' '$RECV/${AGENTS[0]}.log'"
+  # HONDEN_TEST_REAL に名を書くと、その pane には受け手でなく**本物の CLI** が座る。
+  # 例: HONDEN_TEST_REAL=ashigaru2 scripts/testenv.sh up
+  # 起動列は honden 自身の口（config get）から引く——shutsujin と同じく
+  # settings が正で、script に CLI の名を焼き込まない。
+  local REAL="${HONDEN_TEST_REAL:-}"
+  pane_cmd() {
+    local a="$1"
+    if [ "$a" = "$REAL" ]; then
+      local ctype cmodel
+      ctype=$(H_OUT config get "cli.agents.$a.type" 2>/dev/null || echo "")
+      cmodel=$(H_OUT config get "cli.agents.$a.model" 2>/dev/null || echo "")
+      case "$ctype" in
+        cursor)
+          echo "cd '$ROOT' && exec cursor-agent --yolo${cmodel:+ --model $cmodel}" ;;
+        claude)
+          echo "cd '$ROOT' && exec claude --dangerously-skip-permissions${cmodel:+ --model $cmodel}" ;;
+        *)
+          echo "exec bash '$ROOT/scripts/testenv/recv.sh' '$a' '$RECV/$a.log'" ;;  # 知らぬ CLI は受け手
+      esac
+    else
+      echo "exec bash '$ROOT/scripts/testenv/recv.sh' '$a' '$RECV/$a.log'"
+    fi
+  }
+  tmux new-session -d -s "$SESSION" -n agents "$(pane_cmd "${AGENTS[0]}")"
   for a in "${AGENTS[@]:1}"; do
-    tmux split-window -t "$SESSION:agents" \
-      "exec bash '$ROOT/scripts/testenv/recv.sh' '$a' '$RECV/$a.log'"
+    tmux split-window -t "$SESSION:agents" "$(pane_cmd "$a")"
     tmux select-layout -t "$SESSION:agents" tiled >/dev/null
   done
 
