@@ -40,26 +40,23 @@ Use Task tool when:
 - Complex multi-step tasks require autonomous handling
 - You need to plan implementation strategy
 
-## Memory MCP
+## 覚えの持ち越し
 
-Save important information to Memory MCP:
+**honden は Memory MCP を使っておらぬ。** 正本は SQLite 一つで、repo 内に MCP の
+設定は無い。セッションを跨いで残すものは、それぞれ置き場が決まっておる:
 
-```python
-mcp__memory__create_entities([{
-    "name": "preference_name",
-    "entityType": "preference",
-    "observations": ["Lord prefers X over Y"]
-}])
+| 残すもの | 置き場 |
+|---|---|
+| 何を決め、なぜそう決めたか | `docs/decisions.md`（追記のみ。消さぬ） |
+| 誰が何をしたか | 台帳（`honden` が自ずと刻む） |
+| 役の作法・禁じ手 | `instructions/` の部品（`honden brief` が組んで出す） |
+| 殿の裁可を待つもの | `honden decision raise` → `honden decisions` |
 
-mcp__memory__add_observations([{
-    "entityName": "existing_entity",
-    "contents": ["New observation"]
-}])
-```
-
-Use for: Lord's preferences, key decisions + reasons, cross-project insights, solved problems.
-
-Don't save: temporary task details（正本が持っておる。`honden cmd show <cmd_id>` / `honden lease` で引け）、file contents（読めば済む）、in-progress details（`honden report submit` で報せよ。殿の判断を要するものは上役が `honden decision raise` で上げ、`honden decisions` に開いたまま残る。足軽は自ら上げられぬゆえ、報告に書いて家老・軍師へ回せ）。
+**「この CLI には Memory MCP が無い」と書くな。** 手で構成すれば全 CLI で動き、
+違うのは呼び名だけである（Claude: `mcp__memory__read_graph` /
+Cursor: `mcp_memory_read_graph` / Codex: `mcp__memory.read_graph`）。
+能力の差と構成の差を取り違えた記述が一度出回り、殿の確定で正された。
+honden が使っておらぬのは「無いから」ではなく、**正本を一つに寄せたから**である。
 
 ## Model Switching
 
@@ -102,8 +99,7 @@ All agents: Follow the Session Start / Recovery procedure. Key steps:
 
 1. Identify self: `tmux display-message -t "$TMUX_PANE" -p '#{@agent_id}'`
    （`honden` も同じ pane の `@agent_id` から名乗りを取る。**pane の番号で自分を数えるな。**食い違えば `honden` が「名乗りが食い違っておる」と言う。黙って片方を採ってはならぬ）
-2. `mcp__memory__read_graph` — restore rules, preferences, lessons
-3. `honden brief` — 指示書はこれで出る。**生成物は無い**（役は名乗りから、CLI は名簿から引く。`--role X` で明示もできる）
-4. Rebuild state from the 正本: `honden inbox read` → `honden lease`（自分の持ち場と期限）→ `honden cmd show <cmd_id>`（受け入れ条件と覆い具合）。読んだ報せは `honden inbox ack --all` で既読にする
+2. `honden brief` — 指示書はこれで出る。**生成物は無い**（役は名乗りから、CLI は名簿から引く。`--role X` で明示もできる）
+3. Rebuild state from the 正本: `honden inbox read` → `honden lease`（自分の持ち場と期限）→ `honden cmd show <cmd_id>`（受け入れ条件と覆い具合）。読んだ報せは `honden inbox ack --all` で既読にする
 5. Review forbidden actions, then start work
    （禁じ手は `honden brief` の common/forbidden_actions.md に載る。撃つ前に迷えば `honden guard check --cmd '<命令>'`。門に弾かれたなら `honden guard appeal --cmd '<命令>' --reason "…"` で直訴せよ。自分で迂回するな）

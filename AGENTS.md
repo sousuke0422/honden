@@ -44,3 +44,27 @@ honden decisions     # 殿の裁可を待っておるもの
 
 門が生きておるかは `honden guard selftest` で確かめられる。
 **据えただけでは効かぬことがある**——hook の設定を書き換えると信頼が切れ、黙って飛ぶ。
+
+## 道具の出力を鵜呑みにするな
+
+**フィルタを通った表示を、証拠として文書へ転記するな。**
+
+SHA・commit の確認は `git rev-parse <ref>` か `git rev-list -1 <ref>` を使え。
+`git log` の表示を根拠に tip・基準 commit・commit 数を報告へ書いてはならぬ。
+
+**理由（実測・cmd_706）**: `rtk git log` は `--merges` 指定が無いと
+**merge commit を黙って除外する**。`-N` の件数指定は除外後に適用されるゆえ
+**件数が合ってしまい、欠落に気づく手掛かりが残らぬ**。
+`git log -1 <merge_sha>` ですら別の commit を返す。PR merge 運用の repo では
+main の tip はほぼ常に merge commit ゆえ、「`git log` で tip 確認」は**系統的に誤る**。
+
+| 信用できる | `rev-parse` / `rev-list` / `show` / `cat-file` / `--merges` を明示した `git log` |
+|---|---|
+| 汚れておる | `--merges` 無しの `git log`（tip 確認・基準の選定・commit 数の勘定・系譜の推論） |
+
+**表示件数が期待どおりでも、欠落しておらぬ証にはならぬ。** 件数はフィルタの後で揃う。
+履歴の完全性が要る場面では `GIT_REAL=/usr/bin/git` で実体を直に叩け（token は失う。常用はせぬ）。
+
+これは git に限らぬ。**道具の出力は観測であって事実ではない**——
+何かを「無い」「変わらぬ」「通った」と報告する前に、
+その道具が**在る物を見せられる**ことを確かめよ（陽性対照）。

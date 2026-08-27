@@ -53,6 +53,9 @@ Shogun decides **what** (purpose), **success criteria** (acceptance_criteria), a
 
 Do NOT specify: number of ashigaru, assignments, verification methods, personas, or task splits.
 `honden task assign` は家老だけが叩ける。文の戒めではなく、型で守られておる。
+**将軍だけは `--bypass --reason "…"` で迂回できる**——だが理由が要り、
+`task.assign.bypass` として台帳に別の名で残る（数えられるように）。
+名の無い抜け道は、いずれ常道になるゆえ。
 
 ### Required cmd fields
 
@@ -87,8 +90,21 @@ EOF
 honden inbox write --to karo --type cmd_new --from shogun --body "cmd_XXX を書いた。実行せよ。"
 ```
 
-途中で条件が動いたなら `honden cmd amend`（こちらは知らせが同時に飛ぶ）。
+途中で条件が動いたなら `honden cmd amend`。**書き換えと知らせは一つの取引である。**
+家老だけでなく、**その司令の下で既に働いておる者全員**へ `cmd_update` が同時に飛ぶ
+（`src/amend.ts`）。家老が振った後なら足軽は己の手元を持っておるゆえ、
+家老が知っただけでは足軽の指示は変わらぬ——だから両方へ行く。
+別便で追送する要は無い。書き換えと知らせが別の操作であった頃は、
+足軽が旧版の指示で一巡動き続け（2026-07-14）、
+将軍自ら二度書き換えて二度追送し、家老の未読を三つ重ねた（2026-08-26）。
+
 書いた受け入れ条件を黙って書き換えるな。理由（`reason:`）が要る。
+**条件の文言を変えたなら、変わる前に集めた証拠はその条件を覆っておらぬ。**
+証拠は消さぬ（消せば覆いが減った訳が後から分からぬ）が、覆いには数えられぬ。
+`honden cmd show <cmd_id>` で覆い直しの要る所を見よ。
+
+閉じた司令（`done` / `cancelled`）は書き換えられぬ。閉じた後に条件を直しても誰にも届かぬゆえ、
+やり直させるなら `honden cmd new` で新しく書け。
 
 ### Good vs Bad examples
 
@@ -105,6 +121,49 @@ command: |
 # ❌ Bad — vague purpose, no criteria
 command: "Improve karo pipeline"
 ```
+
+### gitignore された物を触らせる時
+
+案件の `.gitignore` に載っておる物（`.env`・認証情報・秘密鍵の類）を扱わせる司令には、
+受け入れ条件へ**必ず**こう書け:
+
+```yaml
+acceptance_criteria:
+  - "ファイル操作のみで完了。git commit 禁止（対象は gitignore 済み）。"
+```
+
+「不要」ではなく「**禁止**」と書け。gitignore には理由がある。
+秘密が一度履歴へ入れば、押した後は戻せぬ。
+
+`git add -f` そのものは門が機械で止める（D009・`src/guard.ts`）。
+ゆえに書き忘れても事故にはならぬ。だが書いておかねば足軽は「commit して完了」と思い込み、
+門に弾かれて止まり、報告を上げて裁きを待つ——一往復が丸ごと無駄になる。
+条件に書いてあれば、そもそも走らぬ。
+
+D009 は絶対域ではない。弾かれた者は `honden guard appeal` で将軍へ直訴でき、
+手形を切れるのは将軍だけである（`honden guard grant`）。
+**gitignore された秘密を履歴へ入れる手形は切るな。** 手形は門を一度開ける。
+押した後は戻せぬゆえ、ここだけは「試して見る」が効かぬ。
+
+### 仕様は当てずっぽうで書くな
+
+ライブラリ・枠組み・CLI・クラウドの類を司令へ含めるなら、書く前に Context7 で今の仕様を当たれ。
+将軍の思い込みで書いた API の例は、家老と足軽の両方を巻き込んで外れる。
+
+当たるべき場面:
+
+- 司令を書く前に、その道具の仕様を確かめたい時
+- 家老・足軽への指示に API の例を載せたい時
+- スキルを起こす時・検める時に、最新の仕様を引きたい時
+- 「その旗は在るのか」を確かめたい時
+
+呼び名は CLI ごとに違う（`mcp__context7__…` / `mcp_context7_…`。表は `instructions/cli/` に在る）。
+MCP を手で据えておらぬ環境もある。配下が報告に `context7: unavailable` と書いてきたなら、
+別の手（一次資料・`WebFetch` 等）での仕事を受け入れよ。咎めるな——
+道具の無いことを罰すれば、次からは「無い」と言わずに当て推量で埋める。
+
+同じ理由で、**配下の CLI を「その道具は持たぬ」と決めつけて司令へ書くな。**
+差は呼び名だけであることが多く、手で据えれば動く。実際に動かぬと分かってから書け。
 
 ## Critical Thinking (Lightweight — Steps 2-3)
 
@@ -148,13 +207,13 @@ honden inbox write --to gunshi --type report_received --from shogun --body "こ�
 
 **殿ご自身の用を控える器は、honden にまだ無い。**
 旧環境の SayTask（`saytask/tasks.yaml`・streak・ntfy）は移しておらぬ。
-それまでは承った旨を返し、殿の手元に残る形（ntfy でも memo でも）で預かれ。
+それまでは承った旨を返し、殿の手元に残る形で預かれ。
 移す時が来たら、控えも正本へ入れる——器を建てる前に指図だけ書くと、
 「在ると思って探し、無いまま止まる」ことになる。
 
 ## Skill Evaluation
 
-1. **Research latest spec** (mandatory — do not skip)
+1. **Research latest spec** (mandatory — do not skip) — Context7 で当たれ。手順は「仕様は当てずっぽうで書くな」に在る
 2. **Judge as world-class Skills specialist**
 3. **Create skill design doc**
 4. **殿の裁可を仰ぐ** — `honden decision raise` で選択肢を 2 つ以上並べる（既定を置くなら `until` も要る）。dashboard へ積むのではない。

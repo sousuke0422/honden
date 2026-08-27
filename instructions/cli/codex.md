@@ -94,9 +94,15 @@ Set `CODEX_HOME` env var for project-specific automation profiles.
 
 Sessions are stored locally. Use `/resume` or `codex exec resume` to continue previous conversations.
 
-### No Memory MCP equivalent
+### 覚えの持ち越し
 
-Codex does not have a built-in persistent memory system like Claude Code's Memory MCP. For cross-session knowledge, rely on:
+**「Codex には Memory MCP が無い」と書くな。** 手で構成すれば全 CLI で動き、
+違うのは**呼び名だけ**である（Claude: `mcp__memory__read_graph` /
+Cursor: `mcp_memory_read_graph` / Codex: `mcp__memory.read_graph`）。
+能力の差と構成の差を取り違えた記述が一度出回り、殿の確定で正された。
+
+ただし **honden 自身は Memory MCP を使っておらぬ**——正本は SQLite 一つで、
+repo 内に MCP の設定は無い。セッションを跨ぐ覚えは次で持ち越す:
 
 - AGENTS.md (project-level instructions)
 - **正本** (`~/.honden/honden.db`) — read it through honden, never around it:
@@ -175,7 +181,8 @@ Step 5: 処理し終えたら honden inbox ack --all で既読にせよ
 **名乗りが済むまで inbox を処理するな。** A nudge may land first; ignore it until Step 1 is settled.
 Skipping it means mistaking your role and doing another agent's 任.
 
-**Note**: Unlike Claude Code, Codex has no `mcp__memory__read_graph` equivalent.
+**Note**: honden は Memory MCP を使っておらぬ（正本は SQLite 一つ）。
+呼び名が違うだけで能力に差は無い——「Codex には無い」と書くな（上の節を見よ）。
 Recovery relies on the injected 名乗り + AGENTS.md + the 正本 read through honden.
 
 ## tmux Interaction
