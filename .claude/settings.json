@@ -1072,6 +1072,28 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/session-start.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/stop-inbox.sh",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }
