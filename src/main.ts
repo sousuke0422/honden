@@ -1032,10 +1032,8 @@ export async function main(argv: string[]): Promise<number> {
 
   /**
    * どのコマンドの出力にも、呼び出し主の急ぎ未読を一行だけ横乗せする。
-   *
-   * cursor は作業中に届く send-keys を完了まで読まぬ（殿実測 2026-08-27）が、
-   * 作業中もツールとして honden は叩く。急報（cmd_update = 範囲の増減など）を
-   * ここへ載せれば、reset で仕掛かりを捨てずに作業中の者へ届く。
+   * 急報（cmd_update = 範囲の増減など）の**全 CLI 共通の第一経路**。
+   * reset で仕掛かりを捨てず、作業中の者へ届く（詳細は inbox.ts）。
    * inbox 系（見に行く行為そのもの）と nudge（末尾の JSON 行が芯への返事）には
    * 載せぬ。横乗せの失敗で本務を落とさぬ。
    */
