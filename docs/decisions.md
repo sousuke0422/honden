@@ -1593,3 +1593,25 @@ agent 名を本番と被らせぬ（testkaro）ことで回避した。
 - 送る**前**のログ行数を覚え、それより後の行だけを見る（前回の跡で偽陽性になった）
 - 本番の queue に同じ stamp が**無い**ことまで検める（分離の証明）
 - watcher の窓は remain-on-exit で遺骸を残す（死ぬと窓ごと消えて死因が読めぬ）
+
+### 五、実機（cursor）での端到端の疎通（2026-08-27 03:47）
+
+受け手を bash のループから**本物の cursor（composer-2.5）**に替え、
+「足りない一」（受け手の作法）の最小形を実証した。
+
+```
+布陣の外 → honden inbox write
+        → 芯が起き → 手が cursor の pane へ inbox_notice を打ち込み
+        → cursor が自分で判じて実行:
+            $ HONDEN_DB=… honden inbox read --agent ashigaru2 && … ack --all
+              既読にした 1 件 / 残り: unread=0
+        → 未読 0（機械判定）
+```
+
+指示は起動後に一度だけ send-keys で渡した（「inbox_notice が届いたら
+read して ack せよ」）。**HONDEN_AGENT_ID は渡しておらぬ**——ack の名乗りは
+pane の @agent_id から取れた。identity の pane 優先が実機で効いた証拠になる。
+
+受け手の作法が一段落で書けたこと自体が収穫である。旧経路の作法
+（inboxN → queue/inbox/*.yaml を読み read: true を Edit で書き換え）より
+渡す文が短い。指示書の書き換え（切り替えの本丸）の見積りが軽くなった。
