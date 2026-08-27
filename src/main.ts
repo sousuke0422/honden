@@ -21,6 +21,7 @@ import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
 import { captureBusy } from './busy';
+import { assemble as assembleBrief } from './brief';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
@@ -864,6 +865,47 @@ export function runGuardSelftest(root: string | undefined): RunResult {
 }
 
 /**
+ * `honden brief [--role X] [--cli Y]` — 指示書を組み立てて出す。
+ *
+ * 役を省けば自分の名乗りから引く。CLI を省けば名簿から引く——
+ * **己が何者で何を使っておるかは正本が知っておる**ゆえ、
+ * 読む者は `honden brief` の一語で足りる。
+ */
+export function runBrief(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  role: string | undefined,
+  cli: string | undefined,
+  root: string | undefined,
+): RunResult {
+  const base = resolvePath(root ?? process.cwd());
+  let r = role ?? selfId;
+  if (!r) {
+    return { code: EXIT_INVALID, err: '誰の指示書か分からぬ。--role を渡すか、布陣の中で叩かれよ。' };
+  }
+  // ashigaru3 のような名は、役としては ashigaru である。
+  const kind = /^ashigaru\d*$/.test(r) ? 'ashigaru' : r;
+  let c = cli ?? null;
+  if (!c) {
+    try {
+      const db = openStore({ path: dbPath });
+      const row = db.query('SELECT cli FROM roster WHERE id = ?').get(r) as { cli: string } | null;
+      c = row?.cli ?? null;
+    } catch {
+      /* 正本が無くとも組み立てはできる */
+    }
+  }
+  const b = assembleBrief(base, kind, c);
+  if (b.missing.length > 0) {
+    return { code: EXIT_INVALID, err: `  指示書の部品が欠けておる: ${b.missing.join(' / ')}` };
+  }
+  if (!b.text.trim()) {
+    return { code: EXIT_INVALID, err: `  ${kind} の指示書が空である。instructions/ を検められよ。` };
+  }
+  return { code: EXIT_OK, out: b.text };
+}
+
+/**
  * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
  */
 export function runGuardGrant(
@@ -1432,6 +1474,10 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
     if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard appeal / guard facts / guard selftest のいずれかである' });
+  }
+
+  if (rest[0] === 'brief') {
+    return emit(runBrief(dbPath, selfId(), flags['role'], flags['cli'], flags['root']));
   }
 
   if (rest[0] === 'peek') {
