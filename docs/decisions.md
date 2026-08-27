@@ -2343,3 +2343,47 @@ selftest はそこを名指しする作りにした（`configured && !denies` �
 
 陰陽の対で実測: 名乗り無しは黙る／差配役には重い手順／未読ゼロは通す／
 未読ありは block／将軍の pane は止めぬ／二度目は通す。**六対すべて意図どおり。**
+
+
+### 二十五、圧縮の後にも仕込む（殿の問い 2026-08-28）
+
+「コンパクション完了後にも仕込む？」——検めたところ、**三者で事情が全く違った。**
+
+**codex は据わっておらなんだ。** `.codex/hooks.json` には門（PreToolUse）しか無く、
+**SessionStart すら無かった**。codex の足軽は起動時も圧縮後も、名乗りも作法も
+受け取っておらぬ。二十四で claude 側だけを見て済ませた見落としである。
+据えた上で、codex が持つ **`PostCompact`** からも同じ皮を呼ぶようにした
+——圧縮で文脈が薄れた後こそ名乗りを言い直す要がある、という殿の見立てのとおり。
+陽性対照で `additionalContext` が返ることを確認。
+
+**cursor は hook では塞げぬ。** `preCompact` は**観測専用**である
+（docs 明記: 「圧縮を止めることも変えることもできぬ」。返せるのは
+`user_message` = 人に見せる文のみ）。そして **`postCompact` に相当するものが無い**。
+ゆえに cursor は「`sessionStart` の `additional_context` が圧縮を生き延びるか」に
+懸かっており、そこは**未検証**である。生き延びぬなら、急報の横乗せ
+（どの副命令の出力にも ⚠ が載る）が最後の頼みとなる。
+
+**claude は覆っておるはずだったが、推測に懸かっていた。**
+公式仕様を当たって二つ判った:
+
+1. **公式は `compact` matcher での再注入を明記して勧めておる**——
+   「圧縮は大事な細部を失わせる。SessionStart hook に compact matcher を付けて
+   圧縮のたびに重要な文脈を注ぎ直せ」。殿の問いは docs の推奨そのものであった。
+2. **matcher を省いた時の挙動は docs に書かれておらぬ。** 実装からの推測でしか
+   「全部で発火する」と言えぬ。旧環境の CLAUDE.md が `matcher=clear/compact` と
+   書きながら実際の settings.json には matcher が無い、という食い違いも
+   ここから来ておる。
+
+**門の生死が推測に懸かる形は避ける。** matcher を
+`startup` / `resume` / `clear` / `compact` / `fork` の**五つに開いて明示**した
+（束ねる書き方 `"a|b"` も SessionStart で効く確証が無いゆえ使わぬ）。
+`fork`（worktree の分岐）は今日初めて知った値である——分岐した先でも
+名乗りは言い直すべきゆえ入れた。
+
+なお claude にも `PostCompact` はあるが（matcher: manual / auto）、
+**注入の可否と順序が docs で確かめられぬ**ゆえ使わぬ。
+公式が明記しておる `SessionStart(compact)` 一本で足りる。
+
+**Stop hook の作り**も裏が取れた: top-level `decision: "block"` は現行仕様であり、
+`stop_hook_active` も入力に含まれる。加えて**八度続けて止めると Claude Code 側が
+押し切る**とのこと——我らは一度で通す作りゆえ、そこまで至らぬ。

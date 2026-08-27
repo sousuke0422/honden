@@ -12,6 +12,31 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /mnt/c/Users/aki/work/honden/.codex/hooks/session-start.sh",
+            "timeout": 10,
+            "statusMessage": "名乗りと作法を確かめておる"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /mnt/c/Users/aki/work/honden/.codex/hooks/session-start.sh",
+            "timeout": 10,
+            "statusMessage": "圧縮の後に名乗りを言い直す"
+          }
+        ]
+      }
     ]
   }
 }
