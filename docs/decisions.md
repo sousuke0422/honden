@@ -2387,3 +2387,36 @@ selftest はそこを名指しする作りにした（`configured && !denies` �
 **Stop hook の作り**も裏が取れた: top-level `decision: "block"` は現行仕様であり、
 `stop_hook_active` も入力に含まれる。加えて**八度続けて止めると Claude Code 側が
 押し切る**とのこと——我らは一度で通す作りゆえ、そこまで至らぬ。
+
+
+### 二十六、注入の形は実機で決めた（2026-08-28）
+
+殿が旧環境の `scripts/codex_session_start_hook.sh` を指された。
+**実物を見ずに書いていた**——見たら、注入の形が違った。
+
+| | 形 |
+|---|---|
+| 旧環境の実物 | 平文を stdout へ（註に「平文が additionalContext として注入される」） |
+| 将軍が書いた版 | `{"additionalContext": "…"}` の JSON |
+
+**どちらも確証が無かった。** 実物の註は「そう信じて書かれた」もので確かめた跡が
+無く、JSON 形も資料に載る欄ではない——codex の共通出力欄は `continue` /
+`stopReason` / `systemMessage` / `suppressOutput` であり、**`systemMessage` は
+UI に出す文であって文脈ではない**。SessionStart 固有の欄は手元の資料に無い。
+
+**実機で決着した。** 合言葉「葛城」を仕込んで codex に訊いたところ一語で返った——
+**平文で通る。旧環境の流儀が正しく、将軍の JSON 形は誤りであった。**
+
+`HONDEN_HOOK_PASSPHRASE` を渡せば末尾に合言葉が付く仕掛けを残した。
+常には渡さぬ（毎回文脈を汚す）。**形を変える時は必ず測り直せ**——
+注入は門と同じく「効いておらぬ」が静かに起きる層である。cursor で
+「山吹」を使ったのと同じ流儀を、codex にも据えたことになる。
+
+**資料から確かめられたこと** も二つ:
+- codex の SessionStart matcher は `startup` / `resume` / `clear` / `compact` で、
+  **正規表現の束ね書きが例として明記されておる**（claude は確証が無く五つに
+  開いたが、codex は `startup|resume|clear|compact` の一本でよい）
+- `PostCompact` の matcher は `manual` / `auto`
+
+そして **hooks.json を書き換えた途端、また再信頼を求められた**——
+二十で記録した fail-open の三度目の実演である。

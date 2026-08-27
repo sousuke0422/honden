@@ -15,7 +15,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": ".*",
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -35,7 +35,8 @@
             "timeout": 10,
             "statusMessage": "圧縮の後に名乗りを言い直す"
           }
-        ]
+        ],
+        "matcher": "manual|auto"
       }
     ]
   }

@@ -26,8 +26,24 @@ if [ -x "$HONDEN" ]; then
   UNREAD=$("$HONDEN" inbox unread "$AGENT_ID" 2>/dev/null | grep -o 'unread=[0-9]*' || true)
 fi
 
-AGENT_ID="$AGENT_ID" UNREAD="${UNREAD:-（引けなんだ）}" python3 -c '
-import json, os
+# ── 注入の形 ──
+#
+# 平文と JSON のどちらが文脈へ入るかは、**書き物では決着しなかった**:
+#   - 旧環境の実物（scripts/codex_session_start_hook.sh）は平文を出し、
+#     註に「stdout の平文が additionalContext として注入される」と書く。
+#     だが確かめた跡は無い。
+#   - codex の共通出力欄は continue / stopReason / systemMessage /
+#     suppressOutput で、**systemMessage は UI に出す文であって文脈ではない**。
+#     SessionStart 固有の欄は手元の資料に載っておらぬ。
+#
+# **実機で決着した（2026-08-28）**: 合言葉「葛城」を仕込んで codex に訊いたところ
+# 一語で返った。**平文で通る。** 旧環境の流儀が正しく、JSON 形は誤りであった。
+#
+# 形を変える時は必ず合言葉で測り直せ。HONDEN_HOOK_PASSPHRASE を渡せば
+# 末尾に合言葉が付く——常には渡さぬ（毎回文脈を汚す）。
+# **注入は「効いておらぬ」が静かに起きる層である**（門と同じ）。
+AGENT_ID="$AGENT_ID" UNREAD="${UNREAD:-（引けなんだ）}" PASS="${HONDEN_HOOK_PASSPHRASE:-}" python3 -c '
+import os, sys
 a = os.environ["AGENT_ID"]
 heavy = a in ("shogun", "karo", "gunshi")
 body = f"""**そなたは {a} である。** tmux の pane から確定的に読み出した事実ゆえ、推し量る要は無い。
@@ -52,6 +68,9 @@ body += f"""
 
 いまの未読: {os.environ["UNREAD"]}
 """
-print(json.dumps({"additionalContext": body}, ensure_ascii=False))
+p = os.environ.get("PASS")
+if p:
+    body += f"\n【合言葉={p}】この語は注入が効いておるかを測るためのものである。\n"
+sys.stdout.write(body)
 ' 2>/dev/null || true
 exit 0
