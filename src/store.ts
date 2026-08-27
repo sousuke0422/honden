@@ -96,7 +96,10 @@ export function openStore(opts: OpenOptions = {}): Database {
   const path = opts.path ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
 
   if (path !== ':memory:') {
-    if (!opts.allowSlowFs && path.startsWith('/mnt/')) {
+    // 相対パスは実体へ解決してから検める。文字列先頭だけ見ると
+    // `$HOME/…` のような迷子の相対パスが 9p の上に落ちても素通りする
+    // （2026-08-27 実測: hook の env 誤りで実際に起きた）。
+    if (!opts.allowSlowFs && resolve(path).startsWith('/mnt/')) {
       throw new Error(
         `正本を 9p の上に置こうとしている: ${path}\n` +
           'ext4 側 (~/.honden など) を使うこと。9p では書き込みが 25 倍・読みが 84 倍遅い。',
@@ -437,6 +440,23 @@ CREATE TABLE IF NOT EXISTS nudge (
   last_at       TEXT,   -- 最後に合図を撃った時刻
   last_level    INTEGER,
   last_reset_at TEXT    -- 最後に文脈を消させた時刻。連発を防ぐ
+);
+
+-- 禁じ手の門の通行手形（OTP）。
+--
+-- 機械層（guard）が止めたコマンドを、将軍の裁定で一度だけ通すための札。
+-- 平文の札は発行の瞬間に一度だけ表示され、ここには写しのハッシュしか
+-- 残らない。cmd_hash に紐づくゆえ、無害な件で札を取り危険な件に流用する
+-- 手は通らない。
+CREATE TABLE IF NOT EXISTS guard_otp (
+  code_hash  TEXT PRIMARY KEY,          -- sha256(平文の札)
+  cmd_hash   TEXT NOT NULL,             -- sha256(正規化したコマンド)
+  agent      TEXT NOT NULL,             -- 使ってよい者
+  issuer     TEXT NOT NULL,             -- 発行した者（将軍のみ）
+  reason     TEXT NOT NULL,             -- なぜ通すのか
+  issued_at  TEXT NOT NULL,
+  expires_at TEXT NOT NULL,             -- 既定 10 分
+  used_at    TEXT                       -- 一度使えば刻まれ、二度目は無い
 );
 
 -- 追記専用の台帳。書き込みは全部ここにも落ちる。

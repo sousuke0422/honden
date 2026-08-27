@@ -1812,3 +1812,67 @@ nudge / 横乗せの続投が正しい。
 
 実験に使った `.cursor/hooks.json` と `session-start.sh`（試験環境の受け手
 作法+合言葉つき）はリポジトリに残す。合言葉は将来の再検証の陽性対照。
+
+### 十二、禁じ手の門 — D 表を訓戒から鍵へ（2026-08-27）
+
+殿の構想: 機械層で禁じ手を止め、正当な例外は将軍が裁定して OTP を発行し、
+実行者がそれを打って一度だけ通す。「この環境なら将軍（Fable/Opus 級）が
+コマンドを自律レビューできる。プロンプトインジェクションで反旗を翻された
+時のため、コマンドを先に見てけしからん理由なら拒否する」。
+
+**実装**: 判定器は `src/guard.ts` 一つ（D001-D010 の紋様・OTP の発行と検め）。
+CLI ごとの皮は薄く——cursor は `beforeShellExecution`（failClosed）、
+codex は `PreToolUse`。OAL と同じ流儀である。
+
+三層の裁き: allow / deny+直訴可 / deny+**絶対域**。絶対域（D001 rm -rf /・
+D007 mkfs/dd・D008 pipe-to-shell）は手形でも通さぬ——**将軍すら注入で誤る
+日の保険**である。将軍自身が開けられぬ扉を一枚残す。
+
+OTP の束縛: sha256(env 前置を剥いだ本体) + 宛先 agent + 期限（既定 10 分）
++ 一回性。平文の札は発行の瞬間にしか存在せず、正本にはハッシュのみ残る。
+無害な件で札を取り危険な件へ流用する手は通らぬ。
+
+**実弾で通した全ループ（cursor）**:
+```
+足軽 pkill → 門 deny + 直訴の作法を agent_message で返す
+  → cursor が自走で honden guard appeal（教えておらぬ・作法の文だけが頼り）
+  → 将軍の inbox へ urgent 到着 → 検分 → guard grant
+  → inbox で札が届く → HONDEN_OTP=札 を頭に付けて再実行 → 一度だけ通る
+  → 台帳に guard.pass（actor=ashigaru2・cmd_hash 一致）
+```
+
+**実弾が釣った穴 二つ**（いずれも修正・回帰試験つき）:
+1. **env 前置で門が素通り**——`X=1 pkill …` は行頭アンカーを外す。
+   判定も手形の束縛も `stripEnvPrefix` した本体に対して行うよう改めた。
+2. **9p 番人が相対パスを素通し**——`$HOME/…`（非展開）が実際に
+   `/mnt/c/…/honden/$HOME/` に正本を作った。`resolve()` してから検める。
+
+**codex の門（殿の最大の懸念）**: `--dangerously-bypass-approvals-and-sandbox`
+は承認もサンドボックスも消す。だが hooks は生きておった——実測:
+
+```
+permission_mode: "bypassPermissions"  ← YOLO そのもの
+tool_input.command: "pkill -f zzz… && touch /tmp/zzz_blocked"
+→ 門が deny を返し、codex 自身が「ガードによりコマンドは実行されませんでした」
+→ 的（/tmp/zzz_blocked）は出来ておらぬ
+```
+
+**AppArmor を持ち出さずとも、YOLO codex に門が掛かる。**
+
+ただし codex 特有の落とし穴が二つ:
+- **未信頼のフックは黙って飛ばされる**。`codex exec`（非対話）には信頼を
+  与える出口が無く、足跡ゼロで素通りする。門を配るには**各機で一度だけ
+  対話起動し `/hooks` で信頼を与える**手順が要る。
+  信頼は `~/.codex/config.toml` の `[hooks.state]"<path>:<event>:<i>:<j>"`
+  に `trusted_hash` として刻まれる。
+- **hooks.json を書き換えるとハッシュが変わり、再レビューまで門が飛ぶ**。
+  これは fail-open である——[[新しい層は fail-open として生まれる]] の型。
+  起動時に門が生きておるかを確かめる仕掛けを運用に組み込むこと。
+- 出力の綴りにも罠がある: codex の PreToolUse は `systemMessage` しか受けず、
+  `continue`/`stopReason` を返すと**フック失敗と見なされツールが続行される**。
+  deny は `hookSpecificOutput` 一本で言う。
+
+**限界**（誇張せぬために書く）: 紋様は明白な形しか止めぬ。D011（意図ベース・
+分解・難読化）は捕まらぬし、参照した記事の実例でも「別の方法で回避されて
+いる」。門は多層防御の一枚であり、訓戒（プロンプト層）と将軍レビューを
+置き換えるものではない。**D 表の一部が鍵級へ昇格した**——それが今日の戦果である。

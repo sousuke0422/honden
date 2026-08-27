@@ -54,6 +54,8 @@ const TYPES = [
   'cmd_new',
   'cmd_update',
   'clear_command',
+  'guard_appeal', // 禁じ手の門への直訴（足軽 → 将軍）
+  'guard_grant', // 手形の下付（将軍 → 足軽）
 ] as const;
 
 const inboxSchema = (known: readonly string[]): Schema => ({

@@ -19,6 +19,8 @@ import { createCmd, assignTask } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
 import { captureBusy } from './busy';
+import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, OTP_DEFAULT_TTL_MS } from './guard';
+import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
@@ -637,6 +639,199 @@ export async function runNudge(
   return { code: EXIT_OK, out: lines.join('\n') };
 }
 
+/**
+ * `honden guard check --cmd` — 禁じ手の門で検めるだけ。人と試験の入口。
+ */
+export function runGuardCheck(cmd: string | undefined): RunResult {
+  if (!cmd) return { code: EXIT_INVALID, err: '--cmd を渡されよ' };
+  // 手形が混じっていても、検めるのは本体である（hook と同じ目で見る）
+  const v = guardJudge(guardSplitOtp(cmd).cmd);
+  if (v.permission === 'allow') return { code: EXIT_OK, out: '  通ってよし' };
+  return {
+    code: EXIT_INVALID,
+    out:
+      `  止めた: ${v.rule} — ${v.reason}\n` +
+      (v.appealable
+        ? '  正当な理由があるなら: honden guard appeal --cmd "…" --reason "…" で将軍へ直訴せよ'
+        : '  絶対域である。手形でも通らぬ'),
+  };
+}
+
+/**
+ * `honden guard hook cursor` — cursor の beforeShellExecution をそのまま受ける。
+ * stdin: {command, cwd} / stdout: {permission, user_message, agent_message}。
+ * コマンド頭の HONDEN_OTP=<札> は剥がして検め、残り本体を裁く。
+ */
+export async function runGuardHookCursor(dbPath: string | undefined, selfId: string | undefined): Promise<RunResult> {
+  let input: { command?: string };
+  try {
+    input = JSON.parse(await Bun.stdin.text());
+  } catch {
+    // 入力が壊れておる。failClosed が守るよう deny を返す
+    return { code: EXIT_OK, out: JSON.stringify({ permission: 'deny', agent_message: 'guard: 入力を読めなかった' }) };
+  }
+  const { otp, cmd } = guardSplitOtp(input.command ?? '');
+  const v = guardJudge(cmd);
+  if (v.permission === 'allow') return { code: EXIT_OK, out: JSON.stringify({ permission: 'allow' }) };
+
+  if (otp && v.appealable) {
+    const db = openStore({ path: dbPath });
+    const agent = selfId ?? '名乗り無し';
+    const r = guardVerify(db, otp, cmd, agent, new Date());
+    if (r.ok) {
+      return { code: EXIT_OK, out: JSON.stringify({ permission: 'allow', agent_message: `guard: ${r.message}` }) };
+    }
+    return {
+      code: EXIT_OK,
+      out: JSON.stringify({
+        permission: 'deny',
+        user_message: `guard ${v.rule}: 手形不備 — ${r.message}`,
+        agent_message: `guard: ${v.rule} を止めた上、手形も通らぬ（${r.message}）。改めて直訴せよ。`,
+      }),
+    };
+  }
+
+  const appeal = v.appealable
+    ? ` 正当な理由があるなら honden guard appeal --cmd '<コマンド>' --reason '<理由>' で将軍へ直訴し、下りた手形を HONDEN_OTP=<札> をコマンドの頭に付けて使え。`
+    : ' これは絶対域であり、手形でも通らぬ。';
+  return {
+    code: EXIT_OK,
+    out: JSON.stringify({
+      permission: 'deny',
+      user_message: `guard ${v.rule}: ${v.reason}`,
+      agent_message: `guard: ${v.rule} — ${v.reason}。${appeal}`,
+    }),
+  };
+}
+
+/**
+ * `honden guard hook codex` — codex の PreToolUse をそのまま受ける。
+ *
+ * stdin: {tool_name, tool_input:{command}, permission_mode, …}
+ * stdout: 通すなら何も出さず 0 で抜ける。止めるなら
+ *   {hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny",
+ *    permissionDecisionReason:"…"}}
+ *
+ * codex の PreToolUse は systemMessage しか受けず、continue / stopReason を
+ * 返すと「フック失敗」と見なされ **ツール呼び出しが続行される**（公式仕様）。
+ * ゆえに余計な欄を足してはならぬ。deny は hookSpecificOutput 一本で言う。
+ *
+ * `--dangerously-bypass-approvals-and-sandbox`（permission_mode=
+ * bypassPermissions）でも呼ばれる——承認もサンドボックスも消えた素通しの
+ * codex に、これが唯一残る門である。
+ */
+export async function runGuardHookCodex(dbPath: string | undefined, selfId: string | undefined): Promise<RunResult> {
+  const deny = (reason: string) => ({
+    code: EXIT_OK,
+    out: JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: reason,
+      },
+    }),
+  });
+
+  let input: { tool_name?: string; tool_input?: { command?: string } };
+  try {
+    input = JSON.parse(await Bun.stdin.text());
+  } catch {
+    return deny('guard: 入力を読めなかった');
+  }
+  // Bash 以外は見ぬ。matcher で絞られておるはずだが、二重に確かめる。
+  const name = input.tool_name ?? '';
+  if (name && name !== 'Bash' && name !== 'Shell') return { code: EXIT_OK, out: '' };
+
+  const { otp, cmd } = guardSplitOtp(input.tool_input?.command ?? '');
+  const v = guardJudge(cmd);
+  if (v.permission === 'allow') return { code: EXIT_OK, out: '' }; // 何も言わぬのが allow
+
+  if (otp && v.appealable) {
+    const db = openStore({ path: dbPath });
+    const r = guardVerify(db, otp, cmd, selfId ?? '名乗り無し', new Date());
+    if (r.ok) return { code: EXIT_OK, out: '' };
+    return deny(`guard ${v.rule}: 手形が通らぬ（${r.message}）。改めて直訴せよ。`);
+  }
+
+  const appeal = v.appealable
+    ? ` 正当な理由があるなら honden guard appeal --cmd '<コマンド>' --reason '<理由>' で将軍へ直訴し、下りた手形を HONDEN_OTP=<札> をコマンドの頭に付けて使え。`
+    : ' これは絶対域であり、手形でも通らぬ。';
+  return deny(`guard ${v.rule}: ${v.reason}。${appeal}`);
+}
+
+/**
+ * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
+ */
+export function runGuardGrant(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  cmd: string | undefined,
+  agent: string | undefined,
+  reason: string | undefined,
+  ttlMin: string | undefined,
+): RunResult {
+  if (!cmd || !agent || !reason) return { code: EXIT_INVALID, err: '--cmd と --agent と --reason を渡されよ' };
+  const ttl = ttlMin ? Number(ttlMin) * 60_000 : OTP_DEFAULT_TTL_MS;
+  if (!Number.isFinite(ttl) || ttl <= 0 || ttl > 60 * 60_000) {
+    return { code: EXIT_INVALID, err: '期限は 1〜60 分で渡されよ' };
+  }
+  const db = openStore({ path: dbPath });
+  const r = guardIssue(db, selfId, cmd, agent, reason, new Date(), ttl);
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  const at = new Date().toISOString();
+  // 札は inbox で当人へ届ける。コマンドに紐づくゆえ、他所では使えぬ。
+  inboxDeliver(db, {
+    id: `msg_${Date.now().toString(36)}${Bun.hash(agent + at).toString(36).slice(0, 4)}_gg`,
+    agent,
+    at,
+    type: 'guard_grant',
+    sender: selfId ?? 'shogun',
+    body:
+      `手形が下りた。期限 ${r.expiresAt} まで・一度きり。\n` +
+      `使い方: HONDEN_OTP=${r.code} をコマンドの頭に付けてそのまま実行せよ。\n` +
+      `対象: ${guardNormalize(cmd)}`,
+  });
+  inboxSignal(db);
+  return {
+    code: EXIT_OK,
+    out: `  手形を切った: ${r.code}（期限 ${r.expiresAt}・${agent} 宛・一度きり）\n  inbox でも当人へ届けた。`,
+  };
+}
+
+/**
+ * `honden guard appeal` — 止められた者の直訴。将軍へ urgent で届く。
+ */
+export function runGuardAppeal(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  cmd: string | undefined,
+  reason: string | undefined,
+): RunResult {
+  if (!cmd || !reason) return { code: EXIT_INVALID, err: '--cmd と --reason を渡されよ' };
+  const v = guardJudge(cmd);
+  if (v.permission === 'allow') return { code: EXIT_OK, out: '  それは止められておらぬ。そのまま実行されよ' };
+  if (!v.appealable) return { code: EXIT_INVALID, err: `  ${v.rule} は絶対域である。直訴しても通らぬ` };
+  const db = openStore({ path: dbPath });
+  const at = new Date().toISOString();
+  const from = selfId ?? '名乗り無し';
+  inboxDeliver(db, {
+    id: `msg_${Date.now().toString(36)}${Bun.hash(from + at).toString(36).slice(0, 4)}_ga`,
+    agent: 'shogun',
+    at,
+    type: 'guard_appeal',
+    sender: from,
+    body:
+      `禁じ手の門への直訴（${v.rule}）\n` +
+      `コマンド: ${guardNormalize(cmd)}\n` +
+      `理由: ${reason}\n` +
+      `検分の作法: 弁明を鵜呑みにせず、コマンド実体と task の系譜を正本から引いて突き合わせよ。\n` +
+      `通すなら: honden guard grant --cmd '<同じコマンド>' --agent ${from} --reason '<裁定理由>'`,
+  });
+  inboxSignal(db);
+  journal(db, { actor: from, action: 'guard.appeal', target: 'shogun', detail: `rule=${v.rule} cmd=${JSON.stringify(guardNormalize(cmd)).slice(0, 120)}` });
+  return { code: EXIT_OK, out: '  直訴を将軍へ送った。裁定を待たれよ（手が空くまで他の仕事を進めてよい）' };
+}
+
 /** `honden mode` — 殿が在席かどうか。合図を将軍へ撃つかがこれで決まる。 */
 export function runMode(
   dbPath: string | undefined,
@@ -1084,6 +1279,16 @@ export async function main(argv: string[]): Promise<number> {
       return emit(runProjectsSync(dbPath, f));
     }
     return emit(runProjectsShow(dbPath));
+  }
+
+  if (rest[0] === 'guard') {
+    if (rest[1] === 'check') return emit(runGuardCheck(flags['cmd']));
+    if (rest[1] === 'hook' && rest[2] === 'cursor') return emit(await runGuardHookCursor(dbPath, selfId()));
+    if (rest[1] === 'hook' && rest[2] === 'codex') return emit(await runGuardHookCodex(dbPath, selfId()));
+    if (rest[1] === 'grant')
+      return emit(runGuardGrant(dbPath, selfId(), flags['cmd'], flags['agent'], flags['reason'], flags['ttl-min']));
+    if (rest[1] === 'appeal') return emit(runGuardAppeal(dbPath, selfId(), flags['cmd'], flags['reason']));
+    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex / guard grant / guard appeal のいずれかである' });
   }
 
   if (rest[0] === 'peek') {
