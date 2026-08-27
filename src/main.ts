@@ -9,13 +9,13 @@
  */
 
 import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
-import { resolve as resolveIdentity, type Identity } from './identity';
+import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong } from './inbox';
-import { createCmd, assignTask } from './dispatch';
+import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks } from './nudge';
 import { captureBusy } from './busy';
@@ -1240,6 +1240,17 @@ export async function main(argv: string[]): Promise<number> {
   };
   const selfId = (): string | undefined => who().id;
 
+  /**
+   * 権を振るう副命令の前に、布陣の内から名乗っておるかを検める。
+   *
+   * 役職の名で権を振るうものだけがここを通る。読む副命令は通さぬ
+   * ——外から検めるのを妨げても得るものが無い。
+   */
+  const actingAs = (role: string): RunResult | null => {
+    const r = mayActAs(who(), role);
+    return r.ok ? null : { code: EXIT_INVALID, err: `  ${r.message}` };
+  };
+
 
   /**
    * 標準入力を読む。
@@ -1295,7 +1306,7 @@ export async function main(argv: string[]): Promise<number> {
 
   if (rest[0] === 'cmd' && rest[1] === 'new') {
     const stdin = await readStdin();
-    return emit(runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
+    return emit(actingAs(CMD_AUTHOR) ?? runCmdNew(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
   if (rest[0] === 'norms') {
@@ -1319,7 +1330,10 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'hook' && rest[2] === 'cursor') return emit(await runGuardHookCursor(dbPath, selfId()));
     if (rest[1] === 'hook' && rest[2] === 'codex') return emit(await runGuardHookCodex(dbPath, selfId()));
     if (rest[1] === 'grant')
-      return emit(runGuardGrant(dbPath, selfId(), flags['cmd'], flags['agent'], flags['reason'], flags['ttl-min']));
+      return emit(
+        actingAs('shogun') ??
+          runGuardGrant(dbPath, selfId(), flags['cmd'], flags['agent'], flags['reason'], flags['ttl-min']),
+      );
     if (rest[1] === 'appeal') return emit(runGuardAppeal(dbPath, selfId(), flags['cmd'], flags['reason']));
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, flags['agent'], flags['cmd'], flags['reason']));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex / guard grant / guard appeal / guard facts のいずれかである' });
@@ -1376,13 +1390,13 @@ export async function main(argv: string[]): Promise<number> {
 
   if (rest[0] === 'decision' && rest[1] === 'raise') {
     const stdin = await readStdin();
-    return emit(runDecisionRaise(dbPath, selfId(), { flags, stdin }, dryRun));
+    return emit(actingAs('karo') ?? actingAs('gunshi') ?? runDecisionRaise(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
   if (rest[0] === 'decide') {
     const note = flags['note'];
     delete flags['note'];
-    return emit(runDecide(dbPath, selfId(), rest[1], rest[2], note));
+    return emit(actingAs('shogun') ?? runDecide(dbPath, selfId(), rest[1], rest[2], note));
   }
 
   if (rest[0] === 'config') {
@@ -1419,12 +1433,12 @@ export async function main(argv: string[]): Promise<number> {
 
   if (rest[0] === 'report' && rest[1] === 'qc') {
     const stdin = await readStdin();
-    return emit(runReportQc(dbPath, selfId(), { flags, stdin }, dryRun));
+    return emit(actingAs('gunshi') ?? runReportQc(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
   if (rest[0] === 'task' && rest[1] === 'assign') {
     const stdin = await readStdin();
-    return emit(runTaskAssign(dbPath, selfId(), { flags, stdin }, dryRun));
+    return emit(actingAs(ASSIGNER) ?? actingAs('shogun') ?? runTaskAssign(dbPath, selfId(), { flags, stdin }, dryRun));
   }
 
   if (rest[0] === 'lease') {

@@ -95,3 +95,30 @@ export function resolve(env: Env): Identity {
   // （個人の Claude Code など）。現行はここで黙って何もしない。
   return { id: fromEnv, source: fromEnv ? 'env' : 'none', insideFormation: true };
 }
+
+
+/**
+ * 役職を名乗って権を振るえるか。
+ *
+ * 布陣の外（tmux の pane が無い）で環境変数の名乗りを採るのは、
+ * 「誰も居らぬ場から役職を名乗る」ことに等しい。inbox write は既に
+ * これを塞いでいた（cli.ts）が、**同じ防御が task assign / cmd new /
+ * report qc へ配線されておらず**、外から karo を名乗れば足軽へ振れた
+ * ——しかも振られた報せの差出人は 'karo' として受け箱に載る。
+ * inbox write が塞いだ当のものが、別の戸から入っていた
+ * （権限表の突き合わせで発覚・2026-08-28）。
+ *
+ * 布陣外の名乗りを一律に禁じるのではない。読む分には要らぬ縛りである。
+ * **権を振るう副命令だけ**が、この検めを通る。
+ */
+export function mayActAs(id: Identity, role: string): { ok: true } | { ok: false; message: string } {
+  if (id.insideFormation) return { ok: true };
+  if (id.id !== role) return { ok: true }; // その役を名乗っておらぬなら、別の門が弾く
+  return {
+    ok: false,
+    message:
+      `布陣の外から ${role} として振る舞うことはできぬ。\n` +
+      '  tmux の pane から名乗りが引ける場（布陣の中）で行われよ。\n' +
+      '  外から検めるだけなら読む副命令を使われよ。書き込みは行っておらぬ。',
+  };
+}
