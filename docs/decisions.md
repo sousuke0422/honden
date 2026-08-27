@@ -1615,3 +1615,41 @@ pane の @agent_id から取れた。identity の pane 優先が実機で効い�
 受け手の作法が一段落で書けたこと自体が収穫である。旧経路の作法
 （inboxN → queue/inbox/*.yaml を読み read: true を Edit で書き換え）より
 渡す文が短い。指示書の書き換え（切り替えの本丸）の見積りが軽くなった。
+
+### 六、L2/L3 実弾と、reset 後の記憶喪失（2026-08-27 13:00〜13:06）
+
+cursor に sleep 300 を実行させ 5 分の busy を作り、未読を放置して昇圧の
+全段を実測した。段の時計は寸分違わず動いた:
+
+```
+03:58:59Z L1 発射 → 03:59:59Z L1 再打ち（60 秒間隔）
+04:00:59Z L2（2 分ちょうど）→ 04:02:00Z L2 再打ち
+04:02:59Z L3 = /new-chat 発射・reset 刻印
+04:04:00Z〜 冷却中は素の合図へ降格（設計どおり・黙らぬ）
+```
+
+釣れたものは三つ。
+
+**一、RESET_COMMAND の誤り二点**（発射前に旧 watcher との突き合わせで発見）。
+cursor に /clear は無い→ /new-chat。未知 CLI の既定は /new（codex は /clear で
+CLI ごと終了する）。修正済み・回帰テストつき。
+
+**二、busy への文脈消しは拒まれうる**（殿実測: codex は仕事中の /new を拒む）。
+旧 watcher の busy guard（busy なら次周へ延期）を移植した。段 3 の的の pane を
+写して busy を見立て、busy なら素の合図へ降ろして撃つ。reset 刻印を残さぬゆえ
+手すきの最初の周で文脈消しが届く。見立ては旧 agent_is_busy_check の移植
+（cursor=ctrl+c to stop / claude=最終行の esc to のみ・旧 T-BUSY-008 の再発防止）。
+なお cursor は busy 中の /new-chat を（少なくとも今回の条件では）拒まず飲んだ。
+拒否の有無は CLI ごとに違う——guard は全 CLI に安全側で効く。
+
+**三、reset 後の記憶喪失に道標が無い（未解決・最重要）。**
+/new-chat で文脈が消えた cursor は、次に届く裸の inbox_notice の意味を知らぬ。
+実測では約 2 分・文脈 23% を費やして大捜査し（本番 DB や他 pane まで覗いた）、
+testenv.sh を読み当てて自力復帰した——**運が良かっただけ**である。
+旧環境の答えは「reset 後の自動再装填」: claude は CLAUDE.md 自動読込 +
+Session Start 手順、codex は watcher が startup prompt を送る（send_startup_prompt）。
+honden は裸の reset を送るのみで、再装填の層が丸ごと欠けておる。
+
+方向: 受け手の作法を workspace の指示書（AGENTS.md 等・指示書統一 cmd_712 と
+同根）へ常設し、自動読込の無い CLI には reset 直後の nudge に作法の一行を
+添える（旧 send_startup_prompt の honden 版）。切り替え前に埋める。
