@@ -224,6 +224,34 @@ EOF`,
     summary: '旧環境の YAML を影として取り込む。実運用の行は上書きせぬ。',
     usage: 'honden import [--root <場所>] [--sub queue,saytask]',
   },
+  log: {
+    summary: '台帳を窓で読む。全件は舐めぬ——追記表は読み口で絞る。',
+    usage: 'honden log [--limit 30] [--before <時刻>] [--actor <名>]',
+    flags: [
+      ['--limit', '何件見るか（既定 30・上限 200）'],
+      ['--before', 'この時刻より前の窓を見る（出力末尾の値を渡して遡る）'],
+      ['--actor', 'その者が関わった跡だけ'],
+    ],
+  },
+  dashboard: {
+    summary: '戦況を正本から組んで出す。要対応・進行中・戦果・滞り。',
+    usage: 'honden dashboard',
+    notes: ['生成物は作らぬ。旧 dashboard.md は肥大して書き換えが怪しくなった——読む時に組めば育たぬ'],
+  },
+  backup: {
+    summary: '正本の写しを焼く。生きたまま・錠を止めずに。',
+    usage: 'honden backup [--out <場所>] [--keep <世代数>]',
+    flags: [
+      ['--out', '写しの置き場（既定 ~/.honden/backups）'],
+      ['--keep', '残す世代数（既定 10。溢れた古いものは刈る）'],
+    ],
+    notes: ['正本は一つ壊れれば全てを失う。出陣のたびに一枚焼かれる'],
+  },
+  export: {
+    summary: '切り戻しの綱。正本を旧環境の YAML へ一度だけ吐く。',
+    usage: 'honden export --out <新しい場所>',
+    notes: ['生きた queue/ へ直接は書かぬ——配置は人の手で（先に退避してから写せ）'],
+  },
   'roster sync': {
     summary: '顔ぶれを settings.yaml から入れ替える。',
     usage: 'honden roster sync --settings <settings.yaml>',

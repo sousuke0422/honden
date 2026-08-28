@@ -74,7 +74,7 @@ describe('網羅 — 危うい副命令ほど手引きが要る', () => {
   }
 
   test('本日建てた副命令も手引きを持つ（建てて手引きを忘れる形を防ぐ）', () => {
-    for (const key of ['cmd list', 'status', 'brief', 'guard selftest']) {
+    for (const key of ['cmd list', 'status', 'brief', 'guard selftest', 'log', 'dashboard', 'backup', 'export']) {
       expect(HELP[key], key).toBeDefined();
     }
   });

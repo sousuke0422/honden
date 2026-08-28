@@ -32,6 +32,7 @@ const HELP_KEY = (rest: string[]): string => {
 };
 import { collect as collectStatus, render as renderStatus, coreCheck } from './status';
 import { exportAll } from './export';
+import { backup as backupDb, KEEP_DEFAULT } from './backup';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
@@ -1613,6 +1614,101 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
     if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard appeal / guard facts / guard selftest のいずれかである' });
+  }
+
+  if (rest[0] === 'backup') {
+    const dir = flags['out'] ?? `${homedir()}/.honden/backups`;
+    const keep = flags['keep'] ? Number(flags['keep']) : KEEP_DEFAULT;
+    const db = openStore({ path: dbPath });
+    const r = backupDb(db, dir, new Date(), keep);
+    journal(db, { actor: selfId() ?? '名乗り無し', action: 'backup', target: r.path, detail: `${r.bytes} bytes` });
+    return emit({
+      code: EXIT_OK,
+      out:
+        `  写した: ${r.path}（${(r.bytes / 1024).toFixed(0)} KiB）` +
+        (r.pruned.length > 0 ? `\n  古い写しを刈った: ${r.pruned.join(' / ')}` : ''),
+    });
+  }
+
+  if (rest[0] === 'log') {
+    // 台帳の閲覧口。**窓で切る**——台帳は追記のみで永遠に育つゆえ、
+    // 全件を舐める口を作れば、旧環境で queue YAML の肥大が家老を殺した道を
+    // 正本ごと辿ることになる。既定は直近 30 件・--before で窓を遡る。
+    const lim = Math.min(Number(flags['limit'] ?? 30) || 30, 200);
+    const before = flags['before'];
+    const who = flags['actor'];
+    const db = openStore({ path: dbPath });
+    const conds: string[] = [];
+    const args: (string | number)[] = [];
+    if (before) { conds.push('at < ?'); args.push(before); }
+    if (who) { conds.push('(actor = ? OR target = ?)'); args.push(who, who); }
+    const where = conds.length > 0 ? `WHERE ${conds.join(' AND ')}` : '';
+    const rows = db
+      .query(`SELECT at, actor, action, target, detail FROM ledger ${where} ORDER BY at DESC LIMIT ?`)
+      .all(...args, lim) as { at: string; actor: string; action: string; target: string | null; detail: string | null }[];
+    if (rows.length === 0) return emit({ code: EXIT_OK, out: '  跡が無い。' });
+    const lines = rows.reverse().map((r) => `  ${r.at.slice(0, 19)}  ${r.actor} → ${r.action}${r.target ? ` (${r.target})` : ''}`);
+    const oldest = rows[0]!.at;
+    return emit({
+      code: EXIT_OK,
+      out: lines.join('\n') + `\n\n  ${rows.length} 件（さらに遡るなら --before "${oldest}"）`,
+    });
+  }
+
+  if (rest[0] === 'dashboard') {
+    // 戦況を正本から組んで出す。**生成物は作らぬ**——旧 dashboard.md は
+    // 肥大して家老の書き換えが怪しくなった。読む時に組めば、育たぬ。
+    const db = openStore({ path: dbPath });
+    const parts: string[] = [];
+
+    const open = db
+      .query("SELECT id, question, expires_at FROM decision WHERE status = 'open' ORDER BY id")
+      .all() as { id: number; question: string; expires_at: string | null }[];
+    parts.push('  ■ 要対応（殿の裁可待ち）');
+    parts.push(
+      open.length > 0
+        ? open
+            .map((d) => `    #${d.id} ${d.question.split('\n')[0]!.slice(0, 50)}${d.expires_at ? `（${d.expires_at.slice(0, 16)} に既定へ倒れる）` : ''}`)
+            .join('\n')
+        : '    （無し）',
+    );
+
+    const live = db
+      .query("SELECT id, status, assigned_to, purpose FROM cmd WHERE status IN ('pending','in_progress') ORDER BY created_at DESC LIMIT 20")
+      .all() as { id: string; status: string; assigned_to: string | null; purpose: string | null }[];
+    parts.push('', '  ■ 進行中');
+    parts.push(
+      live.length > 0
+        ? live.map((c) => `    ${c.id} [${c.status}]${c.assigned_to ? ` → ${c.assigned_to}` : ''} ${(c.purpose ?? '').split('\n')[0]!.slice(0, 44)}`).join('\n')
+        : '    （無し）',
+    );
+
+    const done = db
+      .query("SELECT id, purpose, completed_at FROM cmd WHERE status = 'done' ORDER BY completed_at DESC LIMIT 5")
+      .all() as { id: string; purpose: string | null; completed_at: string | null }[];
+    parts.push('', '  ■ 直近の戦果');
+    parts.push(
+      done.length > 0
+        ? done.map((c) => `    ${c.id} ${(c.purpose ?? '').split('\n')[0]!.slice(0, 46)}（${(c.completed_at ?? '').slice(0, 10)}）`).join('\n')
+        : '    （無し）',
+    );
+
+    // 滞り: 未読を抱えた者と、期限切れの持ち場
+    const stuck = db
+      .query('SELECT agent, count(*) c FROM inbox WHERE read = 0 GROUP BY agent ORDER BY c DESC LIMIT 10')
+      .all() as { agent: string; c: number }[];
+    const nowIso = new Date().toISOString();
+    const expired = db
+      .query('SELECT agent, task_id FROM task WHERE holder IS NOT NULL AND lease_until < ? LIMIT 10')
+      .all(nowIso) as { agent: string; task_id: string | null }[];
+    parts.push('', '  ■ 滞り');
+    const stuckLines = [
+      ...stuck.map((s2) => `    ${s2.agent}: 未読 ${s2.c} 件`),
+      ...expired.map((e) => `    ${e.agent}: 持ち場の期限切れ（${e.task_id ?? ''}）`),
+    ];
+    parts.push(stuckLines.length > 0 ? stuckLines.join('\n') : '    （無し）');
+
+    return emit({ code: EXIT_OK, out: parts.join('\n') });
   }
 
   if (rest[0] === 'export') {
