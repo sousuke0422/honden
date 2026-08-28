@@ -72,6 +72,26 @@ export function parseAppConfig(text: string): Record<string, string> {
   return out;
 }
 
+/**
+ * 秘密鍵の錠を検める。旧 bash 版が持っておった護りで、移植で落としておった
+ * （2026-08-29 に「移植で締めを写さぬ」型の掃きで発覚）。
+ *
+ * 写しを作る側（token.cache.json）は錠が効かねば**書かぬ**と決めたが、鍵は
+ * 読む側ゆえ拒めば道具ごと死ぬ。旧に倣って**声を上げるに留める**。
+ * ただし 777 は DrvFs の常であり、そこに鍵を置くこと自体が誤りゆえ、
+ * その旨まで言う。
+ */
+export function pemPermWarning(mode: number, path: string): string | undefined {
+  const perm = mode & 0o777;
+  if (perm === 0o600) return undefined;
+  const loose = (perm & 0o077) !== 0;
+  return (
+    `鍵の錠が緩い（${perm.toString(8)}・${path}）。${loose ? '己以外にも読める。' : ''}\n` +
+    '  chmod 600 で締められよ。777 と出るなら DrvFs（/mnt/c 配下）に置いておる——\n' +
+    '  DrvFs は錠を保たぬゆえ、鍵は WSL ネイティブ（~/.shogun）へ移されよ。'
+  );
+}
+
 const b64url = (buf: Buffer | string): string => Buffer.from(buf).toString('base64url');
 
 /**

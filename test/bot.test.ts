@@ -12,6 +12,7 @@ import { generateKeyPairSync, createVerify } from 'node:crypto';
 import {
   guardBot, parseAppConfig, mintJwt, tokenFresh, mintInstallationToken,
   validRepo, dupMatch, filterLabels, createIssue, searchIssues, listLabels, trimKey, SEARCH_KEY_MAX,
+  pemPermWarning,
 } from '../src/bot';
 
 describe('guardBot', () => {
@@ -39,6 +40,27 @@ describe('guardBot', () => {
 
   test('錨はあるが @agent_id の無い pane は落ちる', () => {
     expect(guardBot({ insideFormation: true, anchored: true }).ok).toBe(false);
+  });
+});
+
+describe('pemPermWarning', () => {
+  test('600 なら黙る・緩ければ声を上げる', () => {
+    expect(pemPermWarning(0o100600, '/k/app.pem')).toBeUndefined();
+    const w = pemPermWarning(0o100644, '/k/app.pem');
+    expect(w).toContain('644');
+    expect(w).toContain('己以外にも読める');
+  });
+
+  test('777（DrvFs の常）では置き場そのものを正す', () => {
+    const w = pemPermWarning(0o100777, '/mnt/c/x/app.pem')!;
+    expect(w).toContain('DrvFs');
+    expect(w).toContain('~/.shogun');
+  });
+
+  test('己だけ厳しい 400 も「緩い」とは言わぬが締めよとは言う', () => {
+    const w = pemPermWarning(0o100400, '/k/app.pem')!;
+    expect(w).not.toContain('己以外にも読める');
+    expect(w).toContain('chmod 600');
   });
 });
 

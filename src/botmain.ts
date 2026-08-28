@@ -29,7 +29,7 @@ import { findCharter, useCharter } from './charter';
 import {
   guardBot, parseAppConfig, mintJwt, tokenFresh, mintInstallationToken, appInfo,
   validRepo, dupMatch, searchIssues, filterLabels, listLabels, createIssue, commentIssue,
-  installationRepos, explainRepoAccess,
+  installationRepos, explainRepoAccess, pemPermWarning,
   type InstallationToken, type BotRank,
 } from './bot';
 
@@ -122,6 +122,13 @@ function loadConfig(): AppCfg {
   const pemPath = join(APP_DIR, 'app.pem');
   if (!existsSync(pemPath) || !existsSync(configPath)) {
     throw new Error(`秘密の家が整うておらぬ: ${APP_DIR} に config と app.pem が要る`);
+  }
+  // 鍵の錠を検める（旧 bash 版からの護り）。拒みはせぬが黙りもせぬ。
+  try {
+    const w = pemPermWarning(statSync(pemPath).mode, pemPath);
+    if (w) console.error(`  ※ ${w}`);
+  } catch {
+    /* 錠が読めぬ土地なら黙って進む */
   }
   const c = parseAppConfig(readFileSync(configPath, 'utf-8'));
   const clientId = c['client_id'] ?? c['app_id'];
