@@ -68,13 +68,27 @@ function version(db: Database): string {
   return String(r.v);
 }
 
+/**
+ * 繋ぐ先。**既定は己の内のみ**（旧 dashboard-viewer.py と同じ 127.0.0.1）。
+ *
+ * `Bun.serve` は hostname を渡さねば `0.0.0.0`——全ての口に開く。移植の折に
+ * これを見落とし、WSL の外向き address から戦況が読めておった（実測 2026-08-29）。
+ * 戦況には司令・裁可・陣容が載る。既定で外へ出してよいものではない。
+ *
+ * 外から見せたい時だけ `--host` で明かす。**広げるなら明示で広げよ。**
+ */
+export const LOOPBACK = '127.0.0.1';
+
 export function serve(opts: {
   port: number;
+  host?: string;
   db: () => Database;
   compose: () => string;
-}): { port: number; stop: () => void } {
+}): { port: number; host: string; stop: () => void } {
+  const host = opts.host ?? LOOPBACK;
   const server = Bun.serve({
     port: opts.port,
+    hostname: host,
     fetch(req) {
       const path = new URL(req.url).pathname;
       if (path === '/') {
@@ -89,5 +103,5 @@ export function serve(opts: {
       return new Response('無い', { status: 404 });
     },
   });
-  return { port: server.port ?? opts.port, stop: () => server.stop() };
+  return { port: server.port ?? opts.port, host, stop: () => server.stop() };
 }

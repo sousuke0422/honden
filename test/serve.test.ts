@@ -8,7 +8,7 @@
  * 三、port 0 でも生きた口を返す（試験が空き口を探さずに済む）。
  */
 import { describe, expect, test } from 'bun:test';
-import { serve } from '../src/serve';
+import { serve, LOOPBACK } from '../src/serve';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { journal } from '../src/store';
@@ -51,6 +51,26 @@ describe('serve', () => {
       // 陽性対照の裏: 動かさねば変わらぬ
       const v3 = await (await fetch(`http://localhost:${s.port}/api/version`)).text();
       expect(v3).toBe(v2);
+    } finally {
+      s.stop();
+    }
+  });
+
+  test('既定は己の内のみ（旧 viewer と同じ 127.0.0.1）', () => {
+    const db = seeded();
+    const s = serve({ port: 0, db: () => db, compose: () => '' });
+    try {
+      expect(s.host).toBe(LOOPBACK); // Bun の既定 0.0.0.0 に落ちてはならぬ
+    } finally {
+      s.stop();
+    }
+  });
+
+  test('広げるは明示のみ', () => {
+    const db = seeded();
+    const s = serve({ port: 0, host: '0.0.0.0', db: () => db, compose: () => '' });
+    try {
+      expect(s.host).toBe('0.0.0.0');
     } finally {
       s.stop();
     }

@@ -32,7 +32,7 @@ const HELP_KEY = (rest: string[]): string => {
 };
 import { collect as collectStatus, render as renderStatus, coreCheck } from './status';
 import { exportAll } from './export';
-import { serve as serveHttp } from './serve';
+import { serve as serveHttp, LOOPBACK } from './serve';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
@@ -1026,13 +1026,15 @@ export function runExport(dbPath: string | undefined, selfId: string | undefined
 }
 
 /** `honden dashboard --serve` — 戦況をブラウザへ配る。止めるまで返らぬ。 */
-function serveDashboard(dbPath: string | undefined, port: number): Promise<number> {
+function serveDashboard(dbPath: string | undefined, port: number, host: string | undefined): Promise<number> {
   const r = serveHttp({
     port,
+    host,
     db: () => openStore({ path: dbPath }),
     compose: () => composeDashboard(dbPath),
   });
-  console.log(`  http://localhost:${r.port} で配っておる。止めるは Ctrl-C。`);
+  console.log(`  http://${r.host}:${r.port} で配っておる。止めるは Ctrl-C。`);
+  if (r.host !== LOOPBACK) console.error('  ※ 己の内だけでなく外へも開いておる。戦況が見える範囲を確かめられよ。');
   // main の出口は process.exit —— ここで返せば配りながら即死する。
   // 止めの合図（SIGINT/SIGTERM）まで待ってから畳む。
   return new Promise<number>((resolve) => {
@@ -1833,7 +1835,7 @@ export async function main(argv: string[]): Promise<number> {
     // 組んで直に配る**。中間生成物が消える（brief と同じ思想）。
     if (flags['serve'] === 'true') {
       const port = Number(flags['port'] ?? 8787) || 8787;
-      return serveDashboard(dbPath, port);
+      return serveDashboard(dbPath, port, flags['host']);
     }
     return emit({ code: EXIT_OK, out: composeDashboard(dbPath) });
   }

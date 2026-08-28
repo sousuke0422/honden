@@ -261,14 +261,16 @@ EOF`,
   },
   dashboard: {
     summary: '戦況を正本から組んで出す。要対応・進行中・戦果・滞り。',
-    usage: 'honden dashboard [--serve [--port <番号>]]',
+    usage: 'honden dashboard [--serve [--port <番号>] [--host <address>]]',
     flags: [
       ['--serve', 'ブラウザへ配る（旧 dashboard-viewer.py の後継）。止めるは Ctrl-C'],
       ['--port <番号>', '配る口。省くと 8787'],
+      ['--host <address>', '繋ぐ先。省くと 127.0.0.1（己の内のみ）'],
     ],
     notes: [
       '生成物は作らぬ。旧 dashboard.md は肥大して書き換えが怪しくなった——読む時に組めば育たぬ',
       '--serve は台帳の伸びを合図に画面が自ずと改まる。md を CLI で見るのと同じものが映る',
+      '**既定は己の内のみ**。戦況には司令・裁可・陣容が載るゆえ、広げるなら --host で明示せよ',
     ],
   },
   backup: {
