@@ -22,6 +22,13 @@ import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './repor
 import { plan, send, record, startClocks, withNudgeLock } from './nudge';
 import { captureBusy } from './busy';
 import { assemble as assembleBrief } from './brief';
+import { lookup as helpFor, render as renderHelp, HELP } from './help';
+
+/** 手引きの鍵。長い方を先に見る（`cmd new` が `cmd` に勝つ）。 */
+const HELP_KEY = (rest: string[]): string => {
+  const two = rest.slice(0, 2).join(' ');
+  return HELP[two] ? two : (rest[0] ?? '');
+};
 import { collect as collectStatus, render as renderStatus } from './status';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
@@ -1495,6 +1502,26 @@ export async function main(argv: string[]): Promise<number> {
       /* 横乗せは本務ではない */
     }
   };
+  // 手引きは差配へ届く前に返す。
+  //
+  // **「どう使うか」を問うのに、使う資格を先に問うのは筋が違う。**
+  // 以前は `--help` が検めや役の門に弾かれ、`brief --help` は指示書を丸ごと吐き、
+  // `status --help` は SQLite ごと落ちた（2026-08-28 実測）。
+  if (flags['help'] === 'true' || flags['h'] === 'true' || rest[0] === 'help') {
+    const target = rest[0] === 'help' ? rest.slice(1) : rest;
+    const h = helpFor(target);
+    if (h) {
+      const key = HELP_KEY(target);
+      console.log(renderHelp(key, h));
+      return EXIT_OK;
+    }
+    console.log(USAGE);
+    if (target.length > 0) {
+      console.log(`\n  「${target.join(' ')}」の手引きは無い。上の一覧から選ばれよ。`);
+    }
+    return EXIT_OK;
+  }
+
   const emit = (r: RunResult): number => {
     if (r.out) console.log(r.out);
     if (r.err) console.error(r.err);
