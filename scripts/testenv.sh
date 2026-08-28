@@ -33,6 +33,17 @@ RECV="$TESTHOME/received"
 # 手で作業される時、配下の打った命が ~/.bash_history に混ざって邪魔になる。
 # `HISTSIZE=0` は .bashrc に上書きされて効かぬ——効くのは HISTFILE の方である。
 NO_HIST=(-e HISTFILE=/dev/null)
+
+# 試験の陣に居ることを、**pane の環境で教える**。
+#
+# 一巡試験が釣った穴（2026-08-28）: 足軽の codex が `honden inbox read` を叩いても
+# 「未読任なし」と答えた。**本番の正本を見ておった**——`HONDEN_DB` が pane に無く、
+# 既定（~/.honden/honden.db）へ行っていた。芯にだけ渡し、働く者へ渡しておらなんだ。
+#
+# 足軽が「自分は試験の陣に居る」と知る術は無い。**知らせるのは環境の役目**であり、
+# 指示書に「試験なら --db を付けよ」と書いて覚えさせる筋ではない
+# （書けば、付け忘れた時に黙って本番を触る）。
+PANE_ENV=(-e "HONDEN_DB=$DB" -e "HONDEN_TMUX_SESSION=$SESSION")
 AGENTS=(shogun karo gunshi ashigaru1 ashigaru2)   # fixtures/test-env/settings.yaml と揃える
 
 H_OUT() { env -u TMUX_PANE HONDEN_DB="$DB" "$ROOT/bin/honden" "$@"; }  # 布陣の外として
@@ -93,9 +104,9 @@ up() {
       echo "exec bash '$ROOT/scripts/testenv/recv.sh' '$a' '$RECV/$a.log'"
     fi
   }
-  tmux new-session -d -s "$SESSION" -n agents "${NO_HIST[@]}" "$(pane_cmd "${AGENTS[0]}")"
+  tmux new-session -d -s "$SESSION" -n agents "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "${AGENTS[0]}")"
   for a in "${AGENTS[@]:1}"; do
-    tmux split-window -t "$SESSION:agents" "${NO_HIST[@]}" "$(pane_cmd "$a")"
+    tmux split-window -t "$SESSION:agents" "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "$a")"
     tmux select-layout -t "$SESSION:agents" tiled >/dev/null
   done
 

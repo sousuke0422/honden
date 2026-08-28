@@ -69,7 +69,7 @@ honden への切り替えが済むまで、この分岐は残る。
 
 ```bash
 export HONDEN_DB=/home/aki/.honden/honden.db   # 本番
-# export HONDEN_DB=/home/aki/.honden/test.db   # 試験
+# export HONDEN_DB=/home/aki/.honden-test/honden.db   # 試験（scripts/testenv.sh が立てる陣）
 
 honden roster
 ```
@@ -117,7 +117,7 @@ EOF
 
 相手が処理を知っているものだけ。発明すると相手が黙り込む。
 
-`report_received` / `report_completed` / `task_assigned` / `cmd_new` / `cmd_update` / `clear_command`
+`report_received` / `report_completed` / `task_assigned` / `cmd_new` / `cmd_update` / `clear_command` / `guard_appeal` / `guard_grant`
 
 **`clear_command` は布陣の外から撃てない。** 相手のセッションを消すため。
 
