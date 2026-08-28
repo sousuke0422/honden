@@ -23,6 +23,7 @@ import { plan, send, record, startClocks, withNudgeLock } from './nudge';
 import { captureBusy } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
+import { emphasize } from './term';
 
 /** 手引きの鍵。長い方を先に見る（`cmd new` が `cmd` に勝つ）。 */
 const HELP_KEY = (rest: string[]): string => {
@@ -1512,7 +1513,7 @@ export async function main(argv: string[]): Promise<number> {
     const h = helpFor(target);
     if (h) {
       const key = HELP_KEY(target);
-      console.log(renderHelp(key, h));
+      console.log(emphasize(renderHelp(key, h)));
       return EXIT_OK;
     }
     console.log(USAGE);
@@ -1523,8 +1524,10 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const emit = (r: RunResult): number => {
-    if (r.out) console.log(r.out);
-    if (r.err) console.error(r.err);
+    // 出す直前に飾りを落とす。書く側は `**…**` で書いてよい——
+    // 端末なら太字、パイプなら素の字になる（src/term.ts）。
+    if (r.out) console.log(emphasize(r.out));
+    if (r.err) console.error(emphasize(r.err));
     ridealong();
     return r.code;
   };
