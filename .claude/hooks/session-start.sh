@@ -28,6 +28,10 @@ fi
 # 布陣の外（個人の Claude Code）では何も言わぬ。
 [ -z "$AGENT_ID" ] && exit 0
 
+# 発火の跡。**測る時だけ**残す（HONDEN_HOOK_LOG に道を渡す・合言葉と同じ流儀）。
+# 常に書けば本番の家に試験の砂が積もる。
+[ -n "${HONDEN_HOOK_LOG:-}" ] && echo "[$(date -Is)] $AGENT_ID fired" >> "$HONDEN_HOOK_LOG" 2>/dev/null || true
+
 # 未読の数は正本から引く。無ければ黙る（honden が無い場でも壊れぬため）。
 UNREAD=""
 if [ -x "$HONDEN" ]; then

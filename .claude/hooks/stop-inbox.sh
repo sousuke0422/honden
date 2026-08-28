@@ -29,6 +29,7 @@ if [ -z "$AGENT_ID" ] && [ -n "${TMUX_PANE:-}" ]; then
 fi
 # 名乗りが引けねば黙って通す。個人の Claude Code を妨げぬ。
 [ -z "$AGENT_ID" ] && exit 0
+[ -n "${HONDEN_HOOK_LOG:-}" ] && echo "[$(date -Is)] $AGENT_ID stop-hook fired" >> "$HONDEN_HOOK_LOG" 2>/dev/null || true
 
 # 将軍の pane は殿との対話の場である。止めてはならぬ。
 [ "$AGENT_ID" = "shogun" ] && exit 0
@@ -51,6 +52,7 @@ COUNT=$(echo "$SUMMARY" | grep -o 'unread=[0-9]*' | head -1 | cut -d= -f2)
 
 # 未読あり。止めるのを断り、何が来ておるかを添えて差し戻す。
 # 本文は渡さぬ——**読むのは agent の仕事**である（既読の印を付けるのも）。
+[ -n "${HONDEN_HOOK_LOG:-}" ] && echo "[$(date -Is)] $AGENT_ID BLOCK (unread=$COUNT)" >> "$HONDEN_HOOK_LOG" 2>/dev/null || true
 REASON="未読が ${COUNT} 件残っておる（${SUMMARY# *}）。honden inbox read で読み、処理したものを honden inbox ack --all で既読にしてから手を止めよ。"
 R="$REASON" python3 -c "
 import json, os
