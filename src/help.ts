@@ -179,6 +179,24 @@ EOF`,
     flags: [['--ttl-min', '期限（分・既定 10・上限 60）']],
     notes: ['理由が要る。後から必ず引かれるゆえ', '受けた者は HONDEN_OTP=<札> を命の頭に付けて叩く'],
   },
+  'guard charter': {
+    summary: '許状を切る。将軍のみ。cmd 縛りの多回券——honden-bot 専用。',
+    usage: 'honden guard charter --agent <名> --cmd-id <cmd_N> --repo OWNER/REPO --reason "<裁定の理由>"',
+    flags: [
+      ['--verb', 'create か comment（既定 create）'],
+      ['--uses', '回数（既定 10・上限 200）。失敗弾も数える——見積もりに余裕を'],
+      ['--ttl-min', '期限（分・既定 60・上限 480）'],
+    ],
+    notes: [
+      '手形（grant）は一つの命に一回。許状は「この cmd の間・この repo・この verb・N 回」',
+      '原則は将軍が自ら建てる。下賜は個数が多い時・能力十分な時・明示の指示がある時',
+      'cmd が閉じれば刻中でも失効する。取り消しは guard charter-revoke --id <番号>',
+    ],
+  },
+  'guard charters': {
+    summary: '許状の一覧。死んだものも由（取消/尽き/期限切れ/cmd閉）つきで出る。',
+    usage: 'honden guard charters',
+  },
   'guard facts': {
     summary: '直訴を裁くための事実を、正本から集めて出す。',
     usage: 'honden guard facts --agent <名> --cmd "<命>" [--reason "<弁明>"]',

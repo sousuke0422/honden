@@ -33,6 +33,7 @@ const HELP_KEY = (rest: string[]): string => {
 import { collect as collectStatus, render as renderStatus, coreCheck } from './status';
 import { exportAll } from './export';
 import { serve as serveHttp } from './serve';
+import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
@@ -1122,6 +1123,72 @@ export function composeDashboard(dbPath: string | undefined): string {
   return parts.join('\n');
 }
 
+/** `honden guard charter` — 許状を切る。将軍のみ。cmd 縛りの多回券（honden-bot 専用）。 */
+function runGuardCharter(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  flags: Record<string, string>,
+): RunResult {
+  const agent = flags['agent'];
+  const cmdId = flags['cmd-id'];
+  const repo = flags['repo'];
+  const verb = flags['verb'] ?? 'create';
+  const reason = flags['reason'];
+  if (!agent || !cmdId || !repo || !reason) {
+    return { code: EXIT_INVALID, err: '--agent と --cmd-id と --repo と --reason を渡されよ（--verb create|comment・--uses N・--ttl-min M）' };
+  }
+  const uses = flags['uses'] ? Number(flags['uses']) : 10;
+  const ttlMin = flags['ttl-min'] ? Number(flags['ttl-min']) : CHARTER_DEFAULT_TTL_MIN;
+  if (!Number.isFinite(ttlMin) || ttlMin < 1 || ttlMin > CHARTER_MAX_TTL_MIN) {
+    return { code: EXIT_INVALID, err: `期限は 1〜${CHARTER_MAX_TTL_MIN} 分で渡されよ` };
+  }
+  const db = openStore({ path: dbPath });
+  const now = new Date();
+  const r = tx(db, () =>
+    issueCharter(db, { agent, cmdId, repo, verb, uses, issuer: selfId ?? 'shogun', reason }, now, ttlMin * 60_000),
+  );
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  const at = new Date().toISOString();
+  tx(db, () => {
+    inboxDeliver(db, {
+      id: `msg_${Date.now().toString(36)}${Bun.hash(agent + at).toString(36).slice(0, 4)}_gc`,
+      agent,
+      at,
+      type: 'guard_grant',
+      sender: selfId ?? 'shogun',
+      body:
+        `許状 #${r.id} が下りた。${repo} への issue ${verb}・${uses} 回まで・期限 ${r.expiresAt}。\n` +
+        `cmd ${cmdId} が閉じれば失効する。使い方: honden-bot issue ${verb} --repo ${repo} ... （札は要らぬ。名乗りで検められる）`,
+    });
+    inboxSignal(db);
+  });
+  return {
+    code: EXIT_OK,
+    out: `  許状 #${r.id} を切った（${agent} 宛・${repo} ${verb}・${uses} 回・期限 ${r.expiresAt}・${cmdId} 縛り）\n  inbox でも当人へ届けた。`,
+  };
+}
+
+/** `honden guard charters` — 許状の一覧。監査の目ゆえ死んだものも由つきで出す。 */
+function runGuardCharters(dbPath: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  const rows = listCharters(db, new Date());
+  if (rows.length === 0) return { code: EXIT_OK, out: '  許状は一枚も無い。' };
+  const lines = rows.map(
+    (c) =>
+      `  #${c.id} [${c.state}] ${c.agent} → ${c.repo} ${c.verb} 残${c.uses_left} ${c.cmd_id} 期限${c.expires_at.slice(0, 16)} （${c.issuer}: ${c.reason}）`,
+  );
+  return { code: EXIT_OK, out: lines.join('\n') };
+}
+
+/** `honden guard charter-revoke` — 許状の取り消し。将軍のみ。 */
+function runGuardCharterRevoke(dbPath: string | undefined, selfId: string | undefined, id: string | undefined): RunResult {
+  const n = Number(id ?? '');
+  if (!Number.isInteger(n) || n <= 0) return { code: EXIT_INVALID, err: '--id <番号> を渡されよ' };
+  const db = openStore({ path: dbPath });
+  const r = tx(db, () => revokeCharter(db, n, selfId ?? 'shogun', new Date()));
+  return r.ok ? { code: EXIT_OK, out: `  ${r.message}` } : { code: EXIT_INVALID, err: `  ${r.message}` };
+}
+
 /**
  * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
  */
@@ -1709,10 +1776,15 @@ export async function main(argv: string[]): Promise<number> {
         actingAs('shogun') ??
           runGuardGrant(dbPath, selfId(), flags['cmd'], flags['agent'], flags['reason'], flags['ttl-min']),
       );
+    if (rest[1] === 'charter')
+      return emit(actingAs('shogun') ?? runGuardCharter(dbPath, selfId(), flags));
+    if (rest[1] === 'charters') return emit(runGuardCharters(dbPath));
+    if (rest[1] === 'charter-revoke')
+      return emit(actingAs('shogun') ?? runGuardCharterRevoke(dbPath, selfId(), flags['id']));
     if (rest[1] === 'appeal') return emit(runGuardAppeal(dbPath, selfId(), flags['cmd'], flags['reason']));
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
     if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
-    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard appeal / guard facts / guard selftest のいずれかである' });
+    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard charter[s] / guard charter-revoke / guard appeal / guard facts / guard selftest のいずれかである' });
   }
 
   if (rest[0] === 'backup') {

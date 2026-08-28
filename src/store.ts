@@ -466,6 +466,22 @@ CREATE TABLE IF NOT EXISTS guard_otp (
   used_at    TEXT                       -- 一度使えば刻まれ、二度目は無い
 );
 
+-- 許状。手形（guard_otp・一つのコマンドに一回）と違い、cmd に縛られた多回券。
+-- honden-bot 専用。的（repo・verb）と回数と刻で縛る。cmd が閉じれば即死ぬ。
+CREATE TABLE IF NOT EXISTS guard_charter (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent      TEXT NOT NULL,             -- 使ってよい者
+  cmd_id     TEXT NOT NULL,             -- この cmd の間だけ生きる
+  repo       TEXT NOT NULL,             -- OWNER/REPO を名指し
+  verb       TEXT NOT NULL CHECK (verb IN ('create','comment')),
+  uses_left  INTEGER NOT NULL,          -- 残回数。尽きれば音を立てて落ちる
+  issuer     TEXT NOT NULL,             -- 発行した者（将軍のみ）
+  reason     TEXT NOT NULL,
+  issued_at  TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT                       -- 取り消し。刻まれれば以後使えぬ
+);
+
 -- 追記専用の台帳。書き込みは全部ここにも落ちる。
 -- kagemusha の decisions_journal に相当する層。上書きも削除もしない。
 CREATE TABLE IF NOT EXISTS ledger (

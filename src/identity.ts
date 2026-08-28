@@ -29,6 +29,11 @@ export type Source = 'pane' | 'env' | 'none';
 export interface Identity {
   id?: string;
   source: Source;
+  /**
+   * 名乗りが**系譜**から出ておるか（src/anchor.ts）。
+   * true なら環境変数では偽れぬ。秘密を扱う口（honden-bot）はこれを要求する。
+   */
+  anchored?: boolean;
   /** 布陣の中に居るか。TMUX_PANE があるかで決まる。 */
   insideFormation: boolean;
   /** 食い違いがあれば、その旨。 */
@@ -50,12 +55,36 @@ export interface Env {
    * （外部レビューで再現・2026-08-27）。
    */
   lookup: (pane: string) => string | null;
+  /**
+   * 系譜から我が pane を割り出す（src/anchor.ts）。**環境変数では偽れぬ。**
+   * 渡さねば従前どおり TMUX_PANE を信じる（試験・非 Linux のため）。
+   * null = 布陣の外か、系譜を切った者。
+   */
+  anchor?: () => { pane: string; agentId?: string } | null;
 }
 
 export function resolve(env: Env): Identity {
   const pane = (env.tmuxPane ?? '').trim();
   const fromEnv = env.agentIdEnv?.trim() || undefined;
   const insideFormation = pane !== '';
+
+  // 系譜が語るなら、それが正である。TMUX_PANE は参考にしかならぬ
+  // ——子は自分の環境を書き換えられるが、親は選べぬ。
+  const anchored = env.anchor?.() ?? null;
+  if (anchored) {
+    const conflict =
+      pane !== '' && pane !== anchored.pane
+        ? `TMUX_PANE は ${pane} と言うが、系譜は ${anchored.pane} を指しておる。\n` +
+          '  系譜を採る。環境変数の名乗りは偽れるゆえ、これは騙りの跡かもしれぬ。'
+        : undefined;
+    return {
+      id: anchored.agentId,
+      source: anchored.agentId ? 'pane' : 'none',
+      insideFormation: true,
+      anchored: true,
+      ...(conflict ? { conflict } : {}),
+    };
+  }
 
   if (!insideFormation) {
     // 布陣の外。pane は引かない——空のまま引くと他人を名乗る。
