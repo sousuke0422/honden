@@ -9,7 +9,7 @@ cli:
   agents:
     shogun:
       type: claude
-      model: claude-opus-5
+      model: claude-sonnet-5
     karo:
       type: claude
       model: claude-sonnet-5
