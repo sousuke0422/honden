@@ -56,6 +56,18 @@ export const LEVEL_3_AFTER_MS = 4 * 60_000;
 export const REPEAT_MS = 60_000;
 /** 文脈を消させるのは 5 分に一度まで。 */
 export const RESET_COOLDOWN_MS = 5 * 60_000;
+/**
+ * 何度文脈を消させても応えぬなら、諦めて上役へ回す。
+ *
+ * 段梯子には終わりが無かった——応えぬ相手に二時間半で 150 回撃ち、
+ * 30 回文脈を消させた（2026-08-28 実測）。相手が死んでおるなら合図は届かぬし、
+ * 生きておるなら五分ごとに文脈を焼かれて余計に働けなくなる。
+ * **どちらに転んでも、撃ち続けて良いことは無い。**
+ *
+ * 三度消させて駄目なら退く。人（家老）へ回すのが筋である——
+ * 機械が直せぬものを機械が抱え込むな。
+ */
+export const GIVE_UP_AFTER_RESETS = 3;
 
 /**
  * 立て直しに Escape×2 と Ctrl-C を要する CLI。現行 CLAUDE.md より。
@@ -134,13 +146,14 @@ interface State {
   last_at: string | null;
   last_level: number | null;
   last_reset_at: string | null;
+  reset_count: number;
 }
 
 export function stateOf(db: Database, agent: string): State {
   return (
-    (db.query('SELECT since, last_at, last_level, last_reset_at FROM nudge WHERE agent = ?').get(agent) as
+    (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count FROM nudge WHERE agent = ?').get(agent) as
       | State
-      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null }
+      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0 }
   );
 }
 
@@ -205,6 +218,28 @@ export function plan(
         send = false;
         reason = `${Math.round((REPEAT_MS - sinceLast) / 1000)} 秒後まで撃ち直さぬ`;
       }
+    }
+
+    // 三度消させても応えぬなら退く。**撃ち続けて良いことは無い。**
+    if (st.reset_count >= GIVE_UP_AFTER_RESETS) {
+      out.push(
+        mark(
+          build(
+            entry.id,
+            entry.cli,
+            pane,
+            s,
+            level,
+            false,
+            `${st.reset_count} 度文脈を消させても応えぬ。撃つのをやめた——人の手で確かめられよ` +
+              `（pane が死んでおらぬか・CLI が落ちておらぬか）。片付けば自ずと戻る`,
+            now,
+            st,
+            level,
+          ),
+        ),
+      );
+      continue;
     }
 
     if (send && level === 3) {
@@ -274,14 +309,15 @@ function build(
 export function record(db: Database, p: Plan, now: Date, reason?: string, by?: string): void {
   const at = now.toISOString();
   db.prepare(
-    `INSERT INTO nudge(agent, since, last_at, last_level, last_reset_at)
-     VALUES (?, COALESCE((SELECT since FROM nudge WHERE agent = ?), ?), ?, ?, ?)
+    `INSERT INTO nudge(agent, since, last_at, last_level, last_reset_at, reset_count)
+     VALUES (?, COALESCE((SELECT since FROM nudge WHERE agent = ?), ?), ?, ?, ?, ?)
      ON CONFLICT(agent) DO UPDATE SET
        since = COALESCE(nudge.since, excluded.since),
        last_at = excluded.last_at,
        last_level = excluded.last_level,
-       last_reset_at = COALESCE(excluded.last_reset_at, nudge.last_reset_at)`,
-  ).run(p.agent, p.agent, at, at, p.escalationLevel, p.level === 3 ? at : null);
+       last_reset_at = COALESCE(excluded.last_reset_at, nudge.last_reset_at),
+       reset_count = nudge.reset_count + excluded.reset_count`,
+  ).run(p.agent, p.agent, at, at, p.escalationLevel, p.level === 3 ? at : null, p.level === 3 ? 1 : 0);
 
   journal(db, {
     // 誰が起こしたかを残す。'nudge' 固定では、明示で起こした跡が辿れぬ。

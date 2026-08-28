@@ -26,6 +26,7 @@ import {
   REPEAT_MS,
   stateOf,
   FOLLOWUP_KEY,
+  GIVE_UP_AFTER_RESETS,
 } from '../src/nudge';
 import type { Pane } from '../src/pane';
 import { setMode, getMode, parseUntil } from '../src/mode';
@@ -514,5 +515,62 @@ describe('急ぎの合図と follow-up 確認キー', () => {
     expect(FOLLOWUP_KEY['cursor']).toBe('Enter');
     expect(FOLLOWUP_KEY['codex']).toBe('Tab');
     expect(FOLLOWUP_KEY['claude']).toBeUndefined();
+  });
+});
+
+
+describe('諦める段 — 撃ち続けて良いことは無い', () => {
+  /** 文脈消しを n 回撃った跡を作る。 */
+  const afterResets = (db: ReturnType<typeof openStore>, agent: string, n: number) => {
+    for (let i = 0; i < n; i++) {
+      const at = at3(i);
+      const p = find(plan(db, at, { panes: PANES }), agent)!;
+      record(db, p, at);
+    }
+  };
+  /** 文脈消しが撃てる時刻（段 3 かつ冷却明け）。 */
+  const at3 = (i: number) => at(LEVEL_3_AFTER_MS + i * (RESET_COOLDOWN_MS + 1000));
+
+  test('三度消させても応えぬなら撃つのをやめる', () => {
+    const db = seeded();
+    unreadFor(db, 'ashigaru1');
+    markSince(db, 'ashigaru1', T0);
+    afterResets(db, 'ashigaru1', GIVE_UP_AFTER_RESETS);
+    const p = find(plan(db, at3(GIVE_UP_AFTER_RESETS), { panes: PANES }), 'ashigaru1')!;
+    expect(p.send).toBe(false);
+    expect(p.reason).toContain('撃つのをやめた');
+  });
+
+  test('二度までは撃ち続ける（早々に諦めぬ）', () => {
+    const db = seeded();
+    unreadFor(db, 'ashigaru1');
+    markSince(db, 'ashigaru1', T0);
+    afterResets(db, 'ashigaru1', GIVE_UP_AFTER_RESETS - 1);
+    const p = find(plan(db, at3(GIVE_UP_AFTER_RESETS - 1), { panes: PANES }), 'ashigaru1')!;
+    expect(p.send).toBe(true);
+  });
+
+  test('未読が片付けば数えは消え、次からまた撃てる', () => {
+    const db = seeded();
+    unreadFor(db, 'ashigaru1');
+    markSince(db, 'ashigaru1', T0);
+    afterResets(db, 'ashigaru1', GIVE_UP_AFTER_RESETS);
+    expect(find(plan(db, at3(GIVE_UP_AFTER_RESETS), { panes: PANES }), 'ashigaru1')!.send).toBe(false);
+
+    forget(db, ['ashigaru1']); // 片付いた（未読 0 で startClocks が呼ぶ）
+    tx(db, () => {
+      // 新しい報せが来た（先のものとは別の id）
+      deliver(db, {
+        id: 'm_after_giveup',
+        agent: 'ashigaru1',
+        at: T0.toISOString(),
+        type: 'report_received',
+        sender: 'gunshi',
+        body: '次の用件',
+      });
+    });
+    markSince(db, 'ashigaru1', at3(GIVE_UP_AFTER_RESETS));
+    const p = find(plan(db, at(1000 + LEVEL_3_AFTER_MS * 10), { panes: PANES }), 'ashigaru1')!;
+    expect(p.send).toBe(true);
   });
 });

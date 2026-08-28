@@ -439,7 +439,14 @@ CREATE TABLE IF NOT EXISTS nudge (
   since         TEXT,   -- 未読が 0 から増えた時刻。0 に戻れば消す
   last_at       TEXT,   -- 最後に合図を撃った時刻
   last_level    INTEGER,
-  last_reset_at TEXT    -- 最後に文脈を消させた時刻。連発を防ぐ
+  last_reset_at TEXT,   -- 最後に文脈を消させた時刻。連発を防ぐ
+  -- 何度文脈を消させたか。未読が片付けば 0 へ戻る。
+  --
+  -- 段梯子には終わりが無かった: L2 → 消し → L2 → 消し を永久に繰り返す。
+  -- 応えぬ相手（受け手が死んでおる・CLI が落ちておる）に二時間半で
+  -- 150 回の合図と 30 回の文脈消しを撃ち続けた（2026-08-28 一巡試験・実測）。
+  -- 実機であれば五分ごとに文脈を焼かれ続ける。**諦める段が要る。**
+  reset_count   INTEGER NOT NULL DEFAULT 0
 );
 
 -- 禁じ手の門の通行手形（OTP）。
@@ -560,6 +567,7 @@ function migrate(db: Database): void {
   addColumn(db, 'cmd_acceptance', 'changed_at', 'TEXT');
   addColumn(db, 'report', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'inbox', 'origin', "TEXT NOT NULL DEFAULT 'native'");
+  addColumn(db, 'nudge', 'reset_count', 'INTEGER NOT NULL DEFAULT 0');
 
   // 受け入れ条件の番号を 1 始まりへ揃える。
   // 初期は配列の添字をそのまま入れており「条件 0」という言い方になっていた。
