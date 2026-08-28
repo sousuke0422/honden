@@ -28,6 +28,11 @@ SESSION="${HONDEN_TEST_SESSION:-honden-test}"
 TESTHOME="${HONDEN_TEST_HOME:-$HOME/.honden-test}"
 DB="$TESTHOME/honden.db"
 RECV="$TESTHOME/received"
+
+# 陣の bash に履歴を残させぬ（殿の申し出 2026-08-28）。
+# 手で作業される時、配下の打った命が ~/.bash_history に混ざって邪魔になる。
+# `HISTSIZE=0` は .bashrc に上書きされて効かぬ——効くのは HISTFILE の方である。
+NO_HIST=(-e HISTFILE=/dev/null)
 AGENTS=(shogun karo gunshi ashigaru1 ashigaru2)   # fixtures/test-env/settings.yaml と揃える
 
 H_OUT() { env -u TMUX_PANE HONDEN_DB="$DB" "$ROOT/bin/honden" "$@"; }  # 布陣の外として
@@ -88,9 +93,9 @@ up() {
       echo "exec bash '$ROOT/scripts/testenv/recv.sh' '$a' '$RECV/$a.log'"
     fi
   }
-  tmux new-session -d -s "$SESSION" -n agents "$(pane_cmd "${AGENTS[0]}")"
+  tmux new-session -d -s "$SESSION" -n agents "${NO_HIST[@]}" "$(pane_cmd "${AGENTS[0]}")"
   for a in "${AGENTS[@]:1}"; do
-    tmux split-window -t "$SESSION:agents" "$(pane_cmd "$a")"
+    tmux split-window -t "$SESSION:agents" "${NO_HIST[@]}" "$(pane_cmd "$a")"
     tmux select-layout -t "$SESSION:agents" tiled >/dev/null
   done
 
