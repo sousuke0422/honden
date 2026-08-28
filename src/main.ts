@@ -19,7 +19,7 @@ import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong } from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
-import { plan, send, record, startClocks } from './nudge';
+import { plan, send, record, startClocks, withNudgeLock } from './nudge';
 import { captureBusy } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { collect as collectStatus, render as renderStatus } from './status';
@@ -634,6 +634,28 @@ export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined
  * 芯は agent も段も知らぬので、次にいつ起こすかもこちらが決める。
  */
 export async function runNudge(
+  dbPath: string | undefined,
+  dryRun: boolean,
+  wakeShogun: boolean,
+  reason: string | undefined,
+  selfId?: string,
+): Promise<RunResult> {
+  // 二つの手が同時に撃つのを止める。芯は前の子が終わる前に次を起こすゆえ、
+  // 錠が無ければ両方が「まだ撃っておらぬ」と読んで揃って撃つ（実害を見た）。
+  // --dry-run は書かぬゆえ錠を要さぬ。
+  if (dryRun) return runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId);
+  const lockPath = `${dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH}.nudge.lock`;
+  const r = await withNudgeLock(lockPath, () =>
+    runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId),
+  );
+  if (r === null) {
+    // 撃たぬのが正しい。芯へは「次は普通の間で」と返す。
+    return { code: EXIT_OK, out: `  他の手が撃っておる。退く。\n${JSON.stringify({ next_wake_ms: 60_000 })}` };
+  }
+  return r;
+}
+
+async function runNudgeInner(
   dbPath: string | undefined,
   dryRun: boolean,
   wakeShogun: boolean,

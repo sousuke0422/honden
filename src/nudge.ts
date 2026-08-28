@@ -408,3 +408,49 @@ export function startClocks(
   forget(db, quiet);
   return { live, quiet };
 }
+
+
+/**
+ * 合図を撃つ間、他の手を締め出す。
+ *
+ * 芯は次の signal が来れば、前の子が終わる前に新しい子を起こす。
+ * 二つの `honden nudge` が同時に走ると、**どちらも相手が書く前に状態を読む**
+ * ——`REPEAT_MS` も段の照合も、書かれた跡を見て判ずるゆえ揃って素通りする。
+ *
+ * 実害が出た（2026-08-28・一巡試験）: 文脈消し（`/new-chat`）が
+ * **一秒のうちに二度**飛んだ。一度で足りるものを二度撃てば、
+ * 立て直しかけた文脈をもう一度潰す。
+ *
+ * `O_EXCL` で錠を取る。取れねば黙って退く——撃たぬのが正しい。
+ * 錠が古ければ（撃ち手が死んだ跡なら）奪う。**死んだ錠に永久に阻まれる方が悪い。**
+ */
+export function withNudgeLock<T>(lockPath: string, fn: () => T, opts: { staleMs?: number } = {}): T | null {
+  const staleMs = opts.staleMs ?? 120_000;
+  // **時刻を渡させぬ。** 錠の古さは file の mtime と突き合わせて測るゆえ、
+  // 呼び手の時計（試験で差し替えられる作り物）と混ぜると意味を失う——
+  // 試験が「入れ子でも通ってしまう」形で捕らえた（渡した時刻が実時刻より
+  // 八時間先を指しており、生きた錠がすべて古く見えた）。
+  // 実の時計と実の mtime だけで測る。
+  const fs = require('node:fs') as typeof import('node:fs');
+  try {
+    fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+  } catch {
+    // 既に誰かが握っておる。古ければ奪う。
+    try {
+      const age = Date.now() - fs.statSync(lockPath).mtimeMs;
+      if (age < staleMs) return null;
+      fs.writeFileSync(lockPath, String(process.pid));
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      /* 消せずとも古くなれば奪われる */
+    }
+  }
+}

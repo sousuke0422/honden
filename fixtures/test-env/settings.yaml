@@ -11,8 +11,8 @@ cli:
       type: claude
       model: claude-sonnet-5
     karo:
-      type: claude
-      model: claude-sonnet-5
+      type: cursor
+      model: composer-2.5
     gunshi:
       type: claude
       model: claude-sonnet-5
