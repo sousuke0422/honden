@@ -31,6 +31,7 @@ const HELP_KEY = (rest: string[]): string => {
   return HELP[two] ? two : (rest[0] ?? '');
 };
 import { collect as collectStatus, render as renderStatus, coreCheck } from './status';
+import { exportAll } from './export';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
@@ -990,6 +991,38 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
 }
 
 /**
+ * `honden export --out <場所>` — 切り戻しの綱。正本を旧環境の YAML へ吐く。
+ *
+ * 吐く先は必ず新しい場所。生きた queue/ へ直接は書かぬ——配置は人の手で。
+ */
+export function runExport(dbPath: string | undefined, selfId: string | undefined, outDir: string | undefined): RunResult {
+  if (!outDir) {
+    return {
+      code: EXIT_INVALID,
+      err: '--out <場所> を渡されよ。生きた queue/ へ直接は書かぬ——吐いた後、人の手で配置されよ。',
+    };
+  }
+  const base = resolvePath(outDir);
+  const db = openStore({ path: dbPath });
+  const files = exportAll(db);
+  const { mkdirSync, writeFileSync } = require('node:fs') as typeof import('node:fs');
+  const { dirname, join } = require('node:path') as typeof import('node:path');
+  for (const f of files) {
+    const p = join(base, f.path);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, f.body);
+  }
+  journal(db, { actor: selfId ?? '名乗り無し', action: 'export.yaml', target: base, detail: `${files.length} 枚` });
+  return {
+    code: EXIT_OK,
+    out:
+      files.map((f) => `  ${f.path}`).join('\n') +
+      `\n\n  ${files.length} 枚を ${base} へ吐いた。\n` +
+      '  配置は人の手で（旧環境の queue/ を先に退避してから写されよ）。',
+  };
+}
+
+/**
  * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
  */
 export function runGuardGrant(
@@ -1580,6 +1613,10 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
     if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard appeal / guard facts / guard selftest のいずれかである' });
+  }
+
+  if (rest[0] === 'export') {
+    return emit(runExport(dbPath, selfId(), flags['out']));
   }
 
   if (rest[0] === 'status') {
