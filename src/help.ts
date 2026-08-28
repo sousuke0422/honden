@@ -197,6 +197,14 @@ EOF`,
     summary: '許状の一覧。死んだものも由（取消/尽き/期限切れ/cmd閉）つきで出る。',
     usage: 'honden guard charters',
   },
+  'guard charter-revoke': {
+    summary: '許状を取り消す。将軍のみ。以後その券は使えぬ。',
+    usage: 'honden guard charter-revoke --id <番号>',
+    notes: [
+      '番号は guard charters で見える',
+      '**急がば取り消せ。急がねば要らぬ**——cmd が閉じれば刻中でも自ずと死ぬ',
+    ],
+  },
   'guard facts': {
     summary: '直訴を裁くための事実を、正本から集めて出す。',
     usage: 'honden guard facts --agent <名> --cmd "<命>" [--reason "<弁明>"]',

@@ -3245,3 +3245,25 @@ chmod が黙って空振りする——この機で実測済み）。401 なら�
 
 最後は sandbox で通しの実弾: 足軽が許状で起票 → 作者は `app/shogun-aki-tweak`
 → 台帳に `shogun→charter_issue` と `ashigaru1→charter_use` が並ぶ。検分後に閉じた。
+
+### 百三十二、足軽が自らに許状を切れた——入口の検めは漏れる（2026-08-29）
+
+自律の見回りで、**己が作ったばかりの門を叩いて**発覚。本物の足軽 pane から
+`honden guard charter --agent ashigaru1 …` を叩いたら **`EXIT=0` で通った**。
+
+因は `mayActAs` の名にある。「may act as」ゆえ役職の検めに見えるが、実体は
+**布陣外からの騙りだけを止める**もので、布陣の中は無条件で通す。ゆえに
+入口の `actingAs('shogun')` は、布陣内の足軽に対して**何もしておらぬ**。
+
+他の口は全て芯の側でも検めておった（createCmd の CMD_AUTHOR、guard.issue の
+OTP_ISSUERS、raise の CAN_RAISE、decide の DECIDER、qc の QC_AUTHOR、
+assignTask の ASSIGNER）。**我が許状だけが入口に頼っておった。**
+
+塞ぎは `CHARTER_ISSUERS` を芯へ置くこと。併せて `mayActAs` の doc へ
+「これは役職の検めではない」と大書した——名に騙される者は我だけではあるまい。
+
+**戒め: 権の検めを入口だけに置くな。入口は増えるたびに漏れる。**
+
+そしてもう一つ。**作ったばかりの門は、自分で叩け。** 単体試験は純関数を
+九通り検めており全て緑であった。だが試験は `issueCharter` を直に呼ぶゆえ、
+**CLI の門を通らぬ**。門を検めるには門を叩くしかない。

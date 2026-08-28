@@ -28,6 +28,16 @@ export interface Charter {
   revoked_at: string | null;
 }
 
+/**
+ * 許状を切れる者。手形（guard.ts の OTP_ISSUERS）と揃える。
+ *
+ * **芯で検める**のが肝である。CLI 側の `actingAs('shogun')` に頼っておったが、
+ * `mayActAs` は**布陣外の騙りしか止めぬ**——布陣内は無条件で通す作りゆえ、
+ * 足軽が自らに許状を切れてしもうた（実測 2026-08-29・門を叩いて発覚）。
+ * 権の検めを入口だけに置くと、入口が一つ増えるたびに穴が開く。
+ */
+export const CHARTER_ISSUERS = new Set(['shogun']);
+
 export const CHARTER_VERBS = ['create', 'comment'] as const;
 export const CHARTER_MAX_USES = 200;
 export const CHARTER_DEFAULT_TTL_MIN = 60;
@@ -45,6 +55,10 @@ export function issueCharter(
   now: Date,
   ttlMs: number,
 ): { ok: true; id: number; expiresAt: string } | { ok: false; message: string } {
+  if (!CHARTER_ISSUERS.has(input.issuer)) {
+    return { ok: false, message: `許状を切れるのは将軍のみである（そなたは ${input.issuer || '名乗り無し'}）` };
+  }
+  if (!input.reason.trim()) return { ok: false, message: 'なぜ通すのかを書かねば切れぬ。後から必ず引かれる' };
   if (!validRepo(input.repo)) return { ok: false, message: `repo は OWNER/REPO の形で（${input.repo}）` };
   if (!(CHARTER_VERBS as readonly string[]).includes(input.verb)) {
     return { ok: false, message: `verb は ${CHARTER_VERBS.join('/')} のいずれか（${input.verb}）` };
@@ -103,6 +117,9 @@ export function useCharter(db: Database, c: Charter, detail: string): void {
 }
 
 export function revokeCharter(db: Database, id: number, actor: string, now: Date): { ok: boolean; message: string } {
+  if (!CHARTER_ISSUERS.has(actor)) {
+    return { ok: false, message: `許状を取り消せるのは将軍のみである（そなたは ${actor || '名乗り無し'}）` };
+  }
   const r = db
     .prepare('UPDATE guard_charter SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
     .run(now.toISOString(), id);

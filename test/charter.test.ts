@@ -54,6 +54,36 @@ describe('issueCharter', () => {
   });
 });
 
+describe('切れる者・取り消せる者', () => {
+  test('将軍以外は切れぬ（CLI の門でなく芯で止める）', () => {
+    const { db, cmd } = seeded();
+    for (const who of ['ashigaru1', 'karo', 'gunshi', '']) {
+      const r = grant(db, cmd, { issuer: who });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.message).toContain('将軍のみ');
+    }
+    expect(grant(db, cmd, { issuer: 'shogun' }).ok).toBe(true); // 陽性対照
+  });
+
+  test('訳を書かねば切れぬ', () => {
+    const { db, cmd } = seeded();
+    expect(grant(db, cmd, { reason: '   ' }).ok).toBe(false);
+  });
+
+  test('将軍以外は取り消せぬ', () => {
+    const { db, cmd } = seeded();
+    const r = grant(db, cmd);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const bad = tx(db, () => revokeCharter(db, r.id, 'ashigaru1', NOW));
+    expect(bad.ok).toBe(false);
+    expect(bad.message).toContain('将軍のみ');
+    // まだ生きておる（陽性対照）
+    expect(findCharter(db, 'ashigaru1', 'o/r', 'create', NOW)).not.toBeNull();
+    expect(tx(db, () => revokeCharter(db, r.id, 'shogun', NOW)).ok).toBe(true);
+  });
+});
+
 describe('findCharter — 五重の縛り', () => {
   test('合う者・的・刻なら見つかる', () => {
     const { db, cmd } = seeded();

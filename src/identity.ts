@@ -139,6 +139,18 @@ export function resolve(env: Env): Identity {
  *
  * 布陣外の名乗りを一律に禁じるのではない。読む分には要らぬ縛りである。
  * **権を振るう副命令だけ**が、この検めを通る。
+ *
+ * ## これは役職の検めではない（名に騙されるな）
+ *
+ * 名が「may act as」ゆえ「その役を名乗ってよいか」を判ずるように見えるが、
+ * **布陣の中では無条件で通す**。止めるのは布陣**外**からの騙りだけである。
+ *
+ * ゆえに `actingAs('shogun')` を入口に置いても、**布陣内の足軽は素通りする**。
+ * 役職そのものの検めは、必ず**芯の側**（createCmd の CMD_AUTHOR、
+ * guard.issue の OTP_ISSUERS、charter の CHARTER_ISSUERS…）で行え。
+ *
+ * これを怠って足軽が自らに許状を切れた（2026-08-29・門を叩いて発覚）。
+ * 入口の検めは入口が増えるたびに漏れる。芯に置けば入口が幾つあっても漏れぬ。
  */
 export function mayActAs(id: Identity, role: string): { ok: true } | { ok: false; message: string } {
   if (id.insideFormation) return { ok: true };
