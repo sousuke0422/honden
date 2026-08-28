@@ -1656,60 +1656,89 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (rest[0] === 'dashboard') {
-    // 戦況を正本から組んで出す。**生成物は作らぬ**——旧 dashboard.md は
-    // 肥大して家老の書き換えが怪しくなった。読む時に組めば、育たぬ。
+    // 戦況を正本から組んで出す。**形式は旧 dashboard.md のまま**（殿の指定・
+    // 上流 shutsujin_departure.sh L456-525 の節構成）——殿の手が覚えておる
+    // 節の名・絵文字・並びを変えぬ。中身だけ正本から組む。生成物は作らぬ。
     const db = openStore({ path: dbPath });
     const parts: string[] = [];
+    // 旧 dashboard は現地時刻であった。UTC で出すと殿の時計と九時間ずれる。
+    const stamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).slice(0, 16);
+    parts.push('# 📊 戦況報告', `最終更新: ${stamp}`, '');
 
+    // 🚨 要対応 = 殿の裁可待ち（倒れる時刻つき）
     const open = db
       .query("SELECT id, question, expires_at FROM decision WHERE status = 'open' ORDER BY id")
       .all() as { id: number; question: string; expires_at: string | null }[];
-    parts.push('  ■ 要対応（殿の裁可待ち）');
+    parts.push('## 🚨 要対応 - 殿のご判断をお待ちしております');
     parts.push(
       open.length > 0
         ? open
-            .map((d) => `    #${d.id} ${d.question.split('\n')[0]!.slice(0, 50)}${d.expires_at ? `（${d.expires_at.slice(0, 16)} に既定へ倒れる）` : ''}`)
+            .map((d) => `- #${d.id} ${d.question.split('\n')[0]!}${d.expires_at ? `（${d.expires_at.slice(0, 16)} に既定へ倒れる）` : ''}`)
             .join('\n')
-        : '    （無し）',
+        : 'なし',
+      '',
     );
 
+    // 🔄 進行中
     const live = db
       .query("SELECT id, status, assigned_to, purpose FROM cmd WHERE status IN ('pending','in_progress') ORDER BY created_at DESC LIMIT 20")
       .all() as { id: string; status: string; assigned_to: string | null; purpose: string | null }[];
-    parts.push('', '  ■ 進行中');
+    parts.push('## 🔄 進行中 - 只今、戦闘中でござる');
     parts.push(
       live.length > 0
-        ? live.map((c) => `    ${c.id} [${c.status}]${c.assigned_to ? ` → ${c.assigned_to}` : ''} ${(c.purpose ?? '').split('\n')[0]!.slice(0, 44)}`).join('\n')
-        : '    （無し）',
+        ? live.map((c) => `- ${c.id} [${c.status}]${c.assigned_to ? ` → ${c.assigned_to}` : ''} ${(c.purpose ?? '').split('\n')[0]!}`).join('\n')
+        : 'なし',
+      '',
     );
 
+    // ✅ 本日の戦果（表: 時刻 | 戦場 | 任務 | 結果）
+    const today = new Date().toISOString().slice(0, 10);
     const done = db
-      .query("SELECT id, purpose, completed_at FROM cmd WHERE status = 'done' ORDER BY completed_at DESC LIMIT 5")
-      .all() as { id: string; purpose: string | null; completed_at: string | null }[];
-    parts.push('', '  ■ 直近の戦果');
-    parts.push(
-      done.length > 0
-        ? done.map((c) => `    ${c.id} ${(c.purpose ?? '').split('\n')[0]!.slice(0, 46)}（${(c.completed_at ?? '').slice(0, 10)}）`).join('\n')
-        : '    （無し）',
-    );
+      .query("SELECT id, project, purpose, completed_at FROM cmd WHERE status = 'done' AND completed_at >= ? ORDER BY completed_at")
+      .all(today) as { id: string; project: string | null; purpose: string | null; completed_at: string }[];
+    parts.push('## ✅ 本日の戦果', '| 時刻 | 戦場 | 任務 | 結果 |', '|------|------|------|------|');
+    for (const c of done) {
+      parts.push(`| ${c.completed_at.slice(11, 16)} | ${c.project ?? '-'} | ${c.id} ${(c.purpose ?? '').split('\n')[0]!.slice(0, 40)} | done |`);
+    }
+    parts.push('');
 
-    // 滞り: 未読を抱えた者と、期限切れの持ち場
-    const stuck = db
-      .query('SELECT agent, count(*) c FROM inbox WHERE read = 0 GROUP BY agent ORDER BY c DESC LIMIT 10')
-      .all() as { agent: string; c: number }[];
-    const nowIso = new Date().toISOString();
-    const expired = db
-      .query('SELECT agent, task_id FROM task WHERE holder IS NOT NULL AND lease_until < ? LIMIT 10')
-      .all(nowIso) as { agent: string; task_id: string | null }[];
-    parts.push('', '  ■ 滞り');
-    const stuckLines = [
-      ...stuck.map((s2) => `    ${s2.agent}: 未読 ${s2.c} 件`),
-      ...expired.map((e) => `    ${e.agent}: 持ち場の期限切れ（${e.task_id ?? ''}）`),
-    ];
-    parts.push(stuckLines.length > 0 ? stuckLines.join('\n') : '    （無し）');
+    // 🎯 スキル化候補 = 報告の skill_candidate（同じ型を三度繰り返した報せ）
+    const reports = db
+      .query("SELECT agent, task_id, raw FROM report WHERE origin = 'native' ORDER BY created_at DESC LIMIT 50")
+      .all() as { agent: string; task_id: string | null; raw: string }[];
+    const skills: string[] = [];
+    for (const r of reports) {
+      try {
+        const j = JSON.parse(r.raw) as { skill_candidate?: unknown };
+        if (j.skill_candidate) {
+          const sc = typeof j.skill_candidate === 'string' ? j.skill_candidate : JSON.stringify(j.skill_candidate);
+          skills.push(`- ${sc}（${r.agent} / ${r.task_id ?? '-'}）`);
+        }
+      } catch {
+        /* raw が JSON でない報せは飛ばす */
+      }
+    }
+    parts.push('## 🎯 スキル化候補 - 承認待ち');
+    parts.push(skills.length > 0 ? skills.join('\n') : 'なし', '');
+
+    // 🛠️ 生成されたスキル — honden は skills を正本に持たぬ（repo の skills/ が実体）
+    parts.push('## 🛠️ 生成されたスキル');
+    parts.push('なし（skills/ 配下が実体。正本は数えぬ）', '');
+
+    // ⏸️ 待機中 = 任を持たぬ働き手
+    const idle = db
+      .query("SELECT r.id FROM roster r LEFT JOIN task t ON t.agent = r.id WHERE r.role = 'worker' AND (t.task_id IS NULL OR t.status = 'idle' OR t.status = 'done') ORDER BY r.id")
+      .all() as { id: string }[];
+    parts.push('## ⏸️ 待機中');
+    parts.push(idle.length > 0 ? idle.map((w) => `- ${w.id}`).join('\n') : 'なし', '');
+
+    // ❓ 伺い事項 — honden では裁可待ち（要対応）へ一本化してある
+    parts.push('## ❓ 伺い事項');
+    parts.push('なし（伺いは 🚨 要対応 へ一本化）');
 
     return emit({ code: EXIT_OK, out: parts.join('\n') });
   }
+
 
   if (rest[0] === 'export') {
     return emit(runExport(dbPath, selfId(), flags['out']));
