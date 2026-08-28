@@ -3120,3 +3120,25 @@ dashboard は節の名を将軍が勝手に決めていた——**殿の手が�
 待機中=任を持たぬ働き手／伺い事項=裁可待ちへ一本化した旨を明記。
 
 最終更新は現地時刻（旧に合わせる。UTC では殿の時計と九時間ずれる）。
+
+### 百二十七、dashboard-viewer.py は ts 層で継いだ（2026-08-29）
+
+旧 viewer は python 323 行の HTTP サーバで、**dashboard.md を読んで**配り、
+**mtime** で更新を検知していた。honden には dashboard.md が無い（読む時に組む）
+ゆえ、そのままの移植は成らぬ。二箇所を置き換えた:
+
+- ファイル → `composeDashboard()`（CLI の `honden dashboard` と同じ関数）。
+  端末で見るものと画面で見るものが寸分違わぬ——正本一つ・組み一つ。
+- mtime → **台帳の末尾**（`MAX(id) FROM ledger`）。正本が動けば台帳が伸びる。
+  ブラウザは 1.5 秒毎に `/api/version` を見回り、伸びた時だけ md を取り直す。
+
+層の選定は ts。rs 核は「見張る・起こす」だけの最小者に保つ決め（核が肥えれば
+常駐者の検分が難しくなる）ゆえ、HTTP で配る類の便利は全て ts 側へ寄せる。
+`bun run build` の単体 binary に載るゆえ、python も pip も要らぬ——旧 viewer の
+stdlib-only という美点は形を変えて残る。見た目（暗色・字組み・marked）は旧を
+踏襲した。殿の目が慣れた画面を変えぬ。
+
+しくじりも一つ: main の出口が `process.exit(await main(...))` ゆえ、serve を
+張った直後に **返すと配りながら即死**する。口上だけ出て curl が繋がらぬ実測で
+発覚。`serveDashboard` は SIGINT/SIGTERM まで resolve せぬ Promise を返す形に
+改めた。「返り値が出口に直結する main では、居座る副命令は返ってはならぬ」。

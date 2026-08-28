@@ -235,8 +235,15 @@ EOF`,
   },
   dashboard: {
     summary: '戦況を正本から組んで出す。要対応・進行中・戦果・滞り。',
-    usage: 'honden dashboard',
-    notes: ['生成物は作らぬ。旧 dashboard.md は肥大して書き換えが怪しくなった——読む時に組めば育たぬ'],
+    usage: 'honden dashboard [--serve [--port <番号>]]',
+    flags: [
+      ['--serve', 'ブラウザへ配る（旧 dashboard-viewer.py の後継）。止めるは Ctrl-C'],
+      ['--port <番号>', '配る口。省くと 8787'],
+    ],
+    notes: [
+      '生成物は作らぬ。旧 dashboard.md は肥大して書き換えが怪しくなった——読む時に組めば育たぬ',
+      '--serve は台帳の伸びを合図に画面が自ずと改まる。md を CLI で見るのと同じものが映る',
+    ],
   },
   backup: {
     summary: '正本の写しを焼く。生きたまま・錠を止めずに。',

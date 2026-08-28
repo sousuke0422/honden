@@ -32,6 +32,7 @@ const HELP_KEY = (rest: string[]): string => {
 };
 import { collect as collectStatus, render as renderStatus, coreCheck } from './status';
 import { exportAll } from './export';
+import { serve as serveHttp } from './serve';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
@@ -1023,6 +1024,104 @@ export function runExport(dbPath: string | undefined, selfId: string | undefined
   };
 }
 
+/** `honden dashboard --serve` — 戦況をブラウザへ配る。止めるまで返らぬ。 */
+function serveDashboard(dbPath: string | undefined, port: number): Promise<number> {
+  const r = serveHttp({
+    port,
+    db: () => openStore({ path: dbPath }),
+    compose: () => composeDashboard(dbPath),
+  });
+  console.log(`  http://localhost:${r.port} で配っておる。止めるは Ctrl-C。`);
+  // main の出口は process.exit —— ここで返せば配りながら即死する。
+  // 止めの合図（SIGINT/SIGTERM）まで待ってから畳む。
+  return new Promise<number>((resolve) => {
+    const bye = () => { r.stop(); resolve(EXIT_OK); };
+    process.on('SIGINT', bye);
+    process.on('SIGTERM', bye);
+  });
+}
+
+/** 戦況の md を正本から組む。CLI でも配信でも同じものを出す。 */
+export function composeDashboard(dbPath: string | undefined): string {
+  const db = openStore({ path: dbPath });
+  const parts: string[] = [];
+  // 旧 dashboard は現地時刻であった。UTC で出すと殿の時計と九時間ずれる。
+  const stamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).slice(0, 16);
+  parts.push('# 📊 戦況報告', `最終更新: ${stamp}`, '');
+
+  // 🚨 要対応 = 殿の裁可待ち（倒れる時刻つき）
+  const open = db
+    .query("SELECT id, question, expires_at FROM decision WHERE status = 'open' ORDER BY id")
+    .all() as { id: number; question: string; expires_at: string | null }[];
+  parts.push('## 🚨 要対応 - 殿のご判断をお待ちしております');
+  parts.push(
+    open.length > 0
+      ? open
+          .map((d) => `- #${d.id} ${d.question.split('\n')[0]!}${d.expires_at ? `（${d.expires_at.slice(0, 16)} に既定へ倒れる）` : ''}`)
+          .join('\n')
+      : 'なし',
+    '',
+  );
+
+  // 🔄 進行中
+  const live = db
+    .query("SELECT id, status, assigned_to, purpose FROM cmd WHERE status IN ('pending','in_progress') ORDER BY created_at DESC LIMIT 20")
+    .all() as { id: string; status: string; assigned_to: string | null; purpose: string | null }[];
+  parts.push('## 🔄 進行中 - 只今、戦闘中でござる');
+  parts.push(
+    live.length > 0
+      ? live.map((c) => `- ${c.id} [${c.status}]${c.assigned_to ? ` → ${c.assigned_to}` : ''} ${(c.purpose ?? '').split('\n')[0]!}`).join('\n')
+      : 'なし',
+    '',
+  );
+
+  // ✅ 本日の戦果（表: 時刻 | 戦場 | 任務 | 結果）
+  const today = new Date().toISOString().slice(0, 10);
+  const done = db
+    .query("SELECT id, project, purpose, completed_at FROM cmd WHERE status = 'done' AND completed_at >= ? ORDER BY completed_at")
+    .all(today) as { id: string; project: string | null; purpose: string | null; completed_at: string }[];
+  parts.push('## ✅ 本日の戦果', '| 時刻 | 戦場 | 任務 | 結果 |', '|------|------|------|------|');
+  for (const c of done) {
+    parts.push(`| ${c.completed_at.slice(11, 16)} | ${c.project ?? '-'} | ${c.id} ${(c.purpose ?? '').split('\n')[0]!.slice(0, 40)} | done |`);
+  }
+  parts.push('');
+
+  // 🎯 スキル化候補 = 報告の skill_candidate（同じ型を三度繰り返した報せ）
+  const reports = db
+    .query("SELECT agent, task_id, raw FROM report WHERE origin = 'native' ORDER BY created_at DESC LIMIT 50")
+    .all() as { agent: string; task_id: string | null; raw: string }[];
+  const skills: string[] = [];
+  for (const r of reports) {
+    try {
+      const j = JSON.parse(r.raw) as { skill_candidate?: unknown };
+      if (j.skill_candidate) {
+        const sc = typeof j.skill_candidate === 'string' ? j.skill_candidate : JSON.stringify(j.skill_candidate);
+        skills.push(`- ${sc}（${r.agent} / ${r.task_id ?? '-'}）`);
+      }
+    } catch {
+      /* raw が JSON でない報せは飛ばす */
+    }
+  }
+  parts.push('## 🎯 スキル化候補 - 承認待ち');
+  parts.push(skills.length > 0 ? skills.join('\n') : 'なし', '');
+
+  // 🛠️ 生成されたスキル — honden は skills を正本に持たぬ（repo の skills/ が実体）
+  parts.push('## 🛠️ 生成されたスキル');
+  parts.push('なし（skills/ 配下が実体。正本は数えぬ）', '');
+
+  // ⏸️ 待機中 = 任を持たぬ働き手
+  const idle = db
+    .query("SELECT r.id FROM roster r LEFT JOIN task t ON t.agent = r.id WHERE r.role = 'worker' AND (t.task_id IS NULL OR t.status = 'idle' OR t.status = 'done') ORDER BY r.id")
+    .all() as { id: string }[];
+  parts.push('## ⏸️ 待機中');
+  parts.push(idle.length > 0 ? idle.map((w) => `- ${w.id}`).join('\n') : 'なし', '');
+
+  // ❓ 伺い事項 — honden では裁可待ち（要対応）へ一本化してある
+  parts.push('## ❓ 伺い事項');
+  parts.push('なし（伺いは 🚨 要対応 へ一本化）');
+  return parts.join('\n');
+}
+
 /**
  * `honden guard grant` — 手形を切る。将軍のみ。札はこの出力にしか現れぬ。
  */
@@ -1656,89 +1755,16 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (rest[0] === 'dashboard') {
-    // 戦況を正本から組んで出す。**形式は旧 dashboard.md のまま**（殿の指定・
-    // 上流 shutsujin_departure.sh L456-525 の節構成）——殿の手が覚えておる
-    // 節の名・絵文字・並びを変えぬ。中身だけ正本から組む。生成物は作らぬ。
-    const db = openStore({ path: dbPath });
-    const parts: string[] = [];
-    // 旧 dashboard は現地時刻であった。UTC で出すと殿の時計と九時間ずれる。
-    const stamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).slice(0, 16);
-    parts.push('# 📊 戦況報告', `最終更新: ${stamp}`, '');
-
-    // 🚨 要対応 = 殿の裁可待ち（倒れる時刻つき）
-    const open = db
-      .query("SELECT id, question, expires_at FROM decision WHERE status = 'open' ORDER BY id")
-      .all() as { id: number; question: string; expires_at: string | null }[];
-    parts.push('## 🚨 要対応 - 殿のご判断をお待ちしております');
-    parts.push(
-      open.length > 0
-        ? open
-            .map((d) => `- #${d.id} ${d.question.split('\n')[0]!}${d.expires_at ? `（${d.expires_at.slice(0, 16)} に既定へ倒れる）` : ''}`)
-            .join('\n')
-        : 'なし',
-      '',
-    );
-
-    // 🔄 進行中
-    const live = db
-      .query("SELECT id, status, assigned_to, purpose FROM cmd WHERE status IN ('pending','in_progress') ORDER BY created_at DESC LIMIT 20")
-      .all() as { id: string; status: string; assigned_to: string | null; purpose: string | null }[];
-    parts.push('## 🔄 進行中 - 只今、戦闘中でござる');
-    parts.push(
-      live.length > 0
-        ? live.map((c) => `- ${c.id} [${c.status}]${c.assigned_to ? ` → ${c.assigned_to}` : ''} ${(c.purpose ?? '').split('\n')[0]!}`).join('\n')
-        : 'なし',
-      '',
-    );
-
-    // ✅ 本日の戦果（表: 時刻 | 戦場 | 任務 | 結果）
-    const today = new Date().toISOString().slice(0, 10);
-    const done = db
-      .query("SELECT id, project, purpose, completed_at FROM cmd WHERE status = 'done' AND completed_at >= ? ORDER BY completed_at")
-      .all(today) as { id: string; project: string | null; purpose: string | null; completed_at: string }[];
-    parts.push('## ✅ 本日の戦果', '| 時刻 | 戦場 | 任務 | 結果 |', '|------|------|------|------|');
-    for (const c of done) {
-      parts.push(`| ${c.completed_at.slice(11, 16)} | ${c.project ?? '-'} | ${c.id} ${(c.purpose ?? '').split('\n')[0]!.slice(0, 40)} | done |`);
+    // 形式は旧 dashboard.md のまま（殿の指定・上流 L456-525 の節構成）。
+    // --serve でブラウザ配信もする——旧 dashboard-viewer.py の後継。
+    // 旧はファイル(dashboard.md)を読んで配っていたが、こちらは**正本から
+    // 組んで直に配る**。中間生成物が消える（brief と同じ思想）。
+    if (flags['serve'] === 'true') {
+      const port = Number(flags['port'] ?? 8787) || 8787;
+      return serveDashboard(dbPath, port);
     }
-    parts.push('');
-
-    // 🎯 スキル化候補 = 報告の skill_candidate（同じ型を三度繰り返した報せ）
-    const reports = db
-      .query("SELECT agent, task_id, raw FROM report WHERE origin = 'native' ORDER BY created_at DESC LIMIT 50")
-      .all() as { agent: string; task_id: string | null; raw: string }[];
-    const skills: string[] = [];
-    for (const r of reports) {
-      try {
-        const j = JSON.parse(r.raw) as { skill_candidate?: unknown };
-        if (j.skill_candidate) {
-          const sc = typeof j.skill_candidate === 'string' ? j.skill_candidate : JSON.stringify(j.skill_candidate);
-          skills.push(`- ${sc}（${r.agent} / ${r.task_id ?? '-'}）`);
-        }
-      } catch {
-        /* raw が JSON でない報せは飛ばす */
-      }
-    }
-    parts.push('## 🎯 スキル化候補 - 承認待ち');
-    parts.push(skills.length > 0 ? skills.join('\n') : 'なし', '');
-
-    // 🛠️ 生成されたスキル — honden は skills を正本に持たぬ（repo の skills/ が実体）
-    parts.push('## 🛠️ 生成されたスキル');
-    parts.push('なし（skills/ 配下が実体。正本は数えぬ）', '');
-
-    // ⏸️ 待機中 = 任を持たぬ働き手
-    const idle = db
-      .query("SELECT r.id FROM roster r LEFT JOIN task t ON t.agent = r.id WHERE r.role = 'worker' AND (t.task_id IS NULL OR t.status = 'idle' OR t.status = 'done') ORDER BY r.id")
-      .all() as { id: string }[];
-    parts.push('## ⏸️ 待機中');
-    parts.push(idle.length > 0 ? idle.map((w) => `- ${w.id}`).join('\n') : 'なし', '');
-
-    // ❓ 伺い事項 — honden では裁可待ち（要対応）へ一本化してある
-    parts.push('## ❓ 伺い事項');
-    parts.push('なし（伺いは 🚨 要対応 へ一本化）');
-
-    return emit({ code: EXIT_OK, out: parts.join('\n') });
+    return emit({ code: EXIT_OK, out: composeDashboard(dbPath) });
   }
-
 
   if (rest[0] === 'export') {
     return emit(runExport(dbPath, selfId(), flags['out']));
