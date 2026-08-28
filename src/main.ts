@@ -30,7 +30,7 @@ const HELP_KEY = (rest: string[]): string => {
   const two = rest.slice(0, 2).join(' ');
   return HELP[two] ? two : (rest[0] ?? '');
 };
-import { collect as collectStatus, render as renderStatus } from './status';
+import { collect as collectStatus, render as renderStatus, coreCheck } from './status';
 import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
@@ -975,7 +975,12 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
   if (json) return { code: EXIT_OK, out: JSON.stringify(rows, null, 2) };
   const absent = rows.filter((r) => r.pane === null).length;
   const urgent = rows.filter((r) => r.urgent).length;
+  const core = coreCheck(dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH);
   const tail: string[] = [];
+  tail.push(core.alive ? '芯は生きておる' : '**芯が死んでおる。合図は誰にも届かぬ**——立て直されよ');
+  for (const st of core.strays) {
+    tail.push(`別の正本を見張る芯が居る（pid ${st.pid} → ${st.path}）。畳むのは人の手で`);
+  }
   if (absent > 0) tail.push(`${absent} 名が布陣に居らぬ`);
   if (urgent > 0) tail.push(`${urgent} 名に急ぎの未読`);
   return {

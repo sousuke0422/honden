@@ -109,3 +109,43 @@ export function render(rows: Row[]): string {
   });
   return [head, line, ...body].join('\n');
 }
+
+/** 芯の生死。 */
+export interface CoreCheck {
+  /** 己の正本を見張る芯が生きておるか。 */
+  alive: boolean;
+  /** 己の正本以外を見張る芯（孤児の疑い）。 */
+  strays: { pid: string; path: string }[];
+}
+
+/**
+ * 芯（honden-watch）の様子を見る。
+ *
+ * 生死は**錠への相乗り**で判ずる。芯は起動時に flock で錠を握る——
+ * 取れれば誰も握っておらぬ（死）、取れねば握っておる（生）。
+ * ps の command line を grep する手は採らぬ——己の command line に当たる
+ * 前科が二度ある（旧 watcher の自己検知・出陣の儀の芯検知）。
+ *
+ * 孤児: 陣を畳んでも芯は死なぬことがある（実測 2026-08-28: kill-session の
+ * 後も親が tmux サーバのまま生きておった）。**別の正本を見張る芯**を列挙し、
+ * 報せる。畳むのは人の手である——将軍は kill を打てぬ（D006）。
+ */
+export function coreCheck(dbPath: string): CoreCheck {
+  const lock = `${dbPath.replace(/honden\.db$/, '')}watch.lock`;
+  const tryLock = Bun.spawnSync(['flock', '-n', lock, 'true']);
+  // flock が取れた（exit 0）なら誰も握っておらぬ = 死んでおる。
+  // 錠のファイルが無い場合も flock は作って取る → 死と判ずる（正しい）。
+  const alive = !tryLock.success;
+
+  const strays: { pid: string; path: string }[] = [];
+  const ps = Bun.spawnSync(['ps', '-eo', 'pid,args']);
+  if (ps.success) {
+    for (const line of ps.stdout.toString().split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+.*honden-watch\s+--path\s+(\S+)/);
+      if (!m) continue;
+      const watched = m[2]!;
+      if (!watched.startsWith(dbPath)) strays.push({ pid: m[1]!, path: watched });
+    }
+  }
+  return { alive, strays };
+}

@@ -122,10 +122,11 @@ up() {
   tmux list-panes -t "$SESSION:agents" -F '  #{pane_id} #{@agent_id}'
 
   echo "── 芯を起こす ──"
+  # 芯は落ちても立ち直る（輪の中で回す・二重起動は flock が防ぐ）。
   tmux new-window -t "$SESSION" -n core \
-    "HONDEN_DB='$DB' HONDEN_TMUX_SESSION='$SESSION' exec '$ROOT/bin/honden-watch' \
-       --path '$DB.signal' --lock '$TESTHOME/watch.lock' --debounce-ms 300 \
-       -- '$ROOT/bin/honden' nudge"
+      "while true; do HONDEN_DB='$DB' HONDEN_TMUX_SESSION='$SESSION' '$ROOT/bin/honden-watch' \
+         --path '$DB.signal' --lock '$TESTHOME/watch.lock' --debounce-ms 300 \
+         -- '$ROOT/bin/honden' nudge; echo '芯が落ちた。3 秒後に立て直す'; sleep 3; done"
   sleep 1
   status
 }
