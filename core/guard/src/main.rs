@@ -34,7 +34,12 @@ use brush_parser::ast;
 /// 語ひとつの素性。**引用されておるか**が最も重い——引用の中の `rm` は命ではない。
 #[derive(Default)]
 struct WordFacts {
+    /// 書かれたままの姿（引用も含む）
     text: String,
+    /// **引用を剥いだ値。** 掟はこちらに照らす——`rm -rf "/"` は
+    /// `rm -rf /` と同じ害であり、引用したからとて赦されぬ。
+    /// 展開（`$X` / `$(…)`）は走らせるまで判らぬゆえ、書かれたまま残す。
+    value: String,
     /// 語の全体が引用に包まれておる（`"rm -rf /"` のような）
     quoted: bool,
     /// 引用の外に `*` か `?` がある
@@ -67,6 +72,14 @@ struct Extract {
 /// **解けなんだ語は `Err`。** probe の写しは `Err(_) => {}` と既定値を返しておった
 /// ——それは「引用されておらぬ・glob 無し・変数無し」と**嘘をつく**に等しい。
 /// 新しい層は fail-open として生まれる。生まれた時に塞ぐ。
+/// 語の一片が原文で占める所を切り出す。
+///
+/// `WordPieceWithSource` は中身を持たず、原文への添字を持つ。展開
+/// （`$X` / `$(…)`）は走らせるまで値が判らぬゆえ、書かれたままを値とする。
+fn src<'a>(raw: &'a str, pw: &brush_parser::word::WordPieceWithSource) -> &'a str {
+    raw.get(pw.start_index..pw.end_index).unwrap_or("")
+}
+
 fn word_facts(raw: &str, opts: &brush_parser::ParserOptions) -> Result<WordFacts, String> {
     use brush_parser::word::WordPiece as P;
     let pieces = brush_parser::word::parse(raw, opts)
@@ -75,34 +88,59 @@ fn word_facts(raw: &str, opts: &brush_parser::ParserOptions) -> Result<WordFacts
     let mut f = WordFacts { text: raw.to_string(), ..Default::default() };
     // 空の語（`""`）は「引用されておる」と見る——命令位置には立てぬゆえ。
     let mut all_quoted = true;
+    let mut value = String::new();
     for pw in &pieces {
         match &pw.piece {
-            // 引用された中身。ここに何が入っておっても命ではない。
-            P::SingleQuotedText(_) | P::AnsiCQuotedText(_) | P::DoubleQuotedSequence(_) => {}
+            // 引用された中身。**命ではないが、値ではある。**
+            // `rm -rf "/"` の `/` は引用されておっても根を指す。
+            P::SingleQuotedText(t) | P::AnsiCQuotedText(t) => value.push_str(t),
+            P::DoubleQuotedSequence(inner) => {
+                for ipw in inner {
+                    match &ipw.piece {
+                        P::Text(t) => value.push_str(t),
+                        P::CommandSubstitution(s) | P::BackquotedCommandSubstitution(s) => {
+                            // 引用の中でも置換は走る。中身を渡し、印も立てる。
+                            f.cmdsubst = true;
+                            f_push_subst(s);
+                        }
+                        P::ParameterExpansion(_) => f.var = true,
+                        _ => {}
+                    }
+                }
+            }
             P::CommandSubstitution(s) => {
                 f.cmdsubst = true;
                 all_quoted = false;
+                value.push_str(src(raw, pw));
                 f_push_subst(s);
             }
             P::BackquotedCommandSubstitution(s) => {
                 f.cmdsubst = true;
                 all_quoted = false;
+                value.push_str(src(raw, pw));
                 f_push_subst(s);
             }
             P::ParameterExpansion(_) => {
                 f.var = true;
                 all_quoted = false;
+                // 展開の中身は走らせるまで判らぬ。書かれたまま残す。
+                value.push_str(src(raw, pw));
             }
             P::Text(t) => {
                 if t.contains('*') || t.contains('?') || t.contains('[') {
                     f.glob = true;
                 }
                 all_quoted = false;
+                value.push_str(t);
             }
-            _ => all_quoted = false,
+            _ => {
+                all_quoted = false;
+                value.push_str(src(raw, pw));
+            }
         }
     }
     f.quoted = all_quoted && !pieces.is_empty();
+    f.value = value;
     Ok(f)
 }
 
@@ -148,7 +186,15 @@ fn handle_item(
     opts: &brush_parser::ParserOptions,
 ) {
     match item {
-        ast::CommandPrefixOrSuffixItem::AssignmentWord(_, w) => assigns.push(w.value.clone()),
+        // 代入語も**解く**。`x=$(rm -rf /)` の置換を拾わねば、代入に隠れた命が
+        // 門の外を素通りする（実測 2026-08-30）。argv には入れぬ——代入は
+        // 命令位置ではない——が、置換の中身は集める。
+        ast::CommandPrefixOrSuffixItem::AssignmentWord(_, w) => {
+            assigns.push(w.value.clone());
+            if let Err(e) = word_facts(&w.value, opts) {
+                out.unhandled.push(e);
+            }
+        }
         ast::CommandPrefixOrSuffixItem::IoRedirect(r) => handle_redirect(r, out),
         ast::CommandPrefixOrSuffixItem::Word(w) => match word_facts(&w.value, opts) {
             Ok(f) => argv.push(f),
@@ -311,8 +357,9 @@ fn main() {
                 .iter()
                 .map(|w| {
                     format!(
-                        "{{\"text\":\"{}\",\"quoted\":{},\"glob\":{},\"var\":{},\"cmdsubst\":{}}}",
+                        "{{\"text\":\"{}\",\"value\":\"{}\",\"quoted\":{},\"glob\":{},\"var\":{},\"cmdsubst\":{}}}",
                         esc(&w.text),
+                        esc(&w.value),
                         w.quoted,
                         w.glob,
                         w.var,

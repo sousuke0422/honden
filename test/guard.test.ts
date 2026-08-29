@@ -251,9 +251,9 @@ describe('env 前置回避（実弾試験が釣った穴）', () => {
   });
 
   test('splitOtp: 頭でも env 群の中でも札を抜ける', () => {
-    expect(splitOtp('HONDEN_OTP=abc pkill -f x')).toEqual({ otp: 'abc', cmd: 'pkill -f x' });
-    expect(splitOtp('HONDEN_DB=/y HONDEN_OTP=abc pkill -f x')).toEqual({ otp: 'abc', cmd: 'HONDEN_DB=/y pkill -f x' });
-    expect(splitOtp('pkill -f x')).toEqual({ cmd: 'pkill -f x' });
+    expect(splitOtp('HONDEN_OTP=abc pkill -f x')).toMatchObject({ otp: 'abc', cmd: 'pkill -f x' });
+    expect(splitOtp('HONDEN_DB=/y HONDEN_OTP=abc pkill -f x')).toMatchObject({ otp: 'abc', cmd: 'HONDEN_DB=/y pkill -f x' });
+    expect(splitOtp('pkill -f x')).toMatchObject({ cmd: 'pkill -f x' });
   });
 
   test('手形の束縛は本体基準——HONDEN_DB 前置の癖があっても通る', () => {

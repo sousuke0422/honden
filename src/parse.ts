@@ -24,7 +24,15 @@ import { join } from 'node:path';
 
 /** 語ひとつの素性。**引用されておるか**が最も重い。 */
 export interface Word {
+  /** 書かれたままの姿（引用も含む） */
   text: string;
+  /**
+   * **引用を剥いだ値。掟はこちらに照らす。**
+   *
+   * `rm -rf "/"` は `rm -rf /` と同じ害であり、引用したからとて赦されぬ。
+   * 展開（`$X` / `$(…)`）は走らせるまで判らぬゆえ、書かれたまま残る。
+   */
+  value: string;
   /** 語の全体が引用に包まれておる。引用の中の `rm` は命ではない */
   quoted: boolean;
   /** 引用の外に `*` `?` `[` がある */
@@ -89,8 +97,11 @@ interface Raw {
 
 /** 語の素性は**欠けたら真**に倒す——「印が無い」を「安全」と読まぬため。 */
 function word(w: Partial<Word> | undefined): Word {
+  const text = typeof w?.text === 'string' ? w.text : '';
   return {
-    text: typeof w?.text === 'string' ? w.text : '',
+    text,
+    // 値が無ければ書かれたままを使う。**掟が何も見ぬ状態にはせぬ。**
+    value: typeof w?.value === 'string' ? w.value : text,
     quoted: w?.quoted !== false,
     glob: w?.glob !== false,
     var: w?.var !== false,
@@ -148,6 +159,72 @@ export function commandNames(p: Parsed): string[] {
   for (const c of p.commands) {
     const head = c.argv[0];
     if (head && !head.quoted && head.text !== '') out.push(head.text);
+  }
+  return out;
+}
+
+/**
+ * 掟を照らす単位を組む。
+ *
+ * # なぜ「単位」なのか
+ *
+ * 紋様の錨 `(?:^|[;&|]\s*)` は命令位置の**近似**にすぎず、実測で六つ破れた
+ * （2026-08-30）——改行・`if … then`・`$( )`・`for … do`・`{ … }` の中では
+ * 絶対域の D001 すら素通りしておった。
+ *
+ * 構造なら近似が要らぬ。**単純命令ひとつを一つの単位**として渡せば、
+ * その先頭が命令位置そのものである。紋様は書き換えずに済み、
+ * 錨がただ本物になる。
+ *
+ * 値は引用を剥いだもの（`rm -rf "/"` → `rm -rf /`）。
+ */
+export function units(p: Parsed): string[] {
+  if (!p.ok) return [];
+  return p.commands
+    .map((c) => c.argv.map((w) => w.value).join(' ').trim())
+    .filter((u) => u !== '');
+}
+
+/**
+ * 命令置換の中身は**別の命**である。門は再帰して解く。
+ *
+ * `x=$(rm -rf /)` が素通りしておった筋がこれ（実測）。深さは限る——
+ * 際限なく潜れば、細工された入力で門が止まる。
+ */
+export function substUnits(p: Parsed, run: Runner, depth = 2): string[] {
+  if (!p.ok || depth <= 0) return [];
+  const out: string[] = [];
+  for (const s of p.substitutions) {
+    const inner = parseCommand(s, run);
+    out.push(...units(inner), ...substUnits(inner, run, depth - 1));
+  }
+  return out;
+}
+
+/**
+ * heredoc の中身を掟に照らすか。
+ *
+ * **貰い手による。** `python3 <<EOF` の中身は python への文字であって命ではない
+ * ——将軍が己の門に二度弾かれたのがこの形。だが `bash <<EOF` の中身は**命**で
+ * あり、照らさねば素通りする。
+ *
+ * 構文では見分けられぬ（`docs/decisions.md` 十八の「AST でも買えぬもの」）。
+ * ゆえに貰い手の名で決める。名簿は短く、明示で持つ。
+ */
+export const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'eval', 'source', '.']);
+
+export function heredocUnits(p: Parsed, run: Runner): string[] {
+  if (!p.ok || p.heredocs.length === 0) return [];
+  const toShell = p.commands.some((c) => {
+    const head = c.argv[0];
+    if (!head) return false;
+    const base = head.value.split('/').pop() ?? head.value;
+    return SHELLS.has(base);
+  });
+  if (!toShell) return [];
+  const out: string[] = [];
+  for (const h of p.heredocs) {
+    out.push(...units(parseCommand(h, run)));
   }
   return out;
 }

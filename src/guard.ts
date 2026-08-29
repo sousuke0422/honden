@@ -22,6 +22,13 @@
  */
 import type { Database } from 'bun:sqlite';
 import { createHash, randomBytes } from 'node:crypto';
+import {
+  parseCommand,
+  units as parseUnits,
+  substUnits,
+  heredocUnits,
+  type Runner as ParseRunner,
+} from './parse';
 import { journal } from './store';
 
 export interface Verdict {
@@ -55,11 +62,23 @@ export function stripEnvPrefix(cmd: string): string {
  * コマンドから手形（HONDEN_OTP=札）を抜き取る。頭の env 代入の群れの
  * 中ならどこにあってもよい——cursor は HONDEN_DB= を先に置く癖がある。
  */
-export function splitOtp(raw: string): { otp?: string; cmd: string } {
+export function splitOtp(raw: string): { otp?: string; cmd: string; raw: string } {
   const n = normalize(raw);
   const m = n.match(/^((?:\w+=\S*\s+)*)HONDEN_OTP=(\S+)\s+([\s\S]+)$/);
-  if (!m) return { cmd: n };
-  return { otp: m[2], cmd: normalize(`${m[1] ?? ''}${m[3]}`) };
+  if (!m) return { cmd: n, raw };
+
+  // **生の姿も返す。** 整形（normalize）は紋様のためのもので、改行を空白へ
+  // 潰す。構文にはそれが致命になる——`ls⏎rm -rf /` は二つの命だが、
+  // 潰せば `ls rm -rf /`（ただの ls）に化け、根を消す命が消えて見える
+  // （実測 2026-08-30）。**整形した文字列を parser に食わせてはならぬ。**
+  //
+  // 札の切り出しは整形済みの上で行うゆえ、生の側からは同じ形を落とす。
+  const rawM = raw.match(/^((?:\s*\w+=\S*\s+)*)\s*HONDEN_OTP=\S+\s+([\s\S]+)$/);
+  return {
+    otp: m[2],
+    cmd: normalize(`${m[1] ?? ''}${m[3]}`),
+    raw: rawM ? `${rawM[1] ?? ''}${rawM[2]}` : raw,
+  };
 }
 
 export function sha256(s: string): string {
@@ -245,6 +264,66 @@ const RULES: Rule[] = [
 ];
 
 /** 機械層の裁き。OTP は見ない——それは verify の仕事。 */
+/**
+ * 構文で解いた上で掟に照らす。**紋様は書き換えぬ——錨だけが本物になる。**
+ *
+ * # なぜ要ったか
+ *
+ * 紋様の錨 `(?:^|[;&|]\s*)` は命令位置の**近似**であった。実測（2026-08-30）で
+ * 六つ破れておった——絶対域の D001 ですら、これらを素通りしておった:
+ *
+ * ```
+ * ls⏎rm -rf /              改行は錨に入っておらぬ
+ * if true; then rm -rf /   then の後は錨に入っておらぬ
+ * x=$(rm -rf /)            置換の中は見ておらぬ
+ * for f in a; do rm -rf /  do の後も同じ
+ * { rm -rf /; }            波括弧の中も同じ
+ * ```
+ *
+ * 構造なら近似が要らぬ。**単純命令ひとつを一つの単位**として照らせば、
+ * その先頭が命令位置そのものである。
+ *
+ * # 二枚重ねにしておる
+ *
+ * 紋様（生の文字列）も併せて照らし、**どちらかが止めれば止める**。
+ * 構造だけに移せば、構造が取りこぼす形で門が緩む恐れがある——
+ * 移行の間は重ねる。紋様を降ろすのは、構造が本番で通ってからでよい。
+ *
+ * # 解けぬ命は拒む
+ *
+ * ここが紋様との最大の別である。紋様は**知らぬ形を通す**（fail-open）。
+ * 構造は知らぬ形を**止める**。`eval`・難読化・壊れた入力は、
+ * 「解けぬ」という一事で拒みに落ちる。
+ */
+export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd): Verdict {
+  // 一、紋様の層。取りこぼしはあれど、取り過ぎはせぬ。
+  const flat = judge(cmd);
+  if (flat.permission === 'deny') return flat;
+
+  // 二、構造の層。**生の姿を解かせる。**
+  // 整形した文字列を食わせると、改行が空白へ潰れて命の切れ目が消える。
+  const parsed = parseCommand(raw, run);
+  if (!parsed.ok) {
+    return {
+      permission: 'deny',
+      rule: 'D000',
+      reason: `命を構文で解けぬゆえ通せぬ（${parsed.reason}）。解ける形で書き直されよ`,
+      appealable: true,
+    };
+  }
+
+  const all = [
+    ...parseUnits(parsed),
+    ...substUnits(parsed, run),
+    ...heredocUnits(parsed, run),
+  ];
+  for (const unit of all) {
+    const v = judge(unit);
+    if (v.permission === 'deny') return v;
+  }
+  return { permission: 'allow' };
+}
+
 export function judge(cmd: string): Verdict {
   const n = stripEnvPrefix(normalize(cmd));
   for (const r of RULES) {

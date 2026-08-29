@@ -12,9 +12,29 @@ import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit 
 import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
+import { realRunner as parseRunner } from './parse';
+
+/**
+ * 己の在処から repo の根を割り出す。構文の解き手（bin/honden-parse）を
+ * 探すのに要る。
+ *
+ * 焼いた binary は `<根>/bin/honden` に据わるゆえ、二つ上が根である。
+ * `bun run src/main.ts` で走らせた時は bun の在処が返るゆえ、その時のために
+ * source からの道も見る。どちらでも見つからねば `realRunner` が拒みへ倒す
+ * ——**根を誤って素通しにはせぬ。**
+ */
+const REPO_ROOT = (() => {
+  const env = process.env.HONDEN_ROOT?.trim();
+  if (env) return env;
+  const fromBin = dirname(dirname(process.execPath));
+  if (existsSync(join(fromBin, 'bin', 'honden-parse'))) return fromBin;
+  const fromSrc = dirname(import.meta.dir);
+  if (existsSync(join(fromSrc, 'bin', 'honden-parse'))) return fromSrc;
+  return fromBin; // 見つからねば realRunner が拒む
+})();
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, relative } from 'node:path';
+import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong } from './inbox';
@@ -37,7 +57,7 @@ import { exportAll } from './export';
 import { serve as serveHttp, LOOPBACK, DASHBOARD_PORT } from './serve';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
-import { judge as guardJudge, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
+import { judge as guardJudge, judgeStructured as guardJudgeStructured, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
@@ -747,7 +767,9 @@ async function runNudgeInner(
 export function runGuardCheck(cmd: string | undefined): RunResult {
   if (!cmd) return { code: EXIT_INVALID, err: '--cmd を渡されよ' };
   // 手形が混じっていても、検めるのは本体である（hook と同じ目で見る）
-  const v = guardJudge(guardSplitOtp(cmd).cmd);
+  // 構造で解いた上で照らす。hook と同じ目で見るゆえ、ここも同じ層を通す。
+  const split = guardSplitOtp(cmd);
+  const v = guardJudgeStructured(split.cmd, parseRunner(REPO_ROOT), split.raw);
   if (v.permission === 'allow') return { code: EXIT_OK, out: '  通ってよし' };
   return {
     code: EXIT_INVALID,
@@ -772,8 +794,9 @@ export async function runGuardHookCursor(dbPath: string | undefined, selfId: str
     // 入力が壊れておる。failClosed が守るよう deny を返す
     return { code: EXIT_OK, out: JSON.stringify({ permission: 'deny', agent_message: 'guard: 入力を読めなかった' }) };
   }
-  const { otp, cmd } = guardSplitOtp(input.command ?? '');
-  const v = guardJudge(cmd);
+  const { otp, cmd, raw } = guardSplitOtp(input.command ?? '');
+  // 構造で解いた上で照らす（紋様と二枚重ね・src/guard.ts の judgeStructured）
+  const v = guardJudgeStructured(cmd, parseRunner(REPO_ROOT), raw);
   if (v.permission === 'allow') return { code: EXIT_OK, out: JSON.stringify({ permission: 'allow' }) };
 
   if (otp && v.appealable) {
@@ -878,8 +901,9 @@ export async function runGuardHookCodex(dbPath: string | undefined, selfId: stri
   const name = input.tool_name ?? '';
   if (name && name !== 'Bash' && name !== 'Shell') return { code: EXIT_OK, out: '' };
 
-  const { otp, cmd } = guardSplitOtp(input.tool_input?.command ?? '');
-  const v = guardJudge(cmd);
+  const { otp, cmd, raw } = guardSplitOtp(input.tool_input?.command ?? '');
+  // 構造で解いた上で照らす（紋様と二枚重ね・src/guard.ts の judgeStructured）
+  const v = guardJudgeStructured(cmd, parseRunner(REPO_ROOT), raw);
   if (v.permission === 'allow') return { code: EXIT_OK, out: '' }; // 何も言わぬのが allow
 
   if (otp && v.appealable) {
@@ -1305,7 +1329,8 @@ export function runGuardAppeal(
   reason: string | undefined,
 ): RunResult {
   if (!cmd || !reason) return { code: EXIT_INVALID, err: '--cmd と --reason を渡されよ' };
-  const v = guardJudge(cmd);
+  // 構造で解いた上で照らす（紋様と二枚重ね・src/guard.ts の judgeStructured）
+  const v = guardJudgeStructured(cmd, parseRunner(REPO_ROOT));
   if (v.permission === 'allow') return { code: EXIT_OK, out: '  それは止められておらぬ。そのまま実行されよ' };
   if (!v.appealable) return { code: EXIT_INVALID, err: `  ${v.rule} は絶対域である。直訴しても通らぬ` };
   const db = openStore({ path: dbPath });
