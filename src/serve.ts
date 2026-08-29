@@ -79,6 +79,15 @@ function version(db: Database): string {
  */
 export const LOOPBACK = '127.0.0.1';
 
+/**
+ * 配る口。**旧 viewer の 8787 は継がなんだ。**
+ *
+ * この機では 8787 に別人（OpenAI API を模す python の中継）が既に座っており、
+ * 写した既定がそのまま衝突した（実測 2026-08-29）。旧の隣を取る。
+ * 既定が塞がる土地では `--port` で移されよ。
+ */
+export const DASHBOARD_PORT = 8788;
+
 export function serve(opts: {
   port: number;
   host?: string;
@@ -86,7 +95,32 @@ export function serve(opts: {
   compose: () => string;
 }): { port: number; host: string; stop: () => void } {
   const host = opts.host ?? LOOPBACK;
-  const server = Bun.serve({
+  let server;
+  try {
+    server = bind(opts, host);
+  } catch (e) {
+    // 口が塞がっておる時に生の例外を吐かせぬ。旧 viewer は errno 98 を
+    // 名指しで扱っておった（移植で落としかけた）。**既に配っておる**のと
+    // **他人が座っておる**のは見分けられぬゆえ、両方を疑わせる。
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/EADDRINUSE|in use/i.test(msg)) {
+      throw new Error(
+        `口 ${opts.port} は既に塞がっておる。\n` +
+        '  もう一つ配っておるか、他の者が座っておる。\n' +
+        `  確かめよ: ss -ltnp | grep ${opts.port}\n` +
+        '  別の口で配るなら --port を渡されよ。',
+      );
+    }
+    throw e;
+  }
+  return { port: server.port ?? opts.port, host, stop: () => server.stop() };
+}
+
+function bind(
+  opts: { port: number; db: () => Database; compose: () => string },
+  host: string,
+) {
+  return Bun.serve({
     port: opts.port,
     hostname: host,
     fetch(req) {
@@ -103,5 +137,4 @@ export function serve(opts: {
       return new Response('無い', { status: 404 });
     },
   });
-  return { port: server.port ?? opts.port, host, stop: () => server.stop() };
 }

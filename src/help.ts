@@ -264,7 +264,7 @@ EOF`,
     usage: 'honden dashboard [--serve [--port <番号>] [--host <address>]]',
     flags: [
       ['--serve', 'ブラウザへ配る（旧 dashboard-viewer.py の後継）。止めるは Ctrl-C'],
-      ['--port <番号>', '配る口。省くと 8787'],
+      ['--port <番号>', '配る口。省くと 8788（旧 viewer の 8787 は他所と当たる）'],
       ['--host <address>', '繋ぐ先。省くと 127.0.0.1（己の内のみ）'],
     ],
     notes: [
