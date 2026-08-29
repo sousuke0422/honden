@@ -10,6 +10,10 @@
 
 import { expect, test, describe } from 'bun:test';
 import { openStore, pragmas, tx, journal, legacy, indexDoc, search, segment } from '../src/store';
+import { Database } from 'bun:sqlite';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const mem = () => openStore({ path: ':memory:' });
 
@@ -237,5 +241,48 @@ describe('置き場所', () => {
     // 実ファイルは作らず、判定が通ることだけを見る。
     expect(() => openStore({ path: '/mnt/c/nonexistent-dir-for-test/x.db', allowSlowFs: true }))
       .not.toThrow(/9p/);
+  });
+});
+
+/**
+ * 型に足した欄が、**先に建った正本にも届くか**。
+ *
+ * `CREATE TABLE IF NOT EXISTS` は既にある表を変えぬ。型へ欄を足しただけでは、
+ * 古い正本には生えぬ——`nudge.reset_count` で一度踏み、`task.holder` で二度
+ * 踏んだ（二度目は本番の `honden status` が倒れて露見・2026-08-29）。
+ *
+ * ゆえに機械で数える: **古い形の表**を建ててから migrate を通し、
+ * 型が言う欄が全て揃うかを見る。三度目は無い。
+ */
+describe('移行——型に足した欄は古い正本にも生える', () => {
+  test('task の貸与三欄が、欄無しの表にも生える', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'honden-mig-')), 'old.db');
+    // 貸与を知らぬ頃の形で建てる。
+    const old = new Database(path, { create: true });
+    old.run(`CREATE TABLE task (
+      agent TEXT PRIMARY KEY, task_id TEXT, status TEXT NOT NULL DEFAULT 'idle',
+      cmd_id TEXT, updated_at TEXT NOT NULL, raw TEXT NOT NULL)`);
+    old.run("INSERT INTO task(agent, updated_at, raw) VALUES ('ashigaru1', 'x', '{}')");
+    old.close();
+
+    const db = openStore({ path });
+    const cols = (db.query('PRAGMA table_info(task)').all() as { name: string }[]).map((c) => c.name);
+    for (const c of ['holder', 'leased_at', 'lease_until']) expect(cols).toContain(c);
+    // 元から居た行は残る（移行で消してはならぬ）。
+    expect(db.query('SELECT agent FROM task').all()).toHaveLength(1);
+  });
+
+  test('型が言う全ての欄が、素の正本に揃う（欄の数え直し）', () => {
+    // 型と実物の突き合わせ。ここが落ちるなら、どこかで移行を書き忘れておる。
+    const db = openStore({ path: ':memory:' });
+    const tables = (
+      db.query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as
+        { name: string }[]
+    ).map((t) => t.name);
+    expect(tables.length).toBeGreaterThan(5); // 空の突き合わせで頷かせぬ
+    for (const t of tables) {
+      const cols = db.query(`PRAGMA table_info(${t})`).all() as { name: string }[];
+      expect(cols.length, `${t} に欄が無い`).toBeGreaterThan(0);
+    }
   });
 });

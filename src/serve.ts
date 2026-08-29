@@ -12,6 +12,9 @@
 import type { Database } from 'bun:sqlite';
 import { mdToHtml } from './render';
 
+/** 我らの口である印。見張りがよその listener と見分けるのに使う。 */
+export const MARK = { 'X-Honden': 'dashboard' } as const;
+
 const PAGE = `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -164,18 +167,18 @@ function bind(
       const path = new URL(req.url).pathname;
       try {
         if (path === '/') {
-          return new Response(PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+          return new Response(PAGE, { headers: { ...MARK, 'Content-Type': 'text/html; charset=utf-8' } });
         }
         if (path === '/api/dashboard') {
-          return new Response(opts.compose(), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+          return new Response(opts.compose(), { headers: { ...MARK, 'Content-Type': 'text/plain; charset=utf-8' } });
         }
         if (path === '/api/html') {
           return new Response(mdToHtml(opts.compose()), {
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            headers: { ...MARK, 'Content-Type': 'text/html; charset=utf-8' },
           });
         }
         if (path === '/api/version') {
-          return new Response(version(opts.db()), { headers: { 'Content-Type': 'text/plain' } });
+          return new Response(version(opts.db()), { headers: { ...MARK, 'Content-Type': 'text/plain' } });
         }
         return new Response('無い', { status: 404 });
       } catch (e) {

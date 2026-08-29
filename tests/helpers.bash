@@ -32,5 +32,38 @@ stub() {
   chmod +x "$STUB/$name"
 }
 
-called()      { grep -q "^$1" "$CALLS"; }
-called_with() { grep "^$1" "$CALLS" | grep -qF "$2"; }
+# `--` で区切る。`--noproxy` のような当てを grep が己の旗と誤読するゆえ
+# （試験が即座に暴いた）。
+called()      { grep -q -- "^$1" "$CALLS"; }
+called_with() { grep -- "^$1" "$CALLS" | grep -qF -- "$2"; }
+
+# tmux の贋物。副命令ごとに応え分ける。
+#   stub_tmux <has-session の終了コード> <list-windows が吐く窓の名>
+stub_tmux() {
+  local has="$1" windows="${2:-agents}"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "tmux" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'case "$1" in'
+    echo "  has-session) exit $has ;;"
+    echo "  list-windows) printf '%s\\n' '$windows' ;;"
+    echo 'esac'
+    echo 'exit 0'
+  } > "$STUB/tmux"
+  chmod +x "$STUB/tmux"
+}
+
+# curl の贋物。我らの印を返すか否かで「生きておる」を作る。
+#   stub_curl alive | stub_curl dead | stub_curl stranger
+stub_curl() {
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "curl" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    case "$1" in
+      alive)    echo 'printf "HTTP/1.1 200 OK\r\nX-Honden: dashboard\r\n\r\n"; exit 0' ;;
+      stranger) echo 'printf "HTTP/1.1 200 OK\r\nServer: nazo\r\n\r\n"; exit 0' ;;
+      *)        echo 'exit 7' ;;
+    esac
+  } > "$STUB/curl"
+  chmod +x "$STUB/curl"
+}

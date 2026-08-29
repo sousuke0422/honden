@@ -584,6 +584,14 @@ function migrate(db: Database): void {
   addColumn(db, 'report', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'inbox', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'nudge', 'reset_count', 'INTEGER NOT NULL DEFAULT 0');
+  // 貸与の三欄。型へ足した折に**移行を書き忘れ**、先に建った正本では
+  // `honden status` が「no such column: holder」で倒れておった
+  // （本番の正本で実見・2026-08-29）。`CREATE TABLE IF NOT EXISTS` は
+  // 既にある表を変えぬ——**型に足したら、ここにも足す。**
+  // 抜けは test/store.test.ts が機械で数える。
+  addColumn(db, 'task', 'holder', 'TEXT');
+  addColumn(db, 'task', 'leased_at', 'TEXT');
+  addColumn(db, 'task', 'lease_until', 'TEXT');
 
   // 受け入れ条件の番号を 1 始まりへ揃える。
   // 初期は配列の添字をそのまま入れており「条件 0」という言い方になっていた。
