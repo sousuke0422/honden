@@ -782,6 +782,7 @@ export async function runGuardHookCursor(dbPath: string | undefined, selfId: str
     if (r.ok) {
       return { code: EXIT_OK, out: JSON.stringify({ permission: 'allow', agent_message: `guard: ${r.message}` }) };
     }
+    journalDenial(dbPath, selfId, v.rule, cmd, '手形が通らず:');
     return {
       code: EXIT_OK,
       out: JSON.stringify({
@@ -792,6 +793,7 @@ export async function runGuardHookCursor(dbPath: string | undefined, selfId: str
     };
   }
 
+  journalDenial(dbPath, selfId, v.rule, cmd);
   const appeal = v.appealable
     ? ` 正当な理由があるなら honden guard appeal --cmd '<コマンド>' --reason '<理由>' で将軍へ直訴し、下りた手形を HONDEN_OTP=<札> をコマンドの頭に付けて使え。`
     : ' これは絶対域であり、手形でも通らぬ。';
@@ -821,6 +823,38 @@ export async function runGuardHookCursor(dbPath: string | undefined, selfId: str
  * bypassPermissions）でも呼ばれる——承認もサンドボックスも消えた素通しの
  * codex に、これが唯一残る門である。
  */
+/**
+ * 拒んだ事実を台帳へ落とす。**許しは刻まぬ**——常道に費えを課さぬため。
+ *
+ * 殿の申し出（2026-08-29）で秘密鍵を読む手を門へ載せた折、
+ * 「読まれた跡すら残らぬ」ことが分かった。門は拒むが、**誰が何を試みたかが
+ * どこにも残らなんだ**。直訴すれば刻まれるが、直訴せぬ者の跡は消える。
+ *
+ * 拒みは稀ゆえ台帳は太らぬ。太るとすれば、それは**同じ壁を何度も叩いておる
+ * 者が居る**という報せであり、消してはならぬ signal である。
+ *
+ * 記帳に失敗しても拒みは返す。見張りの不調で門が開いては本末転倒。
+ */
+function journalDenial(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  rule: string | undefined,
+  cmd: string,
+  note?: string,
+): void {
+  try {
+    const db = openStore({ path: dbPath });
+    journal(db, {
+      actor: selfId ?? '名乗り無し',
+      action: 'guard.deny',
+      target: rule ?? '規則不明',
+      detail: `${note ? `${note} ` : ''}${guardNormalize(cmd).slice(0, 160)}`,
+    });
+  } catch {
+    /* 刻めずとも拒みは通す */
+  }
+}
+
 export async function runGuardHookCodex(dbPath: string | undefined, selfId: string | undefined): Promise<RunResult> {
   const deny = (reason: string) => ({
     code: EXIT_OK,
@@ -851,9 +885,11 @@ export async function runGuardHookCodex(dbPath: string | undefined, selfId: stri
     const db = openStore({ path: dbPath });
     const r = guardVerify(db, otp, cmd, selfId ?? '名乗り無し', new Date());
     if (r.ok) return { code: EXIT_OK, out: '' };
+    journalDenial(dbPath, selfId, v.rule, cmd, '手形が通らず:');
     return deny(`guard ${v.rule}: 手形が通らぬ（${r.message}）。改めて直訴せよ。`);
   }
 
+  journalDenial(dbPath, selfId, v.rule, cmd);
   const appeal = v.appealable
     ? ` 正当な理由があるなら honden guard appeal --cmd '<コマンド>' --reason '<理由>' で将軍へ直訴し、下りた手形を HONDEN_OTP=<札> をコマンドの頭に付けて使え。`
     : ' これは絶対域であり、手形でも通らぬ。';
