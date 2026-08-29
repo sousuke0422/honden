@@ -270,7 +270,9 @@ export function issue(
     actor: issuer,
     action: 'guard.grant',
     target: agent,
-    detail: `cmd_hash=${sha256(stripEnvPrefix(normalize(cmd))).slice(0, 12)} reason=${JSON.stringify(reason)} ttl_ms=${ttlMs}`,
+    // **どの条を開けたか**を控える。これが無いと「直訴が上がり、手形が
+    // 下り続ける条」——答えが常に諾となる問い——を後から数えられぬ。
+    detail: `rule=${v.rule ?? '不明'} cmd_hash=${sha256(stripEnvPrefix(normalize(cmd))).slice(0, 12)} reason=${JSON.stringify(reason)} ttl_ms=${ttlMs}`,
   });
   return { ok: true, code, expiresAt };
 }

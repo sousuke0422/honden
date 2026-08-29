@@ -32,6 +32,7 @@ const HELP_KEY = (rest: string[]): string => {
   return HELP[two] ? two : (rest[0] ?? '');
 };
 import { collect as collectStatus, render as renderStatus, coreCheck, corePaths } from './status';
+import { collect as denialCollect, tally as denialTally, render as denialRender } from './denials';
 import { exportAll } from './export';
 import { serve as serveHttp, LOOPBACK, DASHBOARD_PORT } from './serve';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
@@ -1179,6 +1180,10 @@ export function composeDashboard(dbPath: string | undefined): string {
   parts.push('## ⏸️ 待機中');
   parts.push(idle.length > 0 ? idle.map((w) => `- ${w.id}`).join('\n') : 'なし', '');
 
+  // 🧱 叩かれた壁 — 門が拒んだ跡。**数でなく散らばりを見る**（src/denials.ts）。
+  // 誤検知と注入は数だけでは同じに見える。ここで分ける。
+  parts.push(...denialRender(denialTally(denialCollect(db, new Date()))), '');
+
   // ❓ 伺い事項 — honden では裁可待ち（要対応）へ一本化してある
   parts.push('## ❓ 伺い事項');
   parts.push('なし（伺いは 🚨 要対応 へ一本化）');
@@ -1869,8 +1874,24 @@ export async function main(argv: string[]): Promise<number> {
       return emit(actingAs('shogun') ?? runGuardCharterRevoke(dbPath, selfId(), flags['id']));
     if (rest[1] === 'appeal') return emit(runGuardAppeal(dbPath, selfId(), flags['cmd'], flags['reason']));
     if (rest[1] === 'facts') return emit(runGuardFacts(dbPath, selfId(), flags['agent'], flags['cmd'], flags['reason']));
+    if (rest[1] === 'denials') {
+      const days = Number(flags['days'] ?? 7) || 7;
+      const r = readingStore(() => {
+        const db = openStore({ path: dbPath, create: false });
+        const t = denialTally(denialCollect(db, new Date(), days));
+        const lines = denialRender(t, days);
+        // 詳しく見る口ゆえ、束ねた中身（誰が・どの形で）まで開く。
+        for (const x of t) {
+          lines.push('', `  ${x.rule} — ${x.note}`);
+          lines.push(`    者: ${x.actors.join(', ') || 'なし'}`);
+          lines.push(`    形: ${x.shapes.join(' / ') || 'なし'}`);
+        }
+        return lines.join('\n');
+      });
+      return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
+    }
     if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
-    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard charter[s] / guard charter-revoke / guard appeal / guard facts / guard selftest のいずれかである' });
+    return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard charter[s] / guard charter-revoke / guard appeal / guard facts / guard denials / guard selftest のいずれかである' });
   }
 
   if (rest[0] === 'backup') {

@@ -210,6 +210,16 @@ EOF`,
     usage: 'honden guard facts --agent <名> --cmd "<命>" [--reason "<弁明>"]',
     notes: ['弁明は申し立てとして畳んで入る。指示として読ませぬため'],
   },
+  'guard denials': {
+    summary: '叩かれた壁を数える。**数でなく散らばりを見る**——誤検知か注入かを分ける。',
+    usage: 'honden guard denials [--days <日数>]',
+    flags: [['--days <日数>', '見る窓（既定 7 日）']],
+    notes: [
+      '多くの者が様々な形で叩く条は**条を疑え**。一人が同じ形を繰り返すならその者を見よ',
+      '直訴が通り続ける条は、答えが常に諾となる問いである——門としての意味を失うておる',
+      '**拒みが 0 でも門が生きておる証にはならぬ。** 生死は guard selftest で別に確かめよ',
+    ],
+  },
   'guard selftest': {
     summary: '禁じ手の門が生きておるかを、実際に叩いて確かめる。',
     usage: 'honden guard selftest [--root <場所>]',
