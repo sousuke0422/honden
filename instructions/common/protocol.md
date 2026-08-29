@@ -166,6 +166,22 @@ honden に watcher の旗による段階移行は無い。同じ狙い——読�
   手すきになった最初の周で文脈消しが届く。
 - pane が見つからぬ者へは撃たぬ。布陣に居らぬか、`@agent_id` が付いておらぬ。
 
+## 名乗りは系譜から引かれる
+
+名乗りは環境変数ではなく、**tmux の pane から親を辿って**決まる
+（`src/anchor.ts`）。`TMUX_PANE` や `HONDEN_AGENT_ID` を書き換えても変わらぬ。
+書き換えた跡があれば、その旨が断りとして出る。
+
+ゆえに:
+
+- 己の pane から他人の名で送ることはできぬ。`--from` は己の名に限る
+- 検分や外部監査で**布陣外の名**（`probe_session` / `external_audit` 等）を
+  使う用は、**tmux の外**から行うこと。陣の中からは名乗れぬ
+- 系譜を切って布陣外を装っても、権は得られぬ——布陣外では役職を振るえぬ
+
+同じ OS ユーザで走る限りこれは堀であって城壁ではない。真の隔離が要る時は
+LXC か systemd container を考える。
+
 ## Inbox Processing Protocol (karo/ashigaru/gunshi)
 
 横乗せの一行が出たとき、または `inbox_notice unread=N …` を受け取ったとき:

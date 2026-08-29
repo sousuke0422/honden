@@ -95,3 +95,9 @@ seen() {
   run bash -c "grep -q 'HONDEN_TMUX_SESSION=.\$SESSION,\$SESSION_SHOGUN' '$ROOT/scripts/testenv.sh' && echo ok"
   assert_output "ok"
 }
+
+@test "本体も系譜を名乗りの根にしておる（環境変数では騙れぬ）" {
+  # 殿の裁可（2026-08-29・Issue #7）。配線を外せば環境変数で役職を騙れる。
+  run bash -c "grep -q 'anchor: () => anchorFrom(realProbe())' '$ROOT/src/main.ts' && echo ok"
+  assert_output "ok"
+}

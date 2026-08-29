@@ -11,6 +11,7 @@
 import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
 import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
+import { anchorFrom, realProbe } from './anchor';
 import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -1677,6 +1678,21 @@ export async function main(argv: string[]): Promise<number> {
         // 「pane に @agent_id が無い」は別物である（src/identity.ts）。
         return p.success ? new TextDecoder().decode(p.stdout) : null;
       },
+      // 系譜を名乗りの根にする（殿の裁可 2026-08-29・Issue #7）。
+      //
+      // これが無いと `HONDEN_AGENT_ID=karo honden cmd done` が通った——
+      // 環境変数一つで役職を騙れておった。系譜は kernel の持ち物ゆえ偽れぬ。
+      //
+      // 案じておった「核が pane の役職を継ぐ」は実測で杞憂であった
+      // （watcher 三体とも @agent_id を持たぬ pane に住む）。
+      // 費えは一回 3ms ほど（tmux list-panes 一度・/proc の系譜辿り）。
+      //
+      // **副作用**: pane の中から外部名（`--from probe_session`）を
+      // 名乗る道が閉じる。外から名乗る用は tmux の外で行うこと。
+      //
+      // 同じ OS ユーザで走る限りこれは堀であって城壁ではない。真の隔離は
+      // LXC か systemd container を要する（殿の見立て・その時に考える）。
+      anchor: () => anchorFrom(realProbe()),
     });
     // 食い違いは黙って解かぬ。片方を静かに採ると、誤りが誤りのまま通る。
     if (_who.conflict) console.error(`  ※ 名乗りが食い違っておる。\n  ${_who.conflict}`);
