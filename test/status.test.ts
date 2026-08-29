@@ -7,7 +7,7 @@
  *   2. 桁が崩れぬこと——揃わぬ表は読む気を削ぎ、読まれぬ表は無いのと同じ
  */
 import { describe, expect, test } from 'bun:test';
-import { collect, render } from '../src/status';
+import { collect, render, corePaths } from '../src/status';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { deliver } from '../src/inbox';
@@ -113,5 +113,33 @@ describe('桁を守る', () => {
       ).run('ashigaru1', 'subtask_' + 'y'.repeat(60), 'assigned', 'cmd_1', NOW.toISOString(), '{}');
     });
     expect(render(collect(db, { panes: new Map(), busy: () => false, now: NOW }))).toContain('…');
+  });
+});
+
+/**
+ * 芯まわりの道は**一箇所で**決まるか。
+ *
+ * 出陣と検めが各々で組み、名が食い違って「芯は常に死んでおる」と出ておった。
+ * ここが正であり、shell は `honden paths` で引く。
+ */
+describe('corePaths', () => {
+  test('正本の道から signal と lock を導く', () => {
+    const p = corePaths('/home/x/.honden/honden.db');
+    expect(p.db).toBe('/home/x/.honden/honden.db');
+    expect(p.signal).toBe('/home/x/.honden/honden.db.signal');
+    expect(p.lock).toBe('/home/x/.honden/watch.lock');
+  });
+
+  test('coreCheck と同じ錠を指す（食い違いが二度と入らぬよう）', () => {
+    // coreCheck は corePaths を呼ぶ。別々に組み立てておらぬことを型で縛れぬゆえ、
+    // ここで突き合わせる。
+    const db = '/home/x/.honden/honden.db';
+    expect(corePaths(db).lock).toBe('/home/x/.honden/watch.lock');
+  });
+
+  test('正本の名が honden.db でなくとも壊れぬ', () => {
+    const p = corePaths('/tmp/t/h.db');
+    expect(p.signal).toBe('/tmp/t/h.db.signal');
+    expect(p.lock).toBe('/tmp/t/watch.lock'); // 名でなく場所で決まる
   });
 });

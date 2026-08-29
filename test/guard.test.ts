@@ -269,3 +269,50 @@ describe('normalize', () => {
     expect(normalize('  git   push\t--force  ')).toBe('git push --force');
   });
 });
+
+/**
+ * D014 — 他者のペインへ手を入れる形。
+ *
+ * D006 は kill-server / kill-session だけを塞いでおったが、tmux は他人を
+ * 撃つ手を他にも持つ。塞いだ手と同じ害の手が名を変えて素通りしておった。
+ * tmux は副命令の**前方一致**を受けるゆえ、語幹で当てねば逃げられる。
+ */
+describe('D014 — 他者のペインへの干渉', () => {
+  const blocked = [
+    'tmux send-keys -t %9 -l hello',
+    'tmux send -t %9 x',            // send は send-keys の別名
+    'tmux send-k -t %9 x',          // 前方一致で通る綴り
+    'tmux respawn-pane -k -t %9',   // 中の CLI をそのまま殺す
+    'tmux kill-pane -t %9',
+    'tmux kill-window -t viewer',
+    'tmux paste-buffer -t %9',
+    'tmux run-shell "id"',
+    'tmux -L sock send-keys -t %9 x', // 旗を挟んでも
+  ];
+  for (const cmd of blocked) {
+    test(`止める: ${cmd}`, () => {
+      const v = judge(cmd);
+      expect(v.permission).toBe('deny');
+      expect(v.rule).toBe('D014');
+    });
+  }
+
+  // 陽性対照。読むだけの手まで塞ぐと、将軍が家老の様子を見られなくなる。
+  const allowed = [
+    'tmux capture-pane -t %9 -p',
+    'tmux list-panes -a',
+    'tmux display-message -t %9 -p "#{@agent_id}"',
+    'tmux has-session -t =multiagent',
+    'tmux show-options -t =multiagent -qv @honden',
+  ];
+  for (const cmd of allowed) {
+    test(`通す: ${cmd}`, () => {
+      expect(judge(cmd).permission).not.toBe('deny');
+    });
+  }
+
+  test('直訴の道は残る（絶対域ではない）', () => {
+    const v = judge('tmux send-keys -t %9 x');
+    expect(v.appealable).not.toBe(false);
+  });
+});

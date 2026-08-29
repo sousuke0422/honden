@@ -15,6 +15,7 @@
  * 旧は task YAML と inbox YAML を python で開いて読んでいた。
  * 正本を一つに寄せた今、開く先も一つである。
  */
+import { dirname, join } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import { roster } from './roster';
 import { summarize } from './inbox';
@@ -130,8 +131,29 @@ export interface CoreCheck {
  * 後も親が tmux サーバのまま生きておった）。**別の正本を見張る芯**を列挙し、
  * 報せる。畳むのは人の手である——将軍は kill を打てぬ（D006）。
  */
+/**
+ * 芯まわりの道を**一箇所で**決める。
+ *
+ * 出陣（scripts/shutsujin.sh）と試験環境（scripts/testenv.sh）が各々で
+ * 組み立てており、名が食い違っておった——出陣は `<正本>.watch.lock`、
+ * 検めは `<親>/watch.lock`。**別の file ゆえ、出陣で立てた陣では
+ * `honden status` が常に「芯は死んでおる」と出ておった**（実測 2026-08-29）。
+ *
+ * 道を二箇所で組めば、いつか必ずずれる。ここを正とし、shell からは
+ * `honden paths` で引かせる。
+ */
+export function corePaths(dbPath: string): { db: string; signal: string; lock: string } {
+  // 錠は**正本と同じ場所に一つ**。名から導くと、正本が `h.db` の時に
+  // `h.dbwatch.lock` という奇形が出る（試験が暴いた）。場所で決める。
+  return {
+    db: dbPath,
+    signal: `${dbPath}.signal`,
+    lock: join(dirname(dbPath), 'watch.lock'),
+  };
+}
+
 export function coreCheck(dbPath: string): CoreCheck {
-  const lock = `${dbPath.replace(/honden\.db$/, '')}watch.lock`;
+  const lock = corePaths(dbPath).lock;
   const tryLock = Bun.spawnSync(['flock', '-n', lock, 'true']);
   // flock が取れた（exit 0）なら誰も握っておらぬ = 死んでおる。
   // 錠のファイルが無い場合も flock は作って取る → 死と判ずる（正しい）。

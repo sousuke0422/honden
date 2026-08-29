@@ -44,29 +44,36 @@ export function panes(session?: string): Map<string, Pane> {
   // （scripts/testenv.sh が設定する）。env で渡すのは、これが「どの世界を
   // 見るか」の指定であって名乗りではないゆえ——芯を起動した env が
   // 手（nudge）へそのまま継がれ、芯と手が必ず同じ世界を見る。
+  // **複数の陣を見張れる。** 将軍は別の陣（`shogun`）に住むゆえ、
+  // 働き手の陣だけに絞ると将軍へ合図が届かぬ——直訴（guard appeal）は
+  // 将軍宛であり、永久に届かなんだ（実測 2026-08-29）。
+  // 読点で区切れば複数を見る。絞りの効き目（試験の合図が本番へ飛ばぬ）は保つ。
   const scope = session ?? process.env.HONDEN_TMUX_SESSION?.trim() ?? '';
-  const args =
-    scope !== ''
-      ? ['list-panes', '-s', '-t', scope]
-      : ['list-panes', '-a'];
+  const scopes = scope.split(',').map((x) => x.trim()).filter((x) => x !== '');
+  const argsets =
+    scopes.length > 0
+      ? scopes.map((t) => ['list-panes', '-s', '-t', t])
+      : [['list-panes', '-a']];
 
-  let p;
-  try {
-    p = Bun.spawnSync([
-      'tmux',
-      ...args,
-      '-F',
-      '#{pane_id}\t#{session_name}:#{window_name}.#{pane_index}\t#{@agent_id}',
-    ]);
-  } catch {
-    return out;
-  }
-  if (!p.success) return out;
+  for (const args of argsets) {
+    let p;
+    try {
+      p = Bun.spawnSync([
+        'tmux',
+        ...args,
+        '-F',
+        '#{pane_id}\t#{session_name}:#{window_name}.#{pane_index}\t#{@agent_id}',
+      ]);
+    } catch {
+      continue; // その陣が引けずとも、他の陣は見る
+    }
+    if (!p.success) continue;
 
-  for (const line of new TextDecoder().decode(p.stdout).split('\n')) {
-    const [id, label, agent] = line.split('\t');
-    if (!id || !label || !agent || agent.trim() === '') continue;
-    out.set(agent.trim(), { id, label });
+    for (const line of new TextDecoder().decode(p.stdout).split('\n')) {
+      const [id, label, agent] = line.split('\t');
+      if (!id || !label || !agent || agent.trim() === '') continue;
+      out.set(agent.trim(), { id, label });
+    }
   }
   return out;
 }

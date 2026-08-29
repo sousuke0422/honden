@@ -78,7 +78,7 @@ up() {
   rm -rf "$TESTHOME"
   mkdir -p "$TESTHOME" "$RECV"
   H_OUT roster sync --settings "$ROOT/fixtures/test-env/settings.yaml" | tail -2
-  touch "$DB.signal"   # 芯の見張る先。先に無いと芯が開けぬ
+  touch "$(HONDEN_DB="$DB" "$ROOT/bin/honden" paths signal)"   # 芯の見張る先。先に無いと芯が開けぬ
 
   echo "── 布陣を起こす ──"
   # HONDEN_TEST_REAL に名を書くと、その pane には受け手でなく**本物の CLI** が座る。
@@ -124,8 +124,10 @@ up() {
   echo "── 芯を起こす ──"
   # 芯は落ちても立ち直る（輪の中で回す・二重起動は flock が防ぐ）。
   tmux new-window -t "$SESSION" -n core \
+  CORE_SIGNAL=$(HONDEN_DB="$DB" "$ROOT/bin/honden" paths signal)
+  CORE_LOCK=$(HONDEN_DB="$DB" "$ROOT/bin/honden" paths lock)
       "while true; do HONDEN_DB='$DB' HONDEN_TMUX_SESSION='$SESSION' '$ROOT/bin/honden-watch' \
-         --path '$DB.signal' --lock '$TESTHOME/watch.lock' --debounce-ms 300 \
+         --path '$CORE_SIGNAL' --lock '$CORE_LOCK' --debounce-ms 300 \
          -- '$ROOT/bin/honden' nudge; echo '芯が落ちた。3 秒後に立て直す'; sleep 3; done"
   sleep 1
   status

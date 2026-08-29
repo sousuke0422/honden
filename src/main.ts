@@ -30,7 +30,7 @@ const HELP_KEY = (rest: string[]): string => {
   const two = rest.slice(0, 2).join(' ');
   return HELP[two] ? two : (rest[0] ?? '');
 };
-import { collect as collectStatus, render as renderStatus, coreCheck } from './status';
+import { collect as collectStatus, render as renderStatus, coreCheck, corePaths } from './status';
 import { exportAll } from './export';
 import { serve as serveHttp, LOOPBACK, DASHBOARD_PORT } from './serve';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
@@ -1789,6 +1789,15 @@ export async function main(argv: string[]): Promise<number> {
       return emit(runProjectsSync(dbPath, f));
     }
     return emit(runProjectsShow(dbPath));
+  }
+
+  if (rest[0] === 'paths') {
+    // 芯まわりの道を shell へ渡す。二箇所で組めばいつか必ずずれる。
+    const p = corePaths(dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH);
+    if (rest[1] === 'signal') return emit({ code: EXIT_OK, out: p.signal });
+    if (rest[1] === 'lock') return emit({ code: EXIT_OK, out: p.lock });
+    if (rest[1] === 'db') return emit({ code: EXIT_OK, out: p.db });
+    return emit({ code: EXIT_OK, out: `db=${p.db}\nsignal=${p.signal}\nlock=${p.lock}` });
   }
 
   if (rest[0] === 'guard') {
