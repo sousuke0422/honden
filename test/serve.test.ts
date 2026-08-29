@@ -8,7 +8,7 @@
  * 三、port 0 でも生きた口を返す（試験が空き口を探さずに済む）。
  */
 import { describe, expect, test } from 'bun:test';
-import { serve, LOOPBACK } from '../src/serve';
+import { serve, LOOPBACK, hostAllowed } from '../src/serve';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { journal } from '../src/store';
@@ -24,6 +24,22 @@ const seeded = () => {
   return db;
 };
 
+describe('hostAllowed', () => {
+  test('己の内に閉じておる時は、我が家の名だけ通す', () => {
+    for (const h of ['127.0.0.1:8788', 'localhost:8788', '[::1]:8788', 'LOCALHOST:8788']) {
+      expect(hostAllowed(h, LOOPBACK, 8788)).toBe(true);
+    }
+    for (const h of ['evil.example.com', 'evil.example.com:8788', '127.0.0.1:9999', '']) {
+      expect(hostAllowed(h, LOOPBACK, 8788)).toBe(false);
+    }
+    expect(hostAllowed(null, LOOPBACK, 8788)).toBe(false);
+  });
+
+  test('外へ開くと決めた時は検めを緩める（範囲は広げた者が負う）', () => {
+    expect(hostAllowed('何でも', '0.0.0.0', 8788)).toBe(true);
+  });
+});
+
 describe('serve', () => {
   test('/ は HTML・/api/dashboard は compose の出力そのもの', async () => {
     const db = seeded();
@@ -32,7 +48,8 @@ describe('serve', () => {
     try {
       const home = await (await fetch(`http://localhost:${s.port}/`)).text();
       expect(home).toContain('<!DOCTYPE html>');
-      expect(home).toContain('marked'); // md の描画役が載っておる
+      expect(home).not.toContain('cdn.'); // 外へ繋がらぬ（描画器を借りぬ）
+      expect(home).toContain("default-src 'none'"); // CSP で外向きを断つ
       const got = await (await fetch(`http://localhost:${s.port}/api/dashboard`)).text();
       expect(got).toBe(md); // 端末で見るものと寸分違わぬ
     } finally {
@@ -71,6 +88,54 @@ describe('serve', () => {
     const s = serve({ port: 0, host: '0.0.0.0', db: () => db, compose: () => '' });
     try {
       expect(s.host).toBe('0.0.0.0');
+    } finally {
+      s.stop();
+    }
+  });
+
+  test('宛先が違えば返さぬ（DNS rebinding 除け）', async () => {
+    const db = seeded();
+    const s = serve({ port: 0, db: () => db, compose: () => '秘' });
+    try {
+      const bad = await fetch(`http://127.0.0.1:${s.port}/api/dashboard`, {
+        headers: { Host: 'evil.example.com' },
+      });
+      expect(bad.status).toBe(403);
+      expect(await bad.text()).not.toContain('秘');
+      // 陽性対照: 正しい宛先なら返る
+      const good = await fetch(`http://127.0.0.1:${s.port}/api/dashboard`);
+      expect(good.status).toBe(200);
+    } finally {
+      s.stop();
+    }
+  });
+
+  test('しくじっても内情を漏らさぬ', async () => {
+    const db = seeded();
+    const s = serve({
+      port: 0,
+      db: () => db,
+      compose: () => {
+        throw new Error('/mnt/c/秘密の道 で落ちた');
+      },
+    });
+    try {
+      const r = await fetch(`http://127.0.0.1:${s.port}/api/dashboard`);
+      expect(r.status).toBe(500);
+      const body = await r.text();
+      expect(body).not.toContain('秘密の道');
+      expect(body).not.toContain('serve.ts'); // stack も source も出さぬ
+    } finally {
+      s.stop();
+    }
+  });
+
+  test('HTML の道は組んだ HTML を返す', async () => {
+    const db = seeded();
+    const s = serve({ port: 0, db: () => db, compose: () => '# 題\n- 一つ' });
+    try {
+      const r = await fetch(`http://127.0.0.1:${s.port}/api/html`);
+      expect(await r.text()).toBe('<h1>題</h1>\n<ul><li>一つ</li></ul>');
     } finally {
       s.stop();
     }

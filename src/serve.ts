@@ -10,14 +10,16 @@
  * 開く道具ゆえ、オフライン要件は無い。
  */
 import type { Database } from 'bun:sqlite';
+import { mdToHtml } from './render';
 
 const PAGE = `<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'" />
   <title>Dashboard</title>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     :root {
       --bg: #0d1117; --surface: #161b22; --border: #30363d;
@@ -44,14 +46,16 @@ const PAGE = `<!DOCTYPE html>
   <div id="app">読み込み中…</div>
   <div id="stamp"></div>
   <script>
+    // 頁は外へ繋がらぬ（CSP の default-src 'none'）。描画器も借りぬ。
+    // ここへ入る HTML は honden が組み、差し込む文字は全て escape 済みである。
     let last = '';
     async function poll() {
       try {
         const v = await (await fetch('/api/version')).text();
         if (v !== last) {
           last = v;
-          const md = await (await fetch('/api/dashboard')).text();
-          document.getElementById('app').innerHTML = marked.parse(md);
+          const html = await (await fetch('/api/html')).text();
+          document.getElementById('app').innerHTML = html;
           document.getElementById('stamp').textContent = '取得: ' + new Date().toLocaleTimeString();
         }
       } catch (e) { /* 一時の失敗は次の周で拾う */ }
@@ -61,6 +65,23 @@ const PAGE = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+
+/**
+ * 叩き手が名乗った宛先を検める。**DNS rebinding 除け。**
+ *
+ * 錠も名乗りも無い口ゆえ、よその頁が「己の domain を 127.0.0.1 へ向け直して」
+ * 我が家を叩ける。その時 Host は**そのよその名**になる——我が家の名で来た
+ * ものだけ返せば、その道は塞がる。
+ *
+ * 外へ開いておる時（--host で明示した時）は、宛先が何になるか読めぬゆえ
+ * 検めを緩める。**広げると決めた者が範囲を負う。**
+ */
+export function hostAllowed(header: string | null, bound: string, port: number): boolean {
+  if (bound !== LOOPBACK) return true;
+  if (header === null) return false; // HTTP/1.1 で Host 無しは筋が通らぬ
+  const allowed = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+  return allowed.includes(header.trim().toLowerCase());
+}
 
 /** 台帳の末尾。正本が動けば伸びる——これが更新の合図になる。 */
 function version(db: Database): string {
@@ -113,28 +134,58 @@ export function serve(opts: {
     }
     throw e;
   }
-  return { port: server.port ?? opts.port, host, stop: () => server.stop() };
+  // **願った先でなく、繋がった先**を返す。願いを返すと、
+  // 「0.0.0.0 で開いておらぬか」の見張りが己の願いを見て頷くだけになる
+  // ——試験が落ちようが無い形であった（敵対レビュー・2026-08-29）。
+  return {
+    port: server.port ?? opts.port,
+    host: server.hostname ?? host,
+    stop: () => server.stop(),
+  };
 }
 
 function bind(
   opts: { port: number; db: () => Database; compose: () => string },
   host: string,
 ) {
-  return Bun.serve({
+  // 実際に繋がった番号を検めに使う。願った番号（0 なら自動採番）で
+  // 検めると、己の頁すら弾く——試験が即座に暴いた。
+  let bound = opts.port;
+  const server = Bun.serve({
     port: opts.port,
     hostname: host,
     fetch(req) {
+      // DNS rebinding 除け。錠も名乗りも無い口ゆえ、**誰の名で叩かれたか**
+      // だけが頼りになる。よその頁が仕込んだ名で我が家を指しても、
+      // Host が合わねば返さぬ（敵対レビューの critical・2026-08-29）。
+      if (!hostAllowed(req.headers.get('host'), host, bound)) {
+        return new Response('宛先が違う', { status: 403 });
+      }
       const path = new URL(req.url).pathname;
-      if (path === '/') {
-        return new Response(PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      try {
+        if (path === '/') {
+          return new Response(PAGE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+        }
+        if (path === '/api/dashboard') {
+          return new Response(opts.compose(), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+        }
+        if (path === '/api/html') {
+          return new Response(mdToHtml(opts.compose()), {
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          });
+        }
+        if (path === '/api/version') {
+          return new Response(version(opts.db()), { headers: { 'Content-Type': 'text/plain' } });
+        }
+        return new Response('無い', { status: 404 });
+      } catch (e) {
+        // 掴まねば Bun が**開発用の頁**を返す——stack も source も絶対道も出る。
+        // 内情は己の口（stderr）へ、外へは素っ気なく（敵対レビュー）。
+        console.error(`  配信でしくじった（${path}）: ${e instanceof Error ? e.message : String(e)}`);
+        return new Response('しくじった', { status: 500 });
       }
-      if (path === '/api/dashboard') {
-        return new Response(opts.compose(), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
-      }
-      if (path === '/api/version') {
-        return new Response(version(opts.db()), { headers: { 'Content-Type': 'text/plain' } });
-      }
-      return new Response('無い', { status: 404 });
     },
   });
+  bound = server.port ?? opts.port;
+  return server;
 }

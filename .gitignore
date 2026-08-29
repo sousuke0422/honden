@@ -258,6 +258,16 @@ tests/specs/osato_lms_*
 # 棚の作法
 !/skills/README.md
 
+# 貝の試験（bats）。TypeScript は bun test が見るが、shell は 1000 行を
+# 超えて無試験であった。helper は旧環境と同じ置き方で submodule に繋ぐ
+# ——kagemusha が既に submodule ゆえ、--init の手間は元より要る。
+!/tests/
+!/tests/*.bats
+!/tests/*.bash
+!/tests/test_helper/
+!/tests/test_helper/bats-support
+!/tests/test_helper/bats-assert
+
 # 試験環境（tmux で布陣を起こし、配達層を通しで検める）
 !/scripts/
 !/scripts/testenv.sh
