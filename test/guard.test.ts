@@ -360,3 +360,49 @@ describe('D015 — 秘密鍵を読む形', () => {
     expect(judge('cat ~/.shogun/github-app/app.pem').appealable).not.toBe(false);
   });
 });
+
+/**
+ * D016 — rm と glob の組み合わせ。**明示の道だけを通す**（殿命 2026-08-29）。
+ *
+ * 事故の型は展開にある: 空の変数で `rm -rf $DIR/*` が根を指す・思わぬ cwd で
+ * `rm *` が別の家を掃く——**展開の結果は打った本人にも見えぬ**。
+ *
+ * 根や家を列挙して守る手は、守り漏れと誤検知の両方を生んだ。glob そのものを
+ * 封じ、消す物を明示させる方が、境が明快で誤検知も少ない。
+ */
+describe('D016 — rm と glob', () => {
+  test('根への glob は絶対域（D001 が先に拾う）', () => {
+    for (const cmd of ['rm -rf /*', 'rm -rf /mnt/*', 'rm -rf ~/*']) {
+      const v = judge(cmd);
+      expect(v.rule).toBe('D001');
+      expect(v.appealable).toBe(false); // 手形でも通らぬ
+    }
+  });
+
+  test('その他の glob は止めるが、直訴の道は残す', () => {
+    for (const cmd of ['rm *', 'rm -f build/*', 'rm -rf node_modules/*', 'rm -rf $DIR/*']) {
+      const v = judge(cmd);
+      expect(v.permission).toBe('deny');
+      expect(v.rule).toBe('D016');
+      expect(v.appealable).not.toBe(false); // 掃除の正当な用があるゆえ
+    }
+  });
+
+  test('明示の道は通る——ここが肝（誤検知を出さぬ）', () => {
+    for (const cmd of [
+      'rm -rf /tmp/claude-1000/probe',   // 掃き場。将軍が二度弾かれた形
+      'rm -f a.txt b.txt',
+      'rm -rf .tmp/work',
+      'rm -rf node_modules',
+      'rm -rf target',
+    ]) {
+      expect(judge(cmd).permission, cmd).not.toBe('deny');
+    }
+  });
+
+  test('rm 以外の命に混ざる * は巻き添えにせぬ', () => {
+    for (const cmd of ['ls *.ts', 'grep -rn "x" src/*', 'echo rm -rf /*']) {
+      expect(judge(cmd).permission, cmd).not.toBe('deny');
+    }
+  });
+});
