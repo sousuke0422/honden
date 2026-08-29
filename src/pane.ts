@@ -31,7 +31,27 @@ export interface Pane {
  * tmux が居なければ空を返す。**投げない**——布陣の外から
  * `honden inbox unread` を叩く筋があり、そこで倒れては使えない。
  */
-export function panes(session?: string): Map<string, Pane> {
+/**
+ * tmux を叩く手。**注ぎ口にしてある。**
+ *
+ * ここが差し替えられぬ限り、この箱は試験できぬ——そして試験できぬ箱に
+ * 「将軍へ合図が届かぬ」穴が住んでおった（2026-08-29）。`identity.ts` が
+ * `lookup` を注がせるのと同じ流儀にする。
+ *
+ * 返すのは stdout。引けなければ null（「引けなかった」と「空だった」は別物）。
+ */
+export type TmuxRunner = (args: string[]) => string | null;
+
+const realTmux: TmuxRunner = (args) => {
+  try {
+    const p = Bun.spawnSync(['tmux', ...args]);
+    return p.success ? new TextDecoder().decode(p.stdout) : null;
+  } catch {
+    return null;
+  }
+};
+
+export function panes(session?: string, run: TmuxRunner = realTmux): Map<string, Pane> {
   const out = new Map<string, Pane>();
 
   // どのセッションを見るか。
@@ -56,20 +76,10 @@ export function panes(session?: string): Map<string, Pane> {
       : [['list-panes', '-a']];
 
   for (const args of argsets) {
-    let p;
-    try {
-      p = Bun.spawnSync([
-        'tmux',
-        ...args,
-        '-F',
-        '#{pane_id}\t#{session_name}:#{window_name}.#{pane_index}\t#{@agent_id}',
-      ]);
-    } catch {
-      continue; // その陣が引けずとも、他の陣は見る
-    }
-    if (!p.success) continue;
+    const text = run([...args, '-F', '#{pane_id}\t#{session_name}:#{window_name}.#{pane_index}\t#{@agent_id}']);
+    if (text === null) continue; // その陣が引けずとも、他の陣は見る
 
-    for (const line of new TextDecoder().decode(p.stdout).split('\n')) {
+    for (const line of text.split('\n')) {
       const [id, label, agent] = line.split('\t');
       if (!id || !label || !agent || agent.trim() === '') continue;
       out.set(agent.trim(), { id, label });

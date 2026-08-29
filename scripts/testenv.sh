@@ -25,6 +25,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION="${HONDEN_TEST_SESSION:-honden-test}"
+# **本番と同じ二陣構成にする。** 将軍は別の陣に住む。
+#
+# かつては全員を一つの陣へ入れておった。そのため「芯の射程が働き手の陣だけで、
+# 将軍へ合図が届かぬ」穴が試験を素通りした（2026-08-29）。
+# **試験環境が本番と形が違えば、その差の中にある穴は永遠に見えぬ。**
+SESSION_SHOGUN="${HONDEN_TEST_SESSION_SHOGUN:-$SESSION-shogun}"
 TESTHOME="${HONDEN_TEST_HOME:-$HOME/.honden-test}"
 DB="$TESTHOME/honden.db"
 RECV="$TESTHOME/received"
@@ -43,8 +49,9 @@ NO_HIST=(-e HISTFILE=/dev/null)
 # 足軽が「自分は試験の陣に居る」と知る術は無い。**知らせるのは環境の役目**であり、
 # 指示書に「試験なら --db を付けよ」と書いて覚えさせる筋ではない
 # （書けば、付け忘れた時に黙って本番を触る）。
-PANE_ENV=(-e "HONDEN_DB=$DB" -e "HONDEN_TMUX_SESSION=$SESSION")
-AGENTS=(shogun karo gunshi ashigaru1 ashigaru2)   # fixtures/test-env/settings.yaml と揃える
+PANE_ENV=(-e "HONDEN_DB=$DB" -e "HONDEN_TMUX_SESSION=$SESSION,$SESSION_SHOGUN")
+AGENTS=(karo gunshi ashigaru1 ashigaru2)   # fixtures/test-env/settings.yaml と揃える
+SHOGUN=shogun                             # 別の陣に住む（本番と同じ形）
 
 H_OUT() { env -u TMUX_PANE HONDEN_DB="$DB" "$ROOT/bin/honden" "$@"; }  # 布陣の外として
 
@@ -70,9 +77,12 @@ up() {
   freshness
   [ -x "$ROOT/bin/honden" ] || die "bin/honden が無い。bun run build で焼かれよ"
   [ -x "$ROOT/bin/honden-watch" ] || die "bin/honden-watch が無い。cd core/watch && cargo build --release"
-  if tmux has-session -t "$SESSION" 2>/dev/null; then
-    die "セッション $SESSION が既に居る。down してから up されよ（黙って作り直しはせぬ）"
-  fi
+  # 二陣とも見る。片方だけ検めると、残った片割れに新しい陣を接いでしまう。
+  for x in "$SESSION" "$SESSION_SHOGUN"; do
+    if tmux has-session -t "=$x" 2>/dev/null; then
+      die "セッション $x が既に居る。down してから up されよ（黙って作り直しはせぬ）"
+    fi
+  done
 
   echo "── 正本を新しく ──"
   rm -rf "$TESTHOME"
@@ -104,6 +114,11 @@ up() {
       echo "exec bash '$ROOT/scripts/testenv/recv.sh' '$a' '$RECV/$a.log'"
     fi
   }
+  # 将軍の陣（本番の `shogun` セッションに当たる）
+  tmux new-session -d -s "$SESSION_SHOGUN" -n main "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "$SHOGUN")"
+  tmux set-option -p -t "$SESSION_SHOGUN:main" @agent_id "$SHOGUN"
+
+  # 働き手の陣（本番の `multiagent` に当たる）
   tmux new-session -d -s "$SESSION" -n agents "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "${AGENTS[0]}")"
   for a in "${AGENTS[@]:1}"; do
     tmux split-window -t "$SESSION:agents" "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "$a")"
@@ -119,14 +134,16 @@ up() {
   done < <(tmux list-panes -t "$SESSION:agents" -F $'#{pane_id}\t#{pane_index}' | sort -t$'\t' -k2 -n)
 
   echo "── 付いた名を読み戻す ──"
+  tmux list-panes -t "$SESSION_SHOGUN:main" -F '  #{pane_id} #{@agent_id}'
   tmux list-panes -t "$SESSION:agents" -F '  #{pane_id} #{@agent_id}'
 
   echo "── 芯を起こす ──"
   # 芯は落ちても立ち直る（輪の中で回す・二重起動は flock が防ぐ）。
-  tmux new-window -t "$SESSION" -n core \
+  local CORE_SIGNAL CORE_LOCK
   CORE_SIGNAL=$(HONDEN_DB="$DB" "$ROOT/bin/honden" paths signal)
   CORE_LOCK=$(HONDEN_DB="$DB" "$ROOT/bin/honden" paths lock)
-      "while true; do HONDEN_DB='$DB' HONDEN_TMUX_SESSION='$SESSION' '$ROOT/bin/honden-watch' \
+  tmux new-window -t "$SESSION" -n core \
+      "while true; do HONDEN_DB='$DB' HONDEN_TMUX_SESSION='$SESSION,$SESSION_SHOGUN' '$ROOT/bin/honden-watch' \
          --path '$CORE_SIGNAL' --lock '$CORE_LOCK' --debounce-ms 300 \
          -- '$ROOT/bin/honden' nudge; echo '芯が落ちた。3 秒後に立て直す'; sleep 3; done"
   sleep 1
@@ -136,11 +153,16 @@ up() {
 down() {
   # 畳むのは人の操作。agent には D006（kill 系の禁）があるゆえ、
   # この副命令は殿か人手で打つこと。
-  tmux kill-session -t "$SESSION" 2>/dev/null && echo "  $SESSION を畳んだ" || echo "  $SESSION は居らぬ"
+  for x in "$SESSION" "$SESSION_SHOGUN"; do
+    tmux kill-session -t "$x" 2>/dev/null && echo "  $x を畳んだ" || echo "  $x は居らぬ"
+  done
 }
 
 status() {
   echo "── セッション ──"
+  if tmux has-session -t "$SESSION_SHOGUN" 2>/dev/null; then
+    tmux list-panes -s -t "$SESSION_SHOGUN" -F "  $SESSION_SHOGUN:#{window_name}.#{pane_index} #{pane_id} @agent_id=#{@agent_id} #{pane_current_command}"
+  fi
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux list-panes -s -t "$SESSION" -F '  #{window_name}.#{pane_index} #{pane_id} @agent_id=#{@agent_id} #{pane_current_command}'
   else
