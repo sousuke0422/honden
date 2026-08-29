@@ -47,6 +47,8 @@ stub_tmux() {
     echo 'case "$1" in'
     echo "  has-session) exit $has ;;"
     echo "  list-windows) printf '%s\\n' '$windows' ;;"
+    # 既定は「我らの陣」。@honden の印は出陣の書が見る $ROOT と揃える。
+    echo "  show-options) printf '%s\\n' \"\$HONDEN_TEST_ROOT\" ;;"
     echo 'esac'
     echo 'exit 0'
   } > "$STUB/tmux"

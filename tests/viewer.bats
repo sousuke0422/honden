@@ -14,6 +14,7 @@ setup() {
   ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   stub_dir
   export HONDEN_VIEWER_SETTLE=0
+  export HONDEN_TEST_ROOT="$ROOT"   # 贋 tmux が返す @honden の印
   stub ss 0 ""            # 既定は「口は空いておる」
   stub_curl dead          # 既定は「我らは応えておらぬ」
   stub_tmux 0 agents      # 既定は「陣はある・viewer 窓は無い」
@@ -51,7 +52,8 @@ run_viewer() { run bash "$ROOT/shutsujin_departure.sh" viewer; }
 @test "窓はあるのに応えぬなら、中を見よと言う（立て直しを重ねぬ）" {
   stub_tmux 0 viewer
   run_viewer
-  assert_output --partial "応えておらぬ"
+  assert_output --partial "viewer 窓はあるが"
+  assert_output --partial "では応えぬ"
   run bash -c "grep -c 'new-window' '$CALLS' || true"
   assert_output "0"
 }
@@ -101,4 +103,29 @@ run_viewer() { run bash "$ROOT/shutsujin_departure.sh" viewer; }
 @test "生死の問いは中継を迂回する（http_proxy に攫われぬ）" {
   run_viewer
   called_with curl "--noproxy"
+}
+
+@test "よその陣へは窓を接がぬ（印が無ければ断る）" {
+  # has-session は通るが、show-options が印を返さぬ＝よその陣。
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "tmux" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'case "$1" in'
+    echo '  has-session) exit 0 ;;'
+    echo '  show-options) printf "\n" ;;'      # 印が無い
+    echo '  list-windows) printf "agents\n" ;;'
+    echo 'esac'
+    echo 'exit 0'
+  } > "$STUB/tmux"
+  chmod +x "$STUB/tmux"
+  run_viewer
+  assert_output --partial "我らの陣ではない"
+  run bash -c "grep -c 'new-window' '$CALLS' || true"
+  assert_output "0"
+}
+
+@test "止めの合図と、五度倒れたのを言い分ける" {
+  run_viewer
+  called_with tmux "止めよとの合図"
+  called_with tmux "五度倒れた"
 }

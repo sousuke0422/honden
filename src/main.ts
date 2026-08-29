@@ -973,7 +973,7 @@ export function runBrief(
 
 /** `honden status` — 布陣の様子を一枚に並べる。 */
 export function runStatus(dbPath: string | undefined, json: boolean): RunResult {
-  const db = openStore({ path: dbPath });
+  const db = openStore({ path: dbPath, create: false });
   const rows = collectStatus(db);
   if (rows.length === 0) return { code: EXIT_OK, out: '  名簿が空である。honden roster sync を先に。' };
   if (json) return { code: EXIT_OK, out: JSON.stringify(rows, null, 2) };
@@ -1032,7 +1032,7 @@ function serveDashboard(dbPath: string | undefined, port: number, host: string |
     r = serveHttp({
       port,
       host,
-      db: () => openStore({ path: dbPath }),
+      db: () => openStore({ path: dbPath, create: false }),
       compose: () => composeDashboard(dbPath),
     });
   } catch (e) {
@@ -1051,9 +1051,25 @@ function serveDashboard(dbPath: string | undefined, port: number, host: string |
   });
 }
 
+/**
+ * 正本を読む口の受け止め手。**生の例外で倒れさせぬ。**
+ *
+ * 道を一字誤っただけで真新しい正本が生まれ「異常なし」と映る筋は塞いだが
+ * （openStore の create:false）、塞いだ先で stack を吐いては読めぬ。
+ * 何が無いのか・どこを疑うのかを言う。
+ */
+function readingStore<T>(work: () => T): { ok: true; value: T } | { ok: false; result: RunResult } {
+  try {
+    return { ok: true, value: work() };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, result: { code: EXIT_SYSTEM, err: `  ${msg}` } };
+  }
+}
+
 /** 戦況の md を正本から組む。CLI でも配信でも同じものを出す。 */
 export function composeDashboard(dbPath: string | undefined): string {
-  const db = openStore({ path: dbPath });
+  const db = openStore({ path: dbPath, create: false });
   const parts: string[] = [];
   // 旧 dashboard は現地時刻であった。UTC で出すと殿の時計と九時間ずれる。
   const stamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).slice(0, 16);
@@ -1842,9 +1858,13 @@ export async function main(argv: string[]): Promise<number> {
     // 組んで直に配る**。中間生成物が消える（brief と同じ思想）。
     if (flags['serve'] === 'true') {
       const port = Number(flags['port'] ?? DASHBOARD_PORT) || DASHBOARD_PORT;
+      // 配る前に一度読む。正本が無いまま窓を開けば、輪の中で倒れ続ける。
+      const pre = readingStore(() => composeDashboard(dbPath));
+      if (!pre.ok) return emit(pre.result);
       return serveDashboard(dbPath, port, flags['host']);
     }
-    return emit({ code: EXIT_OK, out: composeDashboard(dbPath) });
+    const r = readingStore(() => composeDashboard(dbPath));
+    return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
   }
 
   if (rest[0] === 'export') {
@@ -1852,7 +1872,10 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   if (rest[0] === 'status') {
-    return emit(runStatus(dbPath, flags['json'] === 'true'));
+    {
+      const r = readingStore(() => runStatus(dbPath, flags['json'] === 'true'));
+      return emit(r.ok ? r.value : r.result);
+    }
   }
 
   if (rest[0] === 'brief') {

@@ -24,7 +24,7 @@
  */
 
 import { Database } from 'bun:sqlite';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -39,6 +39,14 @@ export interface OpenOptions {
   path?: string;
   /** 9p 上のパスを拒否しない。試験でのみ使う。 */
   allowSlowFs?: boolean;
+  /**
+   * 無ければ作る。既定は真（出陣や取り込みは正本を建てる側ゆえ）。
+   *
+   * **読むだけの口では偽を渡すこと。** 道を一字誤っただけで真新しい正本が
+   * 生まれ、戦況は健やかに「なし」と並ぶ——見張りが嘘の安心を配る。
+   * 見張りが嘘をつくのは、見張りが無いより悪い。
+   */
+  create?: boolean;
 }
 
 /**
@@ -103,6 +111,13 @@ export function openStore(opts: OpenOptions = {}): Database {
       throw new Error(
         `正本を 9p の上に置こうとしている: ${path}\n` +
           'ext4 側 (~/.honden など) を使うこと。9p では書き込みが 25 倍・読みが 84 倍遅い。',
+      );
+    }
+    if (opts.create === false && !existsSync(path)) {
+      throw new Error(
+        `正本が無い: ${path}\n` +
+          '  道が違うておらぬか確かめられよ（HONDEN_DB / --db）。\n' +
+          '  読むだけの口は正本を建てぬ——建ててしまえば「異常なし」と映るゆえ。',
       );
     }
     mkdirSync(dirname(path), { recursive: true });
