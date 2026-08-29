@@ -1,0 +1,26 @@
+[package]
+name = "honden-parse"
+version = "0.1.0"
+edition = "2021"
+description = "命を構文で解き、門へ構造を渡す。解けぬ形は解けぬと言う"
+
+# **芯（core/watch）とは別の crate である。**
+#
+# 芯は依存を一つも持たぬ——常駐する側は、他のすべてが壊れた時にも生きて
+# いなければならぬゆえ。こちらは常駐せぬ（門が呼ぶたびに起きて死ぬ）。
+# ゆえに借り物を許す。混ぜてはならぬ。
+#
+# brush-parser を選んだ理由は docs/decisions.md 百四十九:
+# - MIT（honden も MIT。yash-syntax は GPL ゆえ採れぬ）
+# - 実 bash と約 1,700 の照合試験。配下は皆 bash で走るゆえ
+#   `[[ ]]` も `((` も `<(...)` も日常の往来である
+# - 壊れた入力で**落ちる**。黙って読み違えぬ（tree-sitter は回復するゆえ退けた）
+
+[dependencies]
+brush-parser = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

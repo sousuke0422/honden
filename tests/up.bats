@@ -46,7 +46,10 @@ fake_root() {
   cp "$ROOT/shutsujin_departure.sh" "$FAKE/"
   cp "$STUB/honden" "$FAKE/bin/honden"
   cp "$STUB/honden" "$FAKE/bin/honden-watch"
-  chmod +x "$FAKE/bin/honden" "$FAKE/bin/honden-watch"
+  # 構文の解き手も要る（出陣が新しさを検める）。
+  mkdir -p "$FAKE/core/guard/src"
+  cp "$STUB/honden" "$FAKE/bin/honden-parse"
+  chmod +x "$FAKE/bin/honden" "$FAKE/bin/honden-watch" "$FAKE/bin/honden-parse"
 }
 
 run_up() { run bash "$FAKE/shutsujin_departure.sh" up; }
