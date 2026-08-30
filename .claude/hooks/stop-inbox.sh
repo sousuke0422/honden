@@ -18,6 +18,24 @@
 #     出すのが筋であり、hook が代わりに騙るべきではない）
 set -uo pipefail
 
+# ── 「Stop hook error occurred」は誤りではない（Issue #6・実測 2026-08-30）──
+#
+# 手を止めるのを止めると、端末に赤く「Stop hook error occurred」と出る。
+# これは**この書の誤りではなく、Claude Code が「hook が止めた」を報せる唯一の
+# 口**である。stream-json で覗くと、止めた時に流れるのはこの二つだけ:
+#
+#   {"type":"user", ... "text":"Stop hook feedback:\n<reason>"}   ← 理由は届いておる
+#   {"type":"system","subtype":"notification","key":"stop-hook-error", ...}
+#
+# Stop hook の `hook_response` は**そもそも流れぬ**。ゆえに「exit code が悪い」
+# 「JSON が壊れておる」といった手掛かりは元より無い。
+#
+# **日本語のせいではない。** 理由文を ASCII だけにして撃ち直したが、同じ
+# `stop-hook-error` が出た（陽性対照）。非 ASCII を疑うのは筋違いである。
+#
+# この書は正しく振る舞っておる——260ms・valid JSON・stderr 空・exit 0。
+# 表示だけの事ゆえ、追わぬ。
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HONDEN="$ROOT/bin/honden"
 
