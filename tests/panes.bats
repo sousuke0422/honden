@@ -101,3 +101,22 @@ seen() {
   run bash -c "grep -q 'anchor: () => anchorFrom(realProbe())' '$ROOT/src/main.ts' && echo ok"
   assert_output "ok"
 }
+
+@test "芯が拾う道に報せが乗っておる（誰も notify を叩かずに鳴る）" {
+  # 建てただけで鳴らねば、層は飾りである。本番で一度も鳴っておらなんだ
+  # （実測 2026-08-30）ゆえ、合図の道へ乗せた（殿の裁可・「い」の道）。
+  run bash -c "grep -q 'notifyAfterNudge(dbPath)' '$ROOT/src/main.ts' && echo ok"
+  assert_output "ok"
+}
+
+@test "報せの躓きで合図を止めぬ（合図が本務ゆえ）" {
+  # notifyAfterNudge は掴んで黙る。掴まねば、通知の道具が無い機で
+  # **配下が起こされなくなる**。
+  run bash -c "grep -A2 'catch {' '$ROOT/src/main.ts' | grep -c '報せは本務ではない'"
+  refute_output "0"
+}
+
+@test "素振りでは撃たぬ" {
+  run bash -c "grep -q 'if (!dryRun) notifyAfterNudge' '$ROOT/src/main.ts' && echo ok"
+  assert_output "ok"
+}

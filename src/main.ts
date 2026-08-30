@@ -1969,45 +1969,83 @@ export async function main(argv: string[]): Promise<number> {
     return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
   }
 
+/**
+ * 報せを組んで撃つ。`honden notify` と、芯が拾った時の両方から呼ぶ。
+ *
+ * **口を一つに保つ。** 出来事ごとに撃つ口を散らせば、新しい出来事を足すたびに
+ * 撃ち忘れの筋が生まれる（殿の裁可 2026-08-30・「い」の道）。
+ */
+function sendNotices(
+  dbPath: string | undefined,
+  port: number,
+  dryRun: boolean,
+): { out: string; sent: number } {
+  const db = openStore({ path: dbPath, create: false });
+  const url = `http://${LOOPBACK}:${port}/`;
+  const notices = [...notifyPending(db, url), ...streakNotice(db, url, new Date().toISOString().slice(0, 10))];
+  if (notices.length === 0) return { out: '  報せる事は無い（裁可待ちは全て報せ済み）。', sent: 0 };
+
+  const sinks: Sink[] = [desktopSink()];
+  const warn: string[] = [];
+  {
+    // ntfy は**設定があれば**加わる。無ければ名乗り出ぬ——
+    // 「配っておらぬ」と「配ったが届かなんだ」を混ぜぬため。
+    const cfg = configLoad(db);
+    const nc = cfg.ok ? ntfyConfig(cfg.doc, process.env) : null;
+    if (nc) {
+      const w = topicWarning(nc.topic);
+      if (w) warn.push(`  ※ ${w}`);
+      sinks.push(ntfySink(nc));
+    }
+  }
+
+  if (dryRun) {
+    return {
+      sent: 0,
+      out: [`  [dry-run] ${notices.length} 件を ${sinks.map((x) => x.name).join('+')} へ撃つ所まで来ておる:`]
+        .concat(notices.map((n) => `    ${n.body}`))
+        .concat(warn)
+        .join('\n'),
+    };
+  }
+
+  const res = notifyDispatch(db, notices, sinks);
+  const lines = [`  ${res.sent} 件を撃った（送り口: ${sinks.map((x) => x.name).join('+')}）。`, ...warn];
+  // **届かなんだ物は黙らせぬ。** 見張りの沈黙は健全に見えるゆえ。
+  for (const f of res.failed) lines.push(`  ▲ ${f.sink} へ届かず（${f.key}）: ${f.detail ?? ''}`);
+  return { out: lines.join('\n'), sent: res.sent };
+}
+
+/**
+ * 合図の後に報せを撃つ。**合図が本務ゆえ、報せの躓きで合図を止めぬ。**
+ *
+ * 芯（core/watch）は正本が動くたびに `honden nudge` を叩く。ここに乗せれば
+ * **口が一つで済み、撃ち漏らしも無い**（正本が動けば必ず通る）。
+ *
+ * 報せる事が無ければ SQL を数本引くだけで終わる——撃つ物がある時にしか
+ * 外の道具（PowerShell / curl）は起きぬゆえ、常の費えは塵である。
+ *
+ * `notify.enabled: false` を設定に書けば黙る。煩わしければ切れる道を残す
+ * ——切れねば、いずれ通知ごと無視されるようになる。
+ */
+function notifyAfterNudge(dbPath: string | undefined): void {
+  try {
+    const db = openStore({ path: dbPath, create: false });
+    const cfg = configLoad(db);
+    if (cfg.ok) {
+      const on = (cfg.doc as { notify?: { enabled?: unknown } })?.notify?.enabled;
+      if (on === false) return;
+    }
+    const r = sendNotices(dbPath, DASHBOARD_PORT, false);
+    if (r.sent > 0) console.error(r.out);
+  } catch {
+    /* 報せは本務ではない。合図を止めぬ */
+  }
+}
+
   if (rest[0] === 'notify') {
-    const r = readingStore(() => {
-      const db = openStore({ path: dbPath, create: false });
-      const port = Number(flags['port'] ?? DASHBOARD_PORT) || DASHBOARD_PORT;
-      const url = `http://${LOOPBACK}:${port}/`;
-      const notices = [...notifyPending(db, url), ...streakNotice(db, url, new Date().toISOString().slice(0, 10))];
-      if (notices.length === 0) return '  報せる事は無い（裁可待ちは全て報せ済み）。';
-
-      // 送り口を揃える。芯（src/notify.ts）は送り口を知らぬゆえ、
-      // ここで足すだけで済む。
-      const sinks: Sink[] = [desktopSink()];
-      const warn: string[] = [];
-      {
-        // ntfy は**設定があれば**加わる。無ければ名乗り出ぬ——
-        // 「配っておらぬ」と「配ったが届かなんだ」を混ぜぬため。
-        const cfg = configLoad(db);
-        const nc = cfg.ok ? ntfyConfig(cfg.doc, process.env) : null;
-        if (nc) {
-          const w = topicWarning(nc.topic);
-          if (w) warn.push(`  ※ ${w}`);
-          sinks.push(ntfySink(nc));
-        }
-      }
-
-      // **旗ではなく dryRun を見る。** 1745 行で旗から消され、変数へ移る——
-      // 旗を見ておったゆえ素振りが実際に撃っておった（実測 2026-08-30）。
-      if (dryRun) {
-        return [`  [dry-run] ${notices.length} 件を ${sinks.map((s) => s.name).join('+')} へ撃つ所まで来ておる:`]
-          .concat(notices.map((n) => `    ${n.body}`))
-          .concat(warn)
-          .join('\n');
-      }
-
-      const res = notifyDispatch(db, notices, sinks);
-      const lines = [`  ${res.sent} 件を撃った（送り口: ${sinks.map((s) => s.name).join('+')}）。`, ...warn];
-      // **届かなんだ物は黙らせぬ。** 見張りの沈黙は健全に見えるゆえ。
-      for (const f of res.failed) lines.push(`  ▲ ${f.sink} へ届かず（${f.key}）: ${f.detail ?? ''}`);
-      return lines.join('\n');
-    });
+    const port = Number(flags['port'] ?? DASHBOARD_PORT) || DASHBOARD_PORT;
+    const r = readingStore(() => sendNotices(dbPath, port, dryRun).out);
     return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
   }
 
@@ -2171,7 +2209,11 @@ export async function main(argv: string[]): Promise<number> {
     const reason = flags['reason'];
     delete flags['wake-shogun'];
     delete flags['reason'];
-    return emit(await runNudge(dbPath, dryRun, wakeShogun, reason, selfId()));
+    const nudged = await runNudge(dbPath, dryRun, wakeShogun, reason, selfId());
+    // 合図の後に報せを撃つ（殿の裁可 2026-08-30・「い」の道）。
+    // 素振りでは撃たぬ——素振りが撃つのは重い（decisions.md 百五十五）。
+    if (!dryRun) notifyAfterNudge(dbPath);
+    return emit(nudged);
   }
 
   if (rest[0] === 'decisions') return emit(runDecisions(dbPath));
