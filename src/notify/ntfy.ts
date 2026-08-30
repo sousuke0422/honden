@@ -79,19 +79,45 @@ export function topicWarning(topic: string): string | undefined {
   return undefined;
 }
 
-/** 送る中身を組む。純関数ゆえ試験できる。 */
+/**
+ * 見出しを ntfy が読める形へ。
+ *
+ * HTTP の頭は ASCII しか通らぬ。**percent 符号化では化ける**——
+ * `%E6%AE%BF%E3%81%B8` と生のまま端末に出る（公開の ntfy.sh へ撃って実測・
+ * 2026-08-30）。正道は RFC 2047 の encoded-word で、これなら `殿へ` と出る。
+ *
+ * ASCII だけの見出しはそのまま通す——包めば読みにくくなるだけゆえ。
+ */
+export function encodeTitle(title: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x20-\x7e]*$/.test(title)) return title;
+  return `=?UTF-8?B?${Buffer.from(title, 'utf8').toString('base64')}?=`;
+}
+
+/**
+ * 送る中身を組む。純関数ゆえ試験できる。
+ *
+ * **旧の画面に寄せる。** 旧 `ntfy.sh` は見出しを送らず本文だけを投げ、
+ * 端末では会話のように並んでおった（`images/screenshots/masked/` の実物）。
+ * 見出しを足せば一行増えて、その並びが崩れる。ゆえに既定では付けぬ
+ * ——**見出しは本文の一行目に畳む**。
+ *
+ * 印は `outbound`。旧の受け手（`ntfy_listener.sh`）はこの印で
+ * **自分の声を弾いておった**。名を変えれば、いつか輪ができる。
+ */
 export function request(c: Config, n: Notice): { url: string; init: RequestInit } {
   const headers: Record<string, string> = {
     'Content-Type': 'text/plain; charset=utf-8',
-    Title: encodeURIComponent(n.title), // ntfy の見出しは ASCII のみ。符号化して渡す
-    Tags: 'honden',
+    Tags: 'outbound',
   };
   if (n.url) headers['Click'] = n.url;
   if (c.token) headers['Authorization'] = `Bearer ${c.token}`;
   else if (c.user && c.pass) {
     headers['Authorization'] = `Basic ${Buffer.from(`${c.user}:${c.pass}`).toString('base64')}`;
   }
-  return { url: `${c.base}/${c.topic}`, init: { method: 'POST', headers, body: n.body } };
+  // 見出しは本文の一行目に畳む（旧の並びに寄せるため）。
+  const body = n.title ? `${n.title}\n${n.body}` : n.body;
+  return { url: `${c.base}/${c.topic}`, init: { method: 'POST', headers, body } };
 }
 
 /** 送る手。`notify/desktop.ts` と同じ流儀で注げるようにする。 */

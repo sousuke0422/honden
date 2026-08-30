@@ -6,7 +6,7 @@
  * 何と言うか。両端を留めておかねば、いざ建てた時に**動かぬ理由が分からぬ**。
  */
 import { describe, expect, test } from 'bun:test';
-import { config, request, curlArgs, ntfySink, topicWarning, DEFAULT_BASE, WEAK } from '../src/notify/ntfy';
+import { config, request, curlArgs, ntfySink, topicWarning, encodeTitle, DEFAULT_BASE, WEAK } from '../src/notify/ntfy';
 import type { Notice } from '../src/notify';
 
 const N: Notice = {
@@ -62,13 +62,28 @@ describe('request — 何を投げるか', () => {
     const { url, init } = request(C, N);
     expect(url).toBe('https://ntfy.example.org/honden-abcdef123456');
     expect(init.method).toBe('POST');
-    expect(init.body).toBe('#12 本番切り替え');
+    expect(String(init.body)).toContain('#12 本番切り替え');
   });
 
-  test('見出しは符号化する（ntfy の Title は ASCII のみ）', () => {
+  test('**見出しは付けず、本文の一行目へ畳む**（旧の並びに寄せる）', () => {
+    const { init } = request(C, N);
+    const h = init.headers as Record<string, string>;
+    // 旧 ntfy.sh は見出しを送らず、端末では会話のように並んでおった。
+    expect(h['Title']).toBeUndefined();
+    expect(String(init.body)).toBe(`${N.title}\n${N.body}`);
+  });
+
+  test('印は outbound（受け手が自分の声を弾く印）', () => {
     const h = request(C, N).init.headers as Record<string, string>;
-    expect(h['Title']).not.toContain('殿');
-    expect(decodeURIComponent(h['Title']!)).toContain('殿');
+    expect(h['Tags']).toBe('outbound');
+  });
+
+  test('見出しを頭で送る要が出た時のため、正しい包み方を持つ', () => {
+    // **percent 符号化では化ける**——公開の ntfy.sh へ撃って実測した:
+    //   percent → '%E6%AE%BF%E3%81%B8' が生のまま出る
+    //   RFC2047 → '殿へ' と正しく出る
+    expect(encodeTitle('殿へ')).toBe(`=?UTF-8?B?${Buffer.from('殿へ').toString('base64')}?=`);
+    expect(encodeTitle('plain ascii')).toBe('plain ascii'); // 包まずそのまま
   });
 
   test('押した先は Click で渡る', () => {
@@ -126,7 +141,7 @@ describe('ntfySink — 届かねば落ちたと言う', () => {
     expect(got[0]).toBe('curl');
     expect(got).toContain('https://ntfy.example.org/honden-abcdef123456');
     expect(got.join(' ')).toContain('Authorization: Bearer tk');
-    expect(got).toContain('#12 本番切り替え');
+    expect(got.join(' ')).toContain('#12 本番切り替え');
   });
 
   test('curlArgs は目で追える形（何をどう投げるか）', () => {
