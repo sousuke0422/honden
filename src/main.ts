@@ -15,6 +15,18 @@ import { anchorFrom, realProbe } from './anchor';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
+import {
+  add as sayAdd,
+  list as sayList,
+  get as sayGet,
+  setStatus as saySetStatus,
+  streak as sayStreak,
+  touchStreak as sayTouchStreak,
+  importItems as sayImport,
+  render as sayRender,
+  STATUSES as SAY_STATUSES,
+  type Status as SayStatus,
+} from './saytask';
 
 /**
  * 己の在処から repo の根を割り出す。構文の解き手（bin/honden-parse）を
@@ -1873,6 +1885,87 @@ export async function main(argv: string[]): Promise<number> {
       return emit(runProjectsSync(dbPath, f));
     }
     return emit(runProjectsShow(dbPath));
+  }
+
+  if (rest[0] === 'say') {
+    // 殿ご自身の task 一覧。**将軍が直に扱う唯一の器**（家老を通さぬ）。
+    const sub = rest[1];
+
+    if (sub === 'add') {
+      // 旗でも EOF でも受ける（cmd new と同じ作法・src/cli.ts）。
+      const said = await readStdin();
+      const r = readingStore(() => {
+        const db = openStore({ path: dbPath });
+        const picked = pickInput({ flags, stdin: said });
+        if (!picked.ok) return picked.message;
+        const res = tx(db, () => sayAdd(db, picked.value, new Date()));
+        if (!res.ok) return `  ${res.message}`;
+        return `  ${res.item.id} を積んだ（${res.item.title}）。`;
+      });
+      return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
+    }
+
+    if (sub === 'done' || sub === 'status') {
+      const id = rest[2];
+      const to = (sub === 'done' ? 'done' : rest[3]) as SayStatus | undefined;
+      if (!id || !to) {
+        return emit({ code: EXIT_INVALID, err: 'honden say done <番号> / honden say status <番号> <状態>' });
+      }
+      if (!(SAY_STATUSES as readonly string[]).includes(to)) {
+        return emit({ code: EXIT_INVALID, err: `状態は ${SAY_STATUSES.join('/')} のいずれか` });
+      }
+      const r = readingStore(() => {
+        const db = openStore({ path: dbPath });
+        const now = new Date();
+        const res = tx(db, () => {
+          const x = saySetStatus(db, id, to, now);
+          // 済ませた日は連続に数える。**同じ日に二度は数えぬ**（src/saytask.ts）。
+          if (x.ok && to === 'done') sayTouchStreak(db, now);
+          return x;
+        });
+        return `  ${res.message}`;
+      });
+      return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
+    }
+
+    if (sub === 'show') {
+      const id = rest[2];
+      if (!id) return emit({ code: EXIT_INVALID, err: 'honden say show <番号>' });
+      const r = readingStore(() => {
+        const db = openStore({ path: dbPath, create: false });
+        const i = sayGet(db, id);
+        if (!i) return `  ${id} は無い。`;
+        return JSON.stringify(i, null, 2);
+      });
+      return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
+    }
+
+    if (sub === 'import') {
+      // 旧環境の saytask/tasks.yaml から移す。**何度打っても同じ**。
+      const from = flags['from'] ?? '';
+      if (!from) return emit({ code: EXIT_INVALID, err: '--from <tasks.yaml の道> を渡されよ' });
+      const r = readingStore(() => {
+        const db = openStore({ path: dbPath });
+        const doc = Bun.YAML.parse(readFileSync(from, 'utf8')) as unknown;
+        const items = Array.isArray(doc) ? doc : (doc as { tasks?: unknown })?.tasks;
+        const res = tx(db, () => sayImport(db, items, new Date()));
+        const lines = [`  ${res.added} 件を移し、${res.skipped} 件は既にあるゆえ飛ばした。`];
+        for (const f of res.failed) lines.push(`  ▲ ${f.id}: ${f.why}`);
+        return lines.join('\n');
+      });
+      return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
+    }
+
+    // 引数無しは一覧。
+    const only = flags['status'] as SayStatus | undefined;
+    if (only && !(SAY_STATUSES as readonly string[]).includes(only)) {
+      return emit({ code: EXIT_INVALID, err: `状態は ${SAY_STATUSES.join('/')} のいずれか` });
+    }
+    const r = readingStore(() => {
+      const db = openStore({ path: dbPath, create: false });
+      return sayRender(sayList(db, only), sayStreak(db));
+    });
+    return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
   }
 
   if (rest[0] === 'notify') {

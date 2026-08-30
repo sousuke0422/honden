@@ -497,6 +497,37 @@ CREATE TABLE IF NOT EXISTS guard_charter (
   revoked_at TEXT                       -- 取り消し。刻まれれば以後使えぬ
 );
 
+-- 殿ご自身の task 一覧（SayTask）。
+--
+-- **将軍が直に扱う唯一の器**である。家老を通さぬ（旧環境の F001 の例外）。
+-- 旧は saytask/tasks.yaml を将軍が読み書きしておったが、切り替えの後は
+-- 旧 repo が凍る——凍った repo の YAML を書き続ければ「書き手が二人」の
+-- 禍根になる。ゆえに正本へ移す。
+CREATE TABLE IF NOT EXISTS saytask (
+  id         TEXT PRIMARY KEY,       -- VF-015 など。旧の採番をそのまま継ぐ
+  title      TEXT NOT NULL,
+  category   TEXT,
+  priority   TEXT,
+  rfc_level  TEXT,                   -- MUST / SHOULD / MAY
+  status     TEXT NOT NULL DEFAULT 'todo'
+             CHECK (status IN ('todo','pending','in_progress','done','dropped')),
+  tags       TEXT,                   -- JSON の一覧
+  description TEXT,
+  due        TEXT,
+  created_at TEXT NOT NULL,
+  done_at    TEXT,
+  raw        TEXT NOT NULL           -- 取り込み元の原文。欠落を出さぬため
+);
+CREATE INDEX IF NOT EXISTS ix_saytask_status ON saytask(status, due);
+
+-- 連続の記録。一行しか持たぬ。
+CREATE TABLE IF NOT EXISTS saytask_streak (
+  one        INTEGER PRIMARY KEY CHECK (one = 1),
+  current    INTEGER NOT NULL DEFAULT 0,
+  longest    INTEGER NOT NULL DEFAULT 0,
+  last_date  TEXT
+);
+
 -- 追記専用の台帳。書き込みは全部ここにも落ちる。
 -- kagemusha の decisions_journal に相当する層。上書きも削除もしない。
 CREATE TABLE IF NOT EXISTS ledger (
@@ -607,6 +638,8 @@ function migrate(db: Database): void {
   addColumn(db, 'task', 'holder', 'TEXT');
   addColumn(db, 'task', 'leased_at', 'TEXT');
   addColumn(db, 'task', 'lease_until', 'TEXT');
+  // 連続の記録は一行しか持たぬ。無ければ据える。
+  db.run('INSERT OR IGNORE INTO saytask_streak(one, current, longest) VALUES (1, 0, 0)');
 
   // 受け入れ条件の番号を 1 始まりへ揃える。
   // 初期は配列の添字をそのまま入れており「条件 0」という言い方になっていた。

@@ -269,6 +269,15 @@ EOF`,
       ['--actor', 'その者が関わった跡だけ'],
     ],
   },
+  say: {
+    summary: '殿ご自身の task 一覧（SayTask）。将軍が直に扱う唯一の器。',
+    usage: 'honden say [--status <状態>] / say add <<EOF / say done <番号> / say show <番号>',
+    notes: [
+      '家老を通さぬ。陣の司令（cmd）とは別物ゆえ混ぜぬ',
+      '済ませた日は連続に数える。**同じ日に二度は数えぬ**',
+      '旧環境から移すなら honden say import --from <tasks.yaml>（何度打っても同じ）',
+    ],
+  },
   notify: {
     summary: '殿へ報せる。裁可待ちのうち、まだ報せておらぬ物だけを撃つ。',
     usage: 'honden notify [--dry-run] [--port <番号>]',
