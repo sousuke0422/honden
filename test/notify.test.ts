@@ -6,7 +6,7 @@
  * 見張りが無いのと同じになる。
  */
 import { describe, expect, test } from 'bun:test';
-import { pending, dispatch, NOTIFY_ACTION, type Notice, type Sink } from '../src/notify';
+import { pending, streakNotice, dispatch, NOTIFY_ACTION, type Notice, type Sink } from '../src/notify';
 import { esc, toastXml, script, encode, desktopSink } from '../src/notify/desktop';
 import { openStore, tx, journal } from '../src/store';
 
@@ -180,5 +180,109 @@ describe('素振りは撃たぬ', () => {
     const log: Notice[] = [];
     dispatch(db, pending(db, VIEWER), [okSink('desktop', log)]);
     expect(pending(db, VIEWER)).toHaveLength(0);
+  });
+});
+
+/**
+ * **報せる出来事は旧の四種に揃える。**
+ *
+ * 一つでも欠ければ、殿は端末を見る習慣を失う——見ても半分しか載っておらぬなら、
+ * 結局は戦況を開くことになる。旧環境の README「Phone Notifications」が
+ * 報せておった四種（🚨 要対応・✅ 完了・❌ 失敗・🔥 連続）を留める。
+ */
+describe('報せる出来事——旧の四種', () => {
+  const withCmd = () => {
+    const db = openStore({ path: ':memory:' });
+    tx(db, () => {
+      db.run(
+        `INSERT INTO cmd(id, created_at, purpose, body, raw, status, completed_at)
+         VALUES ('cmd_042', '2026-08-30', '通知の器を建てる', '本文', '{}', 'done', '2026-08-30T10:00:00Z')`,
+      );
+      db.run("INSERT INTO cmd_acceptance(cmd_id, idx, text) VALUES ('cmd_042', 0, '条件一')");
+      db.run("INSERT INTO cmd_acceptance(cmd_id, idx, text) VALUES ('cmd_042', 1, '条件二')");
+    });
+    return db;
+  };
+
+  test('✅ 司令の完了を報せる（覆いの数つき）', () => {
+    const db = withCmd();
+    const n = pending(db, VIEWER).find((x) => x.key === 'cmd:done:cmd_042');
+    expect(n).toBeTruthy();
+    expect(n!.body).toContain('✅');
+    expect(n!.body).toContain('cmd_042');
+    expect(n!.body).toContain('2 件'); // 受け入れ条件の数
+  });
+
+  test('❌ 倒れた任を報せる（黙って倒れるのが最も悪い）', () => {
+    const db = openStore({ path: ':memory:' });
+    tx(db, () =>
+      db.run(
+        "INSERT INTO task(agent, task_id, status, updated_at, raw) VALUES ('ashigaru3', 'subtask_042c', 'failed', 'x', '{}')",
+      ),
+    );
+    const n = pending(db, VIEWER).find((x) => x.key === 'task:failed:subtask_042c');
+    expect(n!.body).toContain('❌');
+    expect(n!.body).toContain('ashigaru3');
+  });
+
+  test('❌ 品質の落第を報せる', () => {
+    const db = openStore({ path: ':memory:' });
+    tx(db, () =>
+      db.run(
+        `INSERT INTO report(agent, task_id, created_at, verdict, raw) VALUES ('gunshi', 'subtask_9', '2026-08-30', 'REJECTED', '{}')`,
+      ),
+    );
+    const n = pending(db, VIEWER).find((x) => x.key === 'report:rejected:subtask_9');
+    expect(n!.body).toContain('やり直し');
+  });
+
+  test('🚨 裁可待ちが先に並ぶ（最も詰まる所ゆえ）', () => {
+    const db = withCmd();
+    tx(db, () =>
+      db.run(
+        "INSERT INTO decision(raised_by, at, question, choices, status) VALUES ('karo', 'x', '問い', '[]', 'open')",
+      ),
+    );
+    expect(pending(db, VIEWER)[0]!.body).toContain('🚨');
+  });
+
+  test('完了も二度は撃たぬ', () => {
+    const db = withCmd();
+    const log: Notice[] = [];
+    dispatch(db, pending(db, VIEWER), [okSink('desktop', log)]);
+    expect(pending(db, VIEWER)).toHaveLength(0);
+  });
+});
+
+describe('🔥 連続の報せ——日ごとに一度だけ', () => {
+  const withStreak = (last: string | null, done: number) => {
+    const db = openStore({ path: ':memory:' });
+    tx(db, () => {
+      db.run('UPDATE saytask_streak SET current = 3, longest = 16, last_date = ? WHERE one = 1', [last]);
+      const ins = db.prepare(
+        "INSERT INTO saytask(id, title, status, created_at, raw) VALUES (?, 't', ?, '2026-08-30', '{}')",
+      );
+      for (let i = 0; i < 4; i++) ins.run(`VF-00${i + 1}`, i < done ? 'done' : 'todo');
+    });
+    return db;
+  };
+
+  test('今日果たしておれば報せる', () => {
+    const n = streakNotice(withStreak('2026-08-30', 2), VIEWER, '2026-08-30');
+    expect(n).toHaveLength(1);
+    expect(n[0]!.body).toContain('🔥 3 日連続');
+    expect(n[0]!.body).toContain('最長 16');
+    expect(n[0]!.body).toContain('2/4');
+  });
+
+  test('**今日まだ果たしておらねば黙る**（数でなく日で撃つ）', () => {
+    expect(streakNotice(withStreak('2026-08-29', 2), VIEWER, '2026-08-30')).toHaveLength(0);
+  });
+
+  test('同じ日に二度は撃たぬ', () => {
+    const db = withStreak('2026-08-30', 2);
+    const log: Notice[] = [];
+    dispatch(db, streakNotice(db, VIEWER, '2026-08-30'), [okSink('desktop', log)]);
+    expect(streakNotice(db, VIEWER, '2026-08-30')).toHaveLength(0);
   });
 });

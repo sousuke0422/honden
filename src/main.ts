@@ -13,7 +13,7 @@ import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
 import { realRunner as parseRunner } from './parse';
-import { pending as notifyPending, dispatch as notifyDispatch, type Sink } from './notify';
+import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
 import { config as ntfyConfig, ntfySink, topicWarning } from './notify/ntfy';
 import {
@@ -1973,7 +1973,8 @@ export async function main(argv: string[]): Promise<number> {
     const r = readingStore(() => {
       const db = openStore({ path: dbPath, create: false });
       const port = Number(flags['port'] ?? DASHBOARD_PORT) || DASHBOARD_PORT;
-      const notices = notifyPending(db, `http://${LOOPBACK}:${port}/`);
+      const url = `http://${LOOPBACK}:${port}/`;
+      const notices = [...notifyPending(db, url), ...streakNotice(db, url, new Date().toISOString().slice(0, 10))];
       if (notices.length === 0) return '  報せる事は無い（裁可待ちは全て報せ済み）。';
 
       // 送り口を揃える。芯（src/notify.ts）は送り口を知らぬゆえ、

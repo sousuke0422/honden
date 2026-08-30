@@ -44,35 +44,125 @@ export interface Notice {
 
 export const NOTIFY_ACTION = 'notify.sent';
 
-/**
- * 撃つべき報せを正本から組む。**判定はここだけ。送り口は与らぬ。**
- *
- * 裁可待ちのうち、まだ撃っておらぬものを返す。
- */
-export function pending(db: Database, viewerUrl: string): Notice[] {
-  const open = db
-    .query("SELECT id, question FROM decision WHERE status = 'open' ORDER BY id")
-    .all() as { id: number; question: string }[];
-  if (open.length === 0) return [];
-
-  const sent = new Set(
+/** 撃った跡。同じ鍵は二度撃たぬ。 */
+function alreadySent(db: Database): Set<string> {
+  return new Set(
     (db.query('SELECT target FROM ledger WHERE action = ?').all(NOTIFY_ACTION) as { target: string | null }[])
       .map((r) => r.target ?? ''),
   );
+}
 
+/** 一行に畳む。通知は一目で読めねば意味が無い。 */
+const oneLine = (s: string, n = 80): string => (s ?? '').split('\n')[0]!.slice(0, n);
+
+/**
+ * 撃つべき報せを正本から組む。**判定はここだけ。送り口は与らぬ。**
+ *
+ * # 何を報せるか
+ *
+ * 旧環境（README の「Phone Notifications」）が報せておった四種に揃える。
+ * 一つでも欠ければ、**殿は端末を見る習慣を失う**——見ても半分しか載って
+ * おらぬなら、結局は戦況を開くことになる。
+ *
+ * | | 旧 | ここ |
+ * |---|---|---|
+ * | 🚨 | Action needed | 裁可待ち |
+ * | ✅ | cmd complete — 5/5 subtasks | 司令の完了（覆いの数つき） |
+ * | ❌ | subtask failed — reason | 任の失敗・品質の落第 |
+ * | 🔥 | 3-day streak! 12/12 today | 連続と今日の進み |
+ *
+ * # 二度撃たぬ
+ *
+ * 鍵は出来事に紐づく（`cmd:done:cmd_042`）。同じ出来事は一度しか起きぬゆえ、
+ * 鍵が同じなら撃たぬ——それだけで足りる。
+ */
+export function pending(db: Database, viewerUrl: string): Notice[] {
+  const sent = alreadySent(db);
   const out: Notice[] = [];
+  const add = (key: string, title: string, body: string) => {
+    if (sent.has(key)) return;
+    out.push({ key, title, body, url: viewerUrl });
+  };
+
+  // 🚨 殿の裁可待ち。最も詰まる所ゆえ先に並べる。
+  const open = db
+    .query("SELECT id, question FROM decision WHERE status = 'open' ORDER BY id")
+    .all() as { id: number; question: string }[];
   for (const d of open) {
-    const key = `decision:${d.id}`;
-    if (sent.has(key)) continue;
-    out.push({
-      title: 'honden — 殿のご裁可をお待ちしております',
-      // 問いは長くなりうる。通知は一目で読めねば意味が無いゆえ畳む。
-      body: `#${d.id} ${d.question.split('\n')[0]!.slice(0, 80)}`,
-      url: viewerUrl,
-      key,
-    });
+    add(`decision:${d.id}`, 'honden — 殿のご裁可をお待ちしております', `🚨 #${d.id} ${oneLine(d.question)}`);
   }
+
+  // ✅ 司令の完了。覆いの数を添える（旧の `5/5 subtasks done` に当たる）。
+  const done = db
+    .query(
+      `SELECT c.id, c.purpose,
+              (SELECT COUNT(*) FROM cmd_acceptance a WHERE a.cmd_id = c.id) total
+       FROM cmd c WHERE c.status = 'done' ORDER BY c.completed_at DESC LIMIT 20`,
+    )
+    .all() as { id: string; purpose: string | null; total: number }[];
+  for (const c of done) {
+    const n = c.total > 0 ? `（受け入れ条件 ${c.total} 件）` : '';
+    add(`cmd:done:${c.id}`, 'honden — 司令が成った', `✅ ${c.id} ${oneLine(c.purpose ?? '', 60)}${n}`);
+  }
+
+  // ❌ 倒れた任。**黙って倒れるのが最も悪い**ゆえ、必ず報せる。
+  const failed = db
+    .query("SELECT agent, task_id FROM task WHERE status = 'failed' AND task_id IS NOT NULL")
+    .all() as { agent: string; task_id: string }[];
+  for (const t of failed) {
+    add(`task:failed:${t.task_id}`, 'honden — 任が倒れた', `❌ ${t.task_id}（${t.agent}）`);
+  }
+
+  // ❌ 品質の落第。やり直しが要るゆえ、殿の目にも入れておく。
+  const rejected = db
+    .query("SELECT task_id, agent FROM report WHERE verdict = 'REJECTED' AND task_id IS NOT NULL LIMIT 20")
+    .all() as { task_id: string; agent: string }[];
+  for (const r of rejected) {
+    add(`report:rejected:${r.task_id}`, 'honden — 品質の検めで落第', `❌ ${r.task_id}（${r.agent}）やり直しが要る`);
+  }
+
   return out;
+}
+
+/**
+ * 連続の報せ。**日ごとに一度だけ。**
+ *
+ * 旧の `🔥 3-day streak! 12/12 tasks today` に当たる。数が動いた時ではなく
+ * **日が変わった時**に撃つ——数で撃てば、一日に何度も鳴って煩わしくなる。
+ *
+ * 殿の task 一覧（saytask）を持つ正本でのみ意味を持つゆえ、表が無ければ黙る。
+ */
+export function streakNotice(db: Database, viewerUrl: string, today: string): Notice[] {
+  const sent = alreadySent(db);
+  const key = `streak:${today}`;
+  if (sent.has(key)) return [];
+  type S = { current: number; longest: number; last_date: string | null };
+  let s: S | null = null;
+  let today_done = 0;
+  let today_total = 0;
+  try {
+    s = db.query('SELECT current, longest, last_date FROM saytask_streak WHERE one = 1').get() as S | null;
+    const t = db
+      .query(
+        `SELECT COUNT(*) total,
+                SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) done
+         FROM saytask WHERE status IN ('todo','pending','in_progress','done')`,
+      )
+      .get() as { total: number; done: number | null };
+    today_total = t.total;
+    today_done = t.done ?? 0;
+  } catch {
+    return []; // 器が無ければ黙る
+  }
+  if (!s || s.last_date !== today) return []; // 今日まだ果たしておらぬ
+  return [
+    {
+      key,
+      title: 'honden — 連続',
+      body: `🔥 ${s.current} 日連続（最長 ${s.longest}）　${today_done}/${today_total}`,
+      url: viewerUrl,
+    },
+  ];
 }
 
 export interface SendResult {
