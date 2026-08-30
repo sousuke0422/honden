@@ -14,17 +14,20 @@
 
 name: release
 
+# ## 入口は札ひとつだけにする
+#
+# 以前は workflow_dispatch も置いておった。外した——署名の身元を
+# **札から走った release.yml** に縛るゆえ、枝から走らせた出し物は
+# 検めを通らぬ。通らぬ物を出せる口を残せば、いつか誰かがそれを出す。
+# 打ち直したい時は、GitHub の画面から同じ run を回せばよい（ref は変わらぬ）。
+
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: '出す札（例 v0.2.0）'
-        required: true
 
 permissions:
   contents: write
+  id-token: write     # Sigstore へ身元を示すため。**鍵は作らぬ**
 
 jobs:
   # ── 一、札と版が合うておるか。合わねば、ここで止まる ──
@@ -46,7 +49,7 @@ jobs:
         # `0.2.0-alpha.1 > 0.1.0` ゆえ全員に降ってしまう。
         run: |
           set -euo pipefail
-          tag='${{ github.event.inputs.tag || github.ref_name }}'
+          tag='${{ github.ref_name }}'
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           case "$tag" in
             *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT"; echo "仮の版として出す: $tag" ;;
@@ -120,10 +123,15 @@ jobs:
 
       - name: 数を数える
         # **名だけを並べる。** 道つきで数えると、降ろす側が名で引けぬ。
+        #
+        # `sha256sum -- * > SHA256SUMS` と書くと、glob の展開と書き出しの順に
+        # 頼ることになる（bash は展開が先ゆえ動くが、読む者には分からぬ）。
+        # 別の場所へ書いてから移す——**順に頼らぬ**。
         run: |
           set -euo pipefail
           cd all
-          sha256sum -- * > SHA256SUMS
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
           echo "── 出す物 ──"
           cat SHA256SUMS
 
@@ -132,6 +140,37 @@ jobs:
           set -euo pipefail
           n=$(grep -c . all/SHA256SUMS)
           [ "$n" -eq 12 ] || { echo "::error::12 本のはずが $n 本しか無い"; exit 1; }
+
+      # ── 署名する。**鍵は作らぬ（Sigstore keyless）** ──
+      #
+      # 署名するのは SHA256SUMS 一枚だけである。binary は既にその紙で
+      # 縛られておるゆえ、紙を縛れば全部が縛られる:
+      #
+      #     署名 → SHA256SUMS → 各 binary
+      #
+      # 12 枚に署名しても強くはならず、検める段が増えるだけである。
+      - uses: sigstore/cosign-installer@v3
+
+      - name: SHA256SUMS へ署名する
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle all/SHA256SUMS.cosign.bundle \
+            all/SHA256SUMS
+          echo "── 束 ──"
+          ls -la all/SHA256SUMS.cosign.bundle
+
+      - name: 出す前に、己で検める
+        # **出した物を自分で検めておく。** 出してから「通らぬ」と分かるのでは
+        # 遅い——既に降ろした者の手元は戻せぬ。降ろす側と同じ言葉で問う。
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --bundle all/SHA256SUMS.cosign.bundle \
+            --certificate-identity-regexp '^https://github\.com/${{ github.repository }}/\.github/workflows/release\.yml@refs/tags/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            all/SHA256SUMS
+          echo "自分の署名を自分で検めた"
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -143,7 +182,24 @@ jobs:
           body: |
             `honden update --check` で確かめ、`honden update --yes` で取り替えられる。
 
-            **数（SHA256）は照らすが、署名は無い。** 守れるのは壊れと途中切れまでである。
+            ## 検め方
+
+            `SHA256SUMS` は **Sigstore keyless で署名してある**（鍵は存在せぬ）。
+            `honden update` は既定でこれを検め、通らねば**一つも置かぬ**。
+
+            手で検めるなら:
+
+            ```
+            cosign verify-blob \
+              --bundle SHA256SUMS.cosign.bundle \
+              --certificate-identity-regexp '^https://github\.com/sousuke0422/honden/\.github/workflows/release\.yml@refs/tags/' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              SHA256SUMS
+            sha256sum -c SHA256SUMS
+            ```
+
+            **身元の指定を省いてはならぬ。** 省くと *Sigstore で署名された物なら
+            誰の物でも通る*——「署名がある」は「我らが署名した」ではない。
 
             仮の版（`-rc` / `-beta` / `-alpha`）は prerelease として出るので、
             `honden update` には降りてこぬ。試すなら手で降ろされよ。

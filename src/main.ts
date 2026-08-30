@@ -19,8 +19,9 @@ import { config as ntfyConfig, ntfySink, topicWarning } from './notify/ntfy';
 import { parseLine, listenArgs, streamUrl, backoffMs, receive } from './notify/listen';
 import { VERSION, isPrerelease } from './version';
 import {
-  BINARIES, SUMS, platformOf, planFor, decide, tagFrom, verify, parseSums, releaseApiUrl,
+  BINARIES, SUMS, platformOf, planFor, decide, tagFrom, verify, parseSums, releaseApiUrl, assetUrl,
 } from './update';
+import { BUNDLE, SKIP_FLAG, signCheck, verifyArgs, readVerify } from './sign';
 import {
   add as sayAdd,
   list as sayList,
@@ -53,7 +54,7 @@ const REPO_ROOT = (() => {
   return fromBin; // 見つからねば realRunner が拒む
 })();
 import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
@@ -2059,6 +2060,11 @@ async function runNtfyListen(dbPath: string | undefined, once: boolean): Promise
   }
 }
 
+/** その道具は道に在るか。**名で判ぜず、実際に引けるかで見る。** */
+function which(cmd: string): boolean {
+  return Bun.spawnSync(['sh', '-c', `command -v ${cmd}`], { stdout: 'ignore', stderr: 'ignore' }).success;
+}
+
 /**
  * `honden update` — 出し物から本体を取り替える。
  *
@@ -2068,7 +2074,7 @@ async function runNtfyListen(dbPath: string | undefined, once: boolean): Promise
  * 置き方は `mv`。陣が立っておる間、芯は己の binary を掴んでおるゆえ
  * `cp` は `Text file busy` で倒れる。
  */
-async function runUpdate(checkOnly: boolean, yes: boolean): Promise<RunResult> {
+async function runUpdate(checkOnly: boolean, yes: boolean, skipSig: boolean): Promise<RunResult> {
   const plat = platformOf({ platform: process.platform, arch: process.arch });
   if (!plat) {
     return {
@@ -2119,10 +2125,40 @@ async function runUpdate(checkOnly: boolean, yes: boolean): Promise<RunResult> {
     return new Uint8Array(await r.arrayBuffer());
   };
 
+  // ── 署名を先に検める。**紙を縛れば、紙が縛る全部が縛られる** ──
+  // 道具の名は環境で差し替えられる（試験のため。既定は素の cosign）
+  const cosign = process.env['HONDEN_COSIGN'] ?? 'cosign';
+  const sig = signCheck({ hasCosign: which(cosign), skip: skipSig });
+  if (sig.kind === 'refuse') return { code: EXIT_INVALID, err: `  ${sig.message}` };
+  if (sig.kind === 'skip') console.error(`  ▲ ${sig.warning}`);
+
   let sums: Map<string, string>;
   const got: { asset: string; sha256: string; bytes: Uint8Array }[] = [];
   try {
-    const parsed = parseSums(new TextDecoder().decode(await fetchBytes(plan.sumsUrl)));
+    const sumsBytes = await fetchBytes(plan.sumsUrl);
+    if (sig.kind === 'verify') {
+      const tmpSums = join(tmpdir(), `honden-${SUMS}-${process.pid}`);
+      const tmpBundle = join(tmpdir(), `honden-${BUNDLE}-${process.pid}`);
+      try {
+        writeFileSync(tmpSums, sumsBytes);
+        writeFileSync(tmpBundle, await fetchBytes(assetUrl(plan.tag, BUNDLE)));
+        const args = verifyArgs(tmpBundle, tmpSums);
+        args[0] = cosign;
+        const pr = Bun.spawnSync(args, { stdout: 'pipe', stderr: 'pipe' });
+        const v = readVerify({ ok: pr.success, stderr: new TextDecoder().decode(pr.stderr) });
+        if (!v.ok) return { code: EXIT_SYSTEM, err: `  ${v.message}` };
+        console.error('  ✓ 署名は我らの物である（Sigstore keyless）');
+      } finally {
+        for (const f of [tmpSums, tmpBundle]) {
+          try {
+            unlinkSync(f);
+          } catch {
+            /* 掃除で倒れても本題ではない */
+          }
+        }
+      }
+    }
+    const parsed = parseSums(new TextDecoder().decode(sumsBytes));
     if (!parsed.ok) return { code: EXIT_SYSTEM, err: `  ${parsed.message}` };
     sums = parsed.sums;
     for (const it of plan.items) {
@@ -2160,7 +2196,7 @@ async function runUpdate(checkOnly: boolean, yes: boolean): Promise<RunResult> {
   return {
     code: EXIT_OK,
     out:
-      `  ${plan.tag} を置いた（${BINARIES.length} 本・${SUMS} と照合済み）。\n` +
+      `  ${plan.tag} を置いた（${BINARIES.length} 本・${SUMS} と照合済み${sig.kind === 'verify' ? '・署名検証済み' : '・**署名は検めておらぬ**'}）。\n` +
       '  走っておる芯は古い実体を持ったままである。次に立つ時から新しくなる。',
   };
 }
@@ -2252,7 +2288,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
   }
 
   if (rest[0] === 'update') {
-    return emit(await runUpdate(flags['check'] !== undefined, flags['yes'] !== undefined));
+    return emit(await runUpdate(flags['check'] !== undefined, flags['yes'] !== undefined, flags['insecure-skip-signature'] !== undefined));
   }
 
   if (rest[0] === 'paths') {

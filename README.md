@@ -237,9 +237,42 @@ honden update --yes         # 取り替える
 違う物になる。置き方は `mv` なので、走っている芯は古い実体を持ったまま生き、
 次に立つときから新しくなる。
 
-> **数は照らすが、署名は無い。** 守れるのは壊れと途中切れまでで、出す側そのものが
-> 乗っ取られた場合は数も一緒に書き換えられる。署名はまだ無い。
-> 守れていないものを守れていると書かないでおく。
+### 署名
+
+`SHA256SUMS` は **cosign の keyless（Sigstore）で署名してある。鍵は存在しない。**
+出すときに GitHub Actions の OIDC で身元を示し、Fulcio が短命の証書を出し、
+Rekor（公の台帳）に跡が残る。秘密鍵がどこにも無いので、盗まれる物も回す物も無い。
+
+署名するのは `SHA256SUMS` 一枚だけ。binary はその紙で縛られているので、
+**紙を縛れば全部が縛られる**。
+
+```
+署名 → SHA256SUMS → 各 binary
+```
+
+`honden update` は既定でこれを検め、通らなければ**一つも置かない**。
+`cosign` が無ければ**降ろすことを断る** —— 「あれば検める」にすると、
+無い機体では黙って素通りになる。どうしても急ぐときの抜け道は
+`--insecure-skip-signature`（長く醜い名にしてある）。
+
+手で検めるなら:
+
+```bash
+cosign verify-blob \
+  --bundle SHA256SUMS.cosign.bundle \
+  --certificate-identity-regexp '^https://github\.com/sousuke0422/honden/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+> **身元の指定を省いてはならない。** 省くと *Sigstore で署名された物なら誰の物でも通る* ——
+> 誰でも自分の workflow で署名できるので、それは検めになっていない。
+> 「署名がある」は「我らが署名した」ではない。
+> 札（`refs/tags/`）に縛るのも同じ理由で、枝から走らせた物を認めれば、
+> 枝へ書ける者が通る署名を作れてしまう。
+
+cosign は v3 以上。`HONDEN_COSIGN` で別の場所を指せる。
 
 札（`v0.2.0` の形）を打つと GitHub Actions が三つの土地
 （linux-x64 / linux-arm64 / darwin-arm64）で建てて出す。

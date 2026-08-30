@@ -35,6 +35,9 @@ setup() {
   stub tmux 0 "tmux 3.4"
   stub flock 0 ""
   stub git 0 ""
+  stub cosign 0 "Verified OK"   # 既定は「署名は我らの物」
+  # 束も配る（署名の検めが降ろしに行く）
+  printf 'にせの束' > "$SERVE/SHA256SUMS.cosign.bundle"
 }
 
 # uname の贋物。土地を linux/x86_64 に固定する。
@@ -147,4 +150,66 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
   run bash "$FAKE/scripts/first_setup.sh" --fetch --yes
   run cat "$FAKE/config/settings.yaml"
   assert_output --partial "手で直した"
+}
+
+# ── 署名 ────────────────────────────────────────────────────────────
+
+@test "署名が通れば、そう言うて置く" {
+  run_fetch
+  assert_output --partial "署名は我らの物である"
+  [ -x "$FAKE/bin/honden" ]
+}
+
+@test "**縛りを渡しておるか**（身元と発行者の両方）" {
+  run_fetch
+  run bash -c "grep '^cosign' '$CALLS'"
+  assert_output --partial "verify-blob"
+  assert_output --partial "--certificate-identity-regexp"
+  assert_output --partial "workflows/release\\.yml@refs/tags/"
+  assert_output --partial "--certificate-oidc-issuer"
+  assert_output --partial "token.actions.githubusercontent.com"
+}
+
+@test "**署名が通らねば一つも置かぬ**" {
+  stub cosign 1 "error: none of the entries could be verified"
+  run_fetch
+  assert_failure
+  assert_output --partial "署名が我らの物と認められなんだ"
+  for b in honden honden-bot honden-watch honden-parse; do
+    [ ! -e "$FAKE/bin/$b" ]
+  done
+}
+
+@test "cosign が無ければ断る（「あれば検める」にせぬ）" {
+  # 手元に本物の cosign が在ることがある。**消すのではなく、指す先を変える**
+  HONDEN_COSIGN=/nonexistent/cosign run_fetch
+  assert_failure
+  assert_output --partial "検められぬ物は置かぬ"
+  assert_output --partial "insecure-skip-signature"
+  [ ! -e "$FAKE/bin/honden" ]
+}
+
+@test "束が降りてこねば止まる（無い署名を通さぬ）" {
+  rm "$SERVE/SHA256SUMS.cosign.bundle"
+  run_fetch
+  assert_failure
+  assert_output --partial "署名の束を降ろせなんだ"
+  [ ! -e "$FAKE/bin/honden" ]
+}
+
+@test "旗を明示すれば飛ばすが、必ず警める" {
+  export HONDEN_COSIGN=/nonexistent/cosign
+  run bash "$FAKE/scripts/first_setup.sh" --fetch --yes --insecure-skip-signature
+  assert_output --partial "署名を検めずに降ろす"
+  assert_output --partial "**署名は検めておらぬ**"
+  [ -x "$FAKE/bin/honden" ]
+}
+
+@test "旗を飛ばしても、数の検めは残る（守りを二つとも外さぬ）" {
+  export HONDEN_COSIGN=/nonexistent/cosign
+  printf 'すり替えられた中身' > "$SERVE/honden-watch-linux-x64"
+  run bash "$FAKE/scripts/first_setup.sh" --fetch --yes --insecure-skip-signature
+  assert_failure
+  assert_output --partial "検めを通らなんだ"
+  [ ! -e "$FAKE/bin/honden" ]
 }

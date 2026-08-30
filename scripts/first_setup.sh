@@ -32,12 +32,17 @@ REPO="sousuke0422/honden"
 SETTINGS="$ROOT/config/settings.yaml"
 EXAMPLE="$ROOT/config/settings.yaml.example"
 DB="${HONDEN_DB:-$HOME/.honden/honden.db}"
+# 署名を検める道具。**一箇所で決める**——試験が贋物へ差し替えられるように
+# するためと、道が散って一つだけ別の物を指すのを防ぐため（HONDEN_BIN と同じ流儀）。
+COSIGN="${HONDEN_COSIGN:-cosign}"
 
 ASSUME_YES=0
+SKIP_SIG=0
 MODE=""          # fetch | build。空なら訊く
 for a in "$@"; do
   case "$a" in
     --yes|-y)  ASSUME_YES=1 ;;
+    --insecure-skip-signature) SKIP_SIG=1 ;;
     --fetch)   MODE=fetch ;;
     --build)   MODE=build ;;
     -h|--help)
@@ -49,6 +54,10 @@ for a in "$@"; do
       --fetch  本体を出し物から降ろす（curl だけあればよい）
       --build  本体を手元で建てる（Bun と Rust が要る）
       --yes    断りを省く（道具の導入にも同意したものとする）
+
+      --insecure-skip-signature
+               署名を検めずに降ろす。**勧めぬ**——数は壊れと途中切れしか
+               守らぬゆえ、出し物そのものが差し替えられておっても気づけぬ
 
   何も付けねば、その都度訊く。
 USAGE
@@ -223,6 +232,32 @@ else
 
     base="https://github.com/$REPO/releases/download/$TAG"
     curl -fsSL -o "$TMPD/SHA256SUMS" "$base/SHA256SUMS" || die "数の紙を降ろせなんだ"
+
+    # ── 署名を先に検める。**紙を縛れば、紙が縛る全部が縛られる** ──
+    #
+    #     署名 → SHA256SUMS → 各 binary
+    #
+    # 縛るのは「誰が署名したか」である。身元の指定を省いて cosign を走らせると
+    # *Sigstore で署名された物なら誰の物でも通る*——誰でも自分の workflow で
+    # 署名できるゆえ、それは検めになっておらぬ。
+    if [ "$SKIP_SIG" = 1 ]; then
+      warn "署名を検めずに降ろす（--insecure-skip-signature）。**数は壊れと途中切れしか守らぬ**"
+    elif ! have "$COSIGN"; then
+      die "署名を検める道具が無い（cosign）。**検められぬ物は置かぬ。**
+      入れる: https://docs.sigstore.dev/cosign/system_config/installation/
+      どうしても急ぐなら --insecure-skip-signature"
+    else
+      curl -fsSL -o "$TMPD/SHA256SUMS.cosign.bundle" "$base/SHA256SUMS.cosign.bundle" \
+        || die "署名の束を降ろせなんだ。**一つも置いておらぬ**"
+      "$COSIGN" verify-blob \
+        --bundle "$TMPD/SHA256SUMS.cosign.bundle" \
+        --certificate-identity-regexp "^https://github\.com/$REPO/\.github/workflows/release\.yml@refs/tags/" \
+        --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+        "$TMPD/SHA256SUMS" >/dev/null 2>&1 \
+        || die "署名が我らの物と認められなんだ。**一つも置いておらぬ**"
+      ok "署名は我らの物である（Sigstore keyless）"
+    fi
+
     for b in "${BINS[@]}"; do
       curl -fsSL -o "$TMPD/$b-$OS-$ARCH" "$base/$b-$OS-$ARCH" || die "$b を降ろせなんだ"
     done
@@ -251,7 +286,8 @@ else
       mv -f "$TMPD/$b-$OS-$ARCH" "$ROOT/bin/$b"
     done
     ok "$TAG を置いた"
-    note "本体: 降ろした（$TAG）"
+    if [ "$SKIP_SIG" = 1 ]; then note "本体: 降ろした（$TAG・**署名は検めておらぬ**）"
+    else note "本体: 降ろした（$TAG・署名検証済み）"; fi
   fi
 fi
 
