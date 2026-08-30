@@ -36,5 +36,17 @@ jobs:
       - run: bun test
       - run: bats tests/
 
+      # **よその土地でも建つかを、出す前に見る。**
+      #
+      # `char` は x86_64 では符号つき、aarch64 では符号なし——`*const i8` と
+      # 直に書いた一行が arm64 でだけ建たなかった（v0.1.0-rc.1 の建てで露見）。
+      # 出す段の matrix でしか見えぬのでは、札を打った後に直すことになる。
+      # `check` なら std だけで足り、linker も要らぬ。
+      - name: よその土地でも建つか（arm64）
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          cargo check --target aarch64-unknown-linux-gnu --manifest-path core/watch/Cargo.toml
+          cargo check --target aarch64-unknown-linux-gnu --manifest-path core/guard/Cargo.toml
+
       - name: 出陣の書は bash として通るか
         run: bash -n scripts/shutsujin.sh shutsujin_departure.sh scripts/first_setup.sh

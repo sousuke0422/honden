@@ -3,6 +3,7 @@
 //! crate を足さずに済ませるため、要る syscall だけ自前で宣言する。
 //! ここが unsafe の全部で、他の場所には一切置かない。
 
+use core::ffi::{c_char, c_ulong};
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
@@ -23,13 +24,22 @@ const IN_CLOEXEC: i32 = 0o2000000;
 pub const LOCK_EX: i32 = 2;
 pub const LOCK_NB: i32 = 4;
 
+// **土地で幅が変わる型を、数で書かぬ。**
+//
+// `char` は x86_64 では符号つき（i8）だが、aarch64 では符号なし（u8）である。
+// `*const i8` と直に書いておったため、arm64 で建たなかった——
+// 初めての札 v0.1.0-rc.1 の建てで露見した（2026-08-30）。手元は x86_64 ゆえ
+// 一度も見えず、**三つの土地で建てる仕掛けが初めて暴いた**。
+//
+// `nfds_t` も同じ理由で `c_ulong` にする。我らの土地では u64 と同じだが、
+// 「たまたま合うておる」を「合わせてある」に変えておく。
 extern "C" {
     fn inotify_init1(flags: i32) -> i32;
     fn flock(fd: i32, operation: i32) -> i32;
-    fn inotify_add_watch(fd: i32, pathname: *const i8, mask: u32) -> i32;
+    fn inotify_add_watch(fd: i32, pathname: *const c_char, mask: u32) -> i32;
     fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
     fn close(fd: i32) -> i32;
-    fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
+    fn poll(fds: *mut PollFd, nfds: c_ulong, timeout: i32) -> i32;
 }
 
 #[repr(C)]
