@@ -102,3 +102,22 @@ describe('heredoc は貰い手で分ける', () => {
     expect(deny("bash <<'EOF'\nrm -rf /\nEOF\n")).toBe(true);
   });
 });
+
+describe('日常の往来を止めぬ（実物 14,131 通りで測った形）', () => {
+  // 一巡目でこれらを拒んでおった。**畳めるものを畳まずに拒むのは、
+  // 門ではなくただの障害物である。**
+  const daily = [
+    'comm -12 <(sort a) <(sort b)',   // プロセス置換——17 件を拒んでおった
+    'diff <(ls x) <(ls y)',
+    '[[ -n "$X" ]] && echo ok',       // 条件式
+    '[[ -f a && -d b ]]',
+  ];
+  for (const cmd of daily) {
+    test(`通す: ${cmd}`, () => expect(deny(cmd)).toBe(false));
+  }
+
+  test('されど置換の中の危うい命は止める', () => {
+    expect(deny('comm -12 <(rm -rf /) <(ls)')).toBe(true);
+    expect(deny('[[ -n $(rm -rf /) ]]')).toBe(true);
+  });
+});

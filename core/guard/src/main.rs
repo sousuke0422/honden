@@ -200,9 +200,14 @@ fn handle_item(
             Ok(f) => argv.push(f),
             Err(e) => out.unhandled.push(e),
         },
-        // `<(…)` の中身は別の命である。畳まずに「見落とした」と言う。
-        ast::CommandPrefixOrSuffixItem::ProcessSubstitution(_, _) => {
-            out.unhandled.push("プロセス置換 <(…) の中身は畳んでおらぬ".into());
+        // `<(…)` の中身は別の命である。**畳む。**
+        //
+        // 当初は「見落とした」として拒んでおったが、実物 14,120 通りで測ると
+        // 拒みの半数近くがこれであった（`comm <(a) <(b)` / `diff <(x) <(y)` は
+        // 日常の往来である・2026-08-30）。畳めるものを畳まずに拒むのは、
+        // 門ではなくただの障害物である。
+        ast::CommandPrefixOrSuffixItem::ProcessSubstitution(_, sub) => {
+            walk_list(&sub.list, out, opts);
         }
     }
 }
@@ -240,10 +245,39 @@ fn walk_command(c: &ast::Command, out: &mut Extract, opts: &brush_parser::Parser
         }
         // 関数の定義そのものは命を走らせぬが、中身は後で呼ばれる。畳んでおく。
         ast::Command::Function(f) => walk_compound(&f.body.0, out, opts),
-        // `[[ … ]]` は命を走らせぬ（bash の条件式）。畳めぬが害も無い——
-        // ただし**黙って捨てぬ**。見落としとして数える。
-        ast::Command::ExtendedTest(_, _) => {
-            out.unhandled.push("拡張テスト [[ … ]] は畳んでおらぬ".into());
+        // `[[ … ]]` は bash の条件式であり、**命は走らぬ**。
+        //
+        // ただし中の語は展開される——`[[ -n $(cmd) ]]` の `cmd` は走る。
+        // ゆえに語だけを解いて置換を拾い、命令位置には入れぬ。
+        // 畳めぬと言うて拒めば、日常の条件式が全て止まる（実測で一件出た）。
+        ast::Command::ExtendedTest(e, _) => walk_ext_test(&e.expr, out, opts),
+    }
+}
+
+/// `[[ … ]]` の中の語を歩く。**命は走らぬが、語は展開される。**
+/// 置換（`$(…)`）を拾うのが目当てで、命令位置へは何も足さぬ。
+fn walk_ext_test(
+    e: &ast::ExtendedTestExpr,
+    out: &mut Extract,
+    opts: &brush_parser::ParserOptions,
+) {
+    let mut look = |w: &ast::Word| {
+        if let Err(err) = word_facts(&w.value, opts) {
+            out.unhandled.push(err);
+        }
+    };
+    match e {
+        ast::ExtendedTestExpr::And(a, b) | ast::ExtendedTestExpr::Or(a, b) => {
+            walk_ext_test(a, out, opts);
+            walk_ext_test(b, out, opts);
+        }
+        ast::ExtendedTestExpr::Not(a) | ast::ExtendedTestExpr::Parenthesized(a) => {
+            walk_ext_test(a, out, opts)
+        }
+        ast::ExtendedTestExpr::UnaryTest(_, w) => look(w),
+        ast::ExtendedTestExpr::BinaryTest(_, a, b) => {
+            look(a);
+            look(b);
         }
     }
 }
