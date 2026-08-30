@@ -30,6 +30,22 @@ run_viewer() { run bash "$ROOT/shutsujin_departure.sh" viewer; }
   refute_output --partial "new-window"
 }
 
+@test "贋の curl が、我らの印を返す（**計器そのものの検め**）" {
+  # 手元では通り、CI では落ちた（v0.1.0-rc.1・47 と 50 のみ）。二つの落ちは
+  # 互いに矛盾しており、贋物そのものを疑う要が出た。
+  #
+  # **計器が生きておるかを、計器で測る。** ここが落ちれば贋物の作りが悪く、
+  # ここが通って窓の検めが落ちるなら、悪いのは書のほうである。
+  stub_curl alive
+  run bash -c "command -v curl"
+  assert_output --partial "$STUB/curl"
+  run bash -c "curl -sf --noproxy '*' -m 2 -o /dev/null -D - 'http://127.0.0.1:8788/api/version' 2>/dev/null"
+  assert_success
+  assert_output --partial "X-Honden"
+  run bash -c "curl -sf --noproxy '*' -m 2 -o /dev/null -D - 'http://127.0.0.1:8788/api/version' 2>/dev/null | grep -qi '^x-honden:'"
+  assert_success
+}
+
 @test "我らが既に応えておれば、それでよい" {
   stub_curl alive
   run_viewer
