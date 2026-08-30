@@ -162,9 +162,22 @@ jobs:
       # **版を固定する。** 束の形は版で変わる——v3 が書く束は v2 では素で
       # 読めぬ。出す側が黙って上がると、降ろす側の下限（MIN_COSIGN）と
       # いつか食い違う。動く版を書いておき、上げる時は下限も一緒に見る。
-      - uses: sigstore/cosign-installer@v3
+      #
+      # **入れる側も揃えねばならぬ。** installer@v3 に v3.1.3 を頼んだところ
+      # `cosign-linux-amd64.sig` を取りに行って 404 で倒れた——cosign v3 は
+      # 検め物を `.sigstore.json` へ改めており、古い installer はまだ `.sig` を
+      # 探す（実測 2026-08-30）。**新しい物を古い道具に頼むと、道具のほうが
+      # 折れる。** installer は v4 を使う。
+      - uses: sigstore/cosign-installer@v4
         with:
           cosign-release: 'v3.1.3'
+
+      - name: 入った版を確かめる（下限は MIN_COSIGN と揃えてある）
+        run: |
+          set -euo pipefail
+          v=$(cosign version --json | grep -o '"gitVersion"[^,]*' | cut -d'"' -f4)
+          echo "cosign $v"
+          case "$v" in v3.*|v4.*) ;; *) echo "::error::v3 未満では我らの束を書けぬ（$v）"; exit 1 ;; esac
 
       - name: SHA256SUMS へ署名する
         run: |
