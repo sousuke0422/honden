@@ -92,9 +92,12 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { runner: ubuntu-latest,   os: linux,  arch: x64 }
-          - { runner: ubuntu-24.04-arm, os: linux,  arch: arm64 }
-          - { runner: macos-14,        os: darwin, arch: arm64 }
+          - { runner: ubuntu-latest,    os: linux, arch: x64 }
+          - { runner: ubuntu-24.04-arm, os: linux, arch: arm64 }
+          # **macOS は配らぬ。** 芯（honden-watch）は inotify 一本で建てて
+          # あり、`oal/mod.rs` は Linux にしか Native を持たぬ。kqueue の
+          # 実装は別の普請である。配れぬ物を配ると言わぬ（v0.1.0-rc.1 の
+          # 建てで露見・2026-08-30）。
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -142,11 +145,11 @@ jobs:
           echo "── 出す物 ──"
           cat SHA256SUMS
 
-      - name: 揃うておるか（三つの土地 × 四本）
+      - name: 揃うておるか（二つの土地 × 四本）
         run: |
           set -euo pipefail
           n=$(grep -c . all/SHA256SUMS)
-          [ "$n" -eq 12 ] || { echo "::error::12 本のはずが $n 本しか無い"; exit 1; }
+          [ "$n" -eq 8 ] || { echo "::error::8 本のはずが $n 本しか無い"; exit 1; }
 
       # ── 署名する。**鍵は作らぬ（Sigstore keyless）** ──
       #

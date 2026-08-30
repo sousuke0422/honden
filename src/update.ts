@@ -15,14 +15,15 @@
  *
  *   一、**出所を固定する。** `REPO` 以外からは取らぬ。人が道を渡せる
  *       口を作らぬ——作れば、いつか誰かがそこへ別の道を書く。
- *   二、**数を照らす。** 一緒に配る `SHA256SUMS` と照らし、違えば置かぬ。
- *   三、**置く前に全部揃える。** 一つでも欠けたり違ったりすれば**一つも
+ *   二、**署名を検める。** `SHA256SUMS` は cosign keyless で署名してある
+ *       （`sign.ts`）。縛るのは「誰が署名したか」——札から走った我らの
+ *       release.yml だけを認める。
+ *   三、**数を照らす。** 署名の通った `SHA256SUMS` と照らし、違えば置かぬ。
+ *   四、**置く前に全部揃える。** 一つでも欠けたり違ったりすれば**一つも
  *       置かぬ**。半分だけ新しい `bin/` は、どちらの版とも違う物になる。
  *
- * 数の照らしが守るのは**壊れと途中切れ**までである。出す側そのものが
- * 乗っ取られた場合、数も一緒に書き換えられる——署名が要る。それは
- * まだ無いゆえ、手引きにもそう書く。**守れておらぬ物を守れておると
- * 書かぬ**ことが、いまできる一番のことである。
+ * 鎖はこの順で繋がる: 署名 → SHA256SUMS → 各 binary。
+ * 紙を縛れば、紙が縛る全部が縛られる。
  *
  * # 置き換えであって、上書きではない
  *
@@ -39,8 +40,15 @@ export type BinaryName = (typeof BINARIES)[number];
 /** 数を並べた紙の名。 */
 export const SUMS = 'SHA256SUMS';
 
+/**
+ * 配っておる土地。
+ *
+ * **macOS は無い。** 芯（honden-watch）は inotify 一本で建ててあり、
+ * Linux にしか実装を持たぬ。kqueue は別の普請である——「配っておらぬ」と
+ * 正直に言うほうが、404 を掴ませるより親切である。
+ */
 export interface Platform {
-  os: 'linux' | 'darwin';
+  os: 'linux';
   arch: 'x64' | 'arm64';
 }
 
@@ -51,10 +59,10 @@ export interface Platform {
  * 中途半端に動く。「配っておらぬ」と言うほうが親切である。
  */
 export function platformOf(p: { platform: string; arch: string }): Platform | null {
-  const os = p.platform === 'linux' ? 'linux' : p.platform === 'darwin' ? 'darwin' : null;
+  if (p.platform !== 'linux') return null;
   const arch = p.arch === 'x64' ? 'x64' : p.arch === 'arm64' ? 'arm64' : null;
-  if (!os || !arch) return null;
-  return { os, arch };
+  if (!arch) return null;
+  return { os: 'linux', arch };
 }
 
 /** 配り物の名。`honden-linux-x64` の形。 */

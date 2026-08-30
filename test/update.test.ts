@@ -132,9 +132,14 @@ describe('tagFrom', () => {
 });
 
 describe('土地', () => {
-  test('分かる土地', () => {
+  test('配っておる土地', () => {
     expect(platformOf({ platform: 'linux', arch: 'x64' })).toEqual({ os: 'linux', arch: 'x64' });
-    expect(platformOf({ platform: 'darwin', arch: 'arm64' })).toEqual({ os: 'darwin', arch: 'arm64' });
+    expect(platformOf({ platform: 'linux', arch: 'arm64' })).toEqual({ os: 'linux', arch: 'arm64' });
+  });
+
+  test('**macOS は配っておらぬ**（芯は inotify 一本ゆえ建たぬ）', () => {
+    // 「配っておらぬ」と言うほうが、404 を掴ませるより親切である
+    expect(platformOf({ platform: 'darwin', arch: 'arm64' })).toBeNull();
   });
 
   test('**知らぬ土地には当て推量で渡さぬ**', () => {

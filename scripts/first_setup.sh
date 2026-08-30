@@ -304,7 +304,12 @@ else
   else
     # ── 降ろす。**数を照らし、四本揃って初めて置く** ──
     have curl || die "curl が無い。降ろせぬ"
-    case "$(uname -s)" in Linux) OS=linux ;; Darwin) OS=darwin ;; *) die "この土地向けは配っておらぬ。--build で建てられよ" ;; esac
+    # **macOS は配っておらぬ。** 芯は inotify 一本ゆえ Linux でしか建たぬ。
+    case "$(uname -s)" in
+      Linux) OS=linux ;;
+      Darwin) die "macOS 向けは配っておらぬ（芯は inotify 一本ゆえ建たぬ）。" ;;
+      *) die "この土地向けは配っておらぬ。--build で建てられよ" ;;
+    esac
     case "$(uname -m)" in x86_64|amd64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) die "$(uname -m) 向けは配っておらぬ。--build で建てられよ" ;; esac
     info "土地: $OS-$ARCH"
 
