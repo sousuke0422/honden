@@ -129,3 +129,35 @@ run_viewer() { run bash "$ROOT/shutsujin_departure.sh" viewer; }
   called_with tmux "止めよとの合図"
   called_with tmux "五度倒れた"
 }
+
+@test "道に単引用符があっても命が壊れぬ（%q で包む）" {
+  # 単引用符で括ると、道に ' があった時に破れる（Issue #8）。
+  run bash -c "grep -q \"qhonden=\\\$(printf '%q'\" '$ROOT/scripts/shutsujin.sh' && echo ok"
+  assert_output "ok"
+  # 生の単引用符括りが残っておらぬこと
+  run bash -c "grep -c \"HONDEN_DB='\\\$DB' '\\\$ROOT/bin/honden' dashboard\" '$ROOT/scripts/shutsujin.sh' || true"
+  assert_output "0"
+}
+
+@test "外へ開いた時の断りは、出陣を打った者の目の前に出る" {
+  stub_curl alive
+  HONDEN_DASHBOARD_HOST=0.0.0.0 run_viewer
+  # 窓の中でなく、ここに出ねば誰も読まぬ
+  assert_output --partial "外へ開いておる"
+}
+
+@test "己の内なら断りを出さぬ（常道を騒がせぬ）" {
+  stub_curl alive
+  run_viewer
+  refute_output --partial "外へ開いておる"
+}
+
+@test "下見は一度きりで判ぜぬ（冷えた土地で偽の応えぬを出さぬ）" {
+  run bash -c "grep -q 'for i in 1 2 3 4 5; do' '$ROOT/scripts/shutsujin.sh' && echo ok"
+  assert_output "ok"
+}
+
+@test "中の書は己で構えを取る（exec bash は SHELLOPTS を渡さぬ）" {
+  run bash -c "grep -q '^set -uo pipefail' '$ROOT/scripts/shutsujin.sh' && echo ok"
+  assert_output "ok"
+}
