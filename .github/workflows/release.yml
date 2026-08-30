@@ -69,12 +69,19 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with: { bun-version: latest }
+      # 門の試験は本物の解析器を呼ぶゆえ、Rust も要る
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: 道具を入れる（bats に tmux が要る）
         run: sudo apt-get update && sudo apt-get install -y tmux bats
 
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+
+      # **試験より先に建てる。** bin/ は追跡しておらぬゆえ、建てねば
+      # CI には一本も無い（初めての札 v0.1.0-rc.1 がここで止まった）。
+      - run: bun run build:all
+
       - run: bun test
       - run: bats tests/
 

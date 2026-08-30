@@ -26,10 +26,14 @@ jobs:
 
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
 
-      # 門の解析器は bats より先に建てる——`guard selftest` が呼ぶゆえ。
+      # **試験より先に建てる。** 門の試験は本物の解析器（bin/honden-parse）を
+      # 呼ぶ。bin/ は追跡しておらぬゆえ、建てねば CI には一本も無い——
+      # 手元では古い物が居座っており、それで通っておった（実測 2026-08-30・
+      # 初めての札 v0.1.0-rc.1 が門で止まった）。
       - run: bun run build:all
+
+      - run: bun test
       - run: bats tests/
 
       - name: 出陣の書は bash として通るか
