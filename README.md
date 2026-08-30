@@ -284,6 +284,11 @@ sha256sum -c SHA256SUMS
 honden は**版まで見て**、古ければ告げて止まる（版が読めない時も止まる）。
 黙って素通りにはしない。`HONDEN_COSIGN` で別の場所を指せる。
 
+仕度が cosign を入れるときは、**Linux でも brew を先に試す** —— brew は上流に
+近く、土地の archive は古いことがあるため。土台の道具（tmux・git の類）は逆で、
+土地の手を先に試す（brew は `/home/linuxbrew` に入り、土地の物を覆い隠すので）。
+順は `bash scripts/first_setup.sh --pkg-order` で見られる。
+
 #### 使う側にも cosign が要るのか
 
 **降ろすなら要る。建てるなら要らない。**

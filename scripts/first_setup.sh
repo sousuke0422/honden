@@ -38,11 +38,13 @@ COSIGN="${HONDEN_COSIGN:-cosign}"
 
 ASSUME_YES=0
 SKIP_SIG=0
+PKG_ORDER_ONLY=0
 MODE=""          # fetch | build。空なら訊く
 for a in "$@"; do
   case "$a" in
     --yes|-y)  ASSUME_YES=1 ;;
     --insecure-skip-signature) SKIP_SIG=1 ;;
+    --pkg-order) PKG_ORDER_ONLY=1 ;;
     --fetch)   MODE=fetch ;;
     --build)   MODE=build ;;
     -h|--help)
@@ -58,6 +60,9 @@ for a in "$@"; do
       --insecure-skip-signature
                署名を検めずに降ろす。**勧めぬ**——数は壊れと途中切れしか
                守らぬゆえ、出し物そのものが差し替えられておっても気づけぬ
+
+      --pkg-order
+               道具を入れる手の順を見せて退く（何も入れぬ）
 
   何も付けねば、その都度訊く。
 USAGE
@@ -87,6 +92,24 @@ ask() {
 }
 
 have(){ command -v "$1" >/dev/null 2>&1; }
+
+# どの手を、どの順で試すか。**問える形にしておく**——
+# 順は品ごとに違い、しかも外からは見えぬ。`--pkg-order` で覗ける。
+pkg_order() {
+  case "${1:-}" in
+    brew) echo "brew apt dnf" ;;
+    dnf)  echo "dnf apt brew" ;;
+    *)    echo "apt brew dnf" ;;   # 既定は土地の手が先
+  esac
+}
+
+# 順を訊かれただけなら、答えて退く（試験と、人が確かめるため）
+if [ "$PKG_ORDER_ONLY" = 1 ]; then
+  echo "既定:   $(pkg_order)"
+  echo "cosign: $(pkg_order brew)"
+  exit 0
+fi
+
 
 echo ""
 echo "$(c '1;33' '  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓')"
@@ -121,21 +144,45 @@ step "二、要る道具"
 
 # 入れ方は土地で違う。**知らぬ土地では入れ方を推さぬ**——
 # 当てずっぽうの命令を走らせるより、何が要るかだけ告げるほうが安全である。
+# 一つだけ入れる。品ごとに好みの手を先へ回せる。
+#   pkg_install <品> [先に試す手]
+#
+# **好みが要る訳。** 土台の道具（tmux・git の類）は土地の手で入れるのが
+# 筋である——brew は /home/linuxbrew に入り、土地の物を覆い隠す。
+#
+# だが cosign は違う。**土地の archive は古い**——Ubuntu 26.04 が配るのは
+# 2.6.2 で、我らの束は v3 でなければ読めぬ（殿の実測 2026-08-31）。
+# brew は上流に近いゆえ、cosign に限っては Linux でも brew を先に試す。
+#
+# 入れた後に版を検める段は残す。好みは当たる率を上げるだけで、
+# **守りではない**——古い物が入れば、その先で止まる。
 pkg_install() {
-  local what="$1"
-  if have apt-get; then
-    ask "$what を apt で入れてよいか（sudo を使う）" || return 1
-    sudo apt-get update && sudo apt-get install -y "$what"
-  elif have brew; then
-    ask "$what を brew で入れてよいか" || return 1
-    brew install "$what"
-  elif have dnf; then
-    ask "$what を dnf で入れてよいか（sudo を使う）" || return 1
-    sudo dnf install -y "$what"
-  else
-    warn "入れ方が分からぬ。$what を手で入れられよ"
-    return 1
-  fi
+  local what="$1" prefer="${2:-}"
+  local order
+  order=$(pkg_order "$prefer")
+
+  local m
+  for m in $order; do
+    case "$m" in
+      apt)
+        have apt-get || continue
+        ask "$what を apt で入れてよいか（sudo を使う）" || return 1
+        sudo apt-get update && sudo apt-get install -y "$what" && return 0
+        ;;
+      brew)
+        have brew || continue
+        ask "$what を brew で入れてよいか" || return 1
+        brew install "$what" && return 0
+        ;;
+      dnf)
+        have dnf || continue
+        ask "$what を dnf で入れてよいか（sudo を使う）" || return 1
+        sudo dnf install -y "$what" && return 0
+        ;;
+    esac
+  done
+  warn "入れ方が分からぬ。$what を手で入れられよ"
+  return 1
 }
 
 MISSING=0
@@ -246,7 +293,8 @@ else
       # 断る前に、入れてよいか訊く。tmux や curl と同じ扱いである——
       # brew にも apt にも在ることが多い（殿の実測 2026-08-31）。
       warn "署名を検める道具が無い（cosign）"
-      pkg_install cosign >/dev/null 2>&1 || true
+      # **brew を先に試す。** 土地の archive は古いことがある（上の覚え書き）
+      pkg_install cosign brew >/dev/null 2>&1 || true
       if have "$COSIGN"; then
         ok "cosign が入った"
       else

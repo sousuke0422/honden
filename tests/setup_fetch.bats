@@ -236,6 +236,27 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
   [ "$a" -lt "$b" ]
 }
 
+@test "**cosign は brew を先に試す**（土地の archive は古いことがある）" {
+  # 両方あるとき、どちらへ行くか。cosign は上流に近いほうを採る
+  stub apt-get 0 ""
+  stub brew 0 ""
+  stub sudo 0 ""
+  HONDEN_COSIGN=/nonexistent/cosign run_fetch || true
+  # 先に呼ばれたほうが上に来る
+  run bash -c "grep -n -e '^brew' -e '^apt-get' '$CALLS' | head -1"
+  assert_output --partial "brew"
+}
+
+@test "土台の道具は土地の手を先に試す（brew に寄せぬ）" {
+  # 土台の道具は本物が在るゆえ、その枝は踏めぬ。**順そのものを問う。**
+  # brew は /home/linuxbrew に入り土地の物を覆い隠すゆえ、tmux や git まで
+  # 寄せるのは筋が違う——cosign だけが例外である。
+  run bash "$FAKE/scripts/first_setup.sh" --pkg-order
+  assert_success
+  assert_line --index 0 --partial "既定:   apt brew dnf"
+  assert_line --index 1 --partial "cosign: brew apt dnf"
+}
+
 @test "**v2 の cosign では断る**（素の apt が配るのはこちらのことがある）" {
   fake_cosign v2.6.2 0
   run_fetch
