@@ -13,6 +13,8 @@ import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
 import { realRunner as parseRunner } from './parse';
+import { pending as notifyPending, dispatch as notifyDispatch, type Sink } from './notify';
+import { desktopSink } from './notify/desktop';
 
 /**
  * 己の在処から repo の根を割り出す。構文の解き手（bin/honden-parse）を
@@ -1871,6 +1873,32 @@ export async function main(argv: string[]): Promise<number> {
       return emit(runProjectsSync(dbPath, f));
     }
     return emit(runProjectsShow(dbPath));
+  }
+
+  if (rest[0] === 'notify') {
+    const r = readingStore(() => {
+      const db = openStore({ path: dbPath, create: false });
+      const port = Number(flags['port'] ?? DASHBOARD_PORT) || DASHBOARD_PORT;
+      const notices = notifyPending(db, `http://${LOOPBACK}:${port}/`);
+      if (notices.length === 0) return '  報せる事は無い（裁可待ちは全て報せ済み）。';
+
+      // 送り口。今は卓上のみ。ntfy はいずれ足す（殿の申し出 2026-08-30）ゆえ、
+      // 芯（src/notify.ts）は送り口を知らぬ作りにしてある。
+      const sinks: Sink[] = [desktopSink()];
+
+      if (flags['dry-run'] === 'true') {
+        return [`  [dry-run] ${notices.length} 件を撃つ所まで来ておる:`]
+          .concat(notices.map((n) => `    ${n.body}`))
+          .join('\n');
+      }
+
+      const res = notifyDispatch(db, notices, sinks);
+      const lines = [`  ${res.sent} 件を撃った。`];
+      // **届かなんだ物は黙らせぬ。** 見張りの沈黙は健全に見えるゆえ。
+      for (const f of res.failed) lines.push(`  ▲ ${f.sink} へ届かず（${f.key}）: ${f.detail ?? ''}`);
+      return lines.join('\n');
+    });
+    return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
   }
 
   if (rest[0] === 'paths') {
