@@ -284,8 +284,10 @@ cosign は v3 以上。`HONDEN_COSIGN` で別の場所を指せる。
 | `first_setup.sh --fetch` | 要る | 出来上がった binary を置くので |
 | `honden update` | 要る | 同上 |
 
-初回の仕度でも同じく効く。cosign が無ければ `--fetch` は**断る** ——
-ただし断り文はまず `--build` を勧める。そちらは cosign を一切要さず、
+初回の仕度でも同じく効く。cosign が無ければ、仕度はまず
+**入れてよいかを訊く**（`brew` / `apt` / `dnf`。tmux や curl と同じ扱い）。
+断られるか、入れられなければ `--fetch` は**断る** ——
+その断り文はまず `--build` を勧める。そちらは cosign を一切要さず、
 しかも**より確かである**（clone した source そのものから建てるので、
 出し物を信じる必要すらない）。
 
@@ -342,7 +344,7 @@ alpha が降ってくることはない。試すときは手で降ろす。
 | 門に止められた | `honden guard appeal`。同じ紋様が続くなら `honden guard denials` で誤検知を疑う |
 | 正本を壊した | `~/.honden/backups` に出陣ごとの写しがある |
 | 降ろした物が検めを通らない | **一つも置かれていない**。網の途中か、出し物が壊れている。`--build` で建てる手もある |
-| cosign が無いと言われる | `--build` なら要らない（何も降ろさないので）。降ろしたいなら cosign v3 以上を入れる |
+| cosign が無いと言われる | 仕度は「入れてよいか」を先に訊く（brew / apt / dnf）。断れば `--build` を勧める —— そちらは cosign が要らない |
 
 `bun test`（単体）と `bats tests/`（出陣の書）で確かめられる。
 

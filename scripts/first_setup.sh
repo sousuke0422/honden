@@ -243,13 +243,22 @@ else
     if [ "$SKIP_SIG" = 1 ]; then
       warn "署名を検めずに降ろす（--insecure-skip-signature）。**数は壊れと途中切れしか守らぬ**"
     elif ! have "$COSIGN"; then
-      # **安全な道を先に示す。** 「入れる」か「飛ばす」の二択にすると急ぐ者は
-      # 飛ばす。--build は cosign を一切要さぬ——降ろす物が無いゆえ検める物も無い。
-      die "署名を検める道具が無い（cosign）。**検められぬ物は置かぬ。**
+      # 断る前に、入れてよいか訊く。tmux や curl と同じ扱いである——
+      # brew にも apt にも在ることが多い（殿の実測 2026-08-31）。
+      warn "署名を検める道具が無い（cosign）"
+      pkg_install cosign >/dev/null 2>&1 || true
+      if have "$COSIGN"; then
+        ok "cosign が入った"
+      else
+        # **安全な道を先に示す。** 「入れる」か「飛ばす」の二択にすると急ぐ者は
+        # 飛ばす。--build は cosign を一切要さぬ——降ろす物が無いゆえ検める物も無い。
+        die "署名を検められぬ。**検められぬ物は置かぬ。**
       手元で建てる: bash scripts/first_setup.sh --build（何も降ろさぬゆえ cosign は要らぬ）
       道具を入れる: https://docs.sigstore.dev/cosign/system_config/installation/
       どうしても急ぐなら --insecure-skip-signature（**勧めぬ**）"
-    else
+      fi
+    fi
+    if [ "$SKIP_SIG" != 1 ]; then
       curl -fsSL -o "$TMPD/SHA256SUMS.cosign.bundle" "$base/SHA256SUMS.cosign.bundle" \
         || die "署名の束を降ろせなんだ。**一つも置いておらぬ**"
       "$COSIGN" verify-blob \

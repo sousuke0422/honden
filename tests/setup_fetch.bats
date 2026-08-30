@@ -36,6 +36,12 @@ setup() {
   stub flock 0 ""
   stub git 0 ""
   stub cosign 0 "Verified OK"   # 既定は「署名は我らの物」
+  # **本物の導入を走らせぬ。** 試験は --yes で走るゆえ、塞がねば
+  # `sudo apt-get install` が実際に動く。贋物を道の先頭に置いて止める。
+  stub sudo 1 ""
+  stub apt-get 1 ""
+  stub brew 1 ""
+  stub dnf 1 ""
   # 束も配る（署名の検めが降ろしに行く）
   printf 'にせの束' > "$SERVE/SHA256SUMS.cosign.bundle"
 }
@@ -180,13 +186,38 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
   done
 }
 
-@test "cosign が無ければ断る（「あれば検める」にせぬ）" {
+@test "cosign が無ければ、まず入れてよいか訊く" {
+  # 贋の apt が「入った」ことにする
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "apt-get" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'exit 0'
+  } > "$STUB/apt-get"
+  chmod +x "$STUB/apt-get"
+  stub sudo 0 ""
+  run_fetch     # 本物の cosign が道に在るので「入った」ことになる
+  assert_success
+  assert_output --partial "署名は我らの物である"
+}
+
+@test "cosign が無く、入れられもせねば断る（「あれば検める」にせぬ）" {
   # 手元に本物の cosign が在ることがある。**消すのではなく、指す先を変える**
   HONDEN_COSIGN=/nonexistent/cosign run_fetch
   assert_failure
   assert_output --partial "検められぬ物は置かぬ"
   assert_output --partial "insecure-skip-signature"
   [ ! -e "$FAKE/bin/honden" ]
+}
+
+@test "**建てる道は、飛ばす旗より先に来る**（急ぐ者を危うい道へ導かぬ）" {
+  HONDEN_COSIGN=/nonexistent/cosign run_fetch
+  assert_failure
+  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/out.txt"
+  a=$(grep -n -- '--build' "$BATS_TEST_TMPDIR/out.txt" | head -1 | cut -d: -f1)
+  b=$(grep -n -- 'insecure-skip-signature' "$BATS_TEST_TMPDIR/out.txt" | head -1 | cut -d: -f1)
+  [ -n "$a" ]
+  [ -n "$b" ]
+  [ "$a" -lt "$b" ]
 }
 
 @test "束が降りてこねば止まる（無い署名を通さぬ）" {
