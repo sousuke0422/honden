@@ -6,7 +6,9 @@
     "test": "bun test",
     "honden": "bun run src/main.ts",
     "build": "bun build --compile --outfile=bin/honden src/main.ts && bun build --compile --outfile=bin/honden-bot src/botmain.ts",
-    "typecheck": "bunx tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit",
+    "build:core": "cargo build --release --manifest-path core/watch/Cargo.toml && cargo build --release --manifest-path core/guard/Cargo.toml && cp core/watch/target/release/honden-watch bin/.honden-watch.new && mv -f bin/.honden-watch.new bin/honden-watch && cp core/guard/target/release/honden-parse bin/.honden-parse.new && mv -f bin/.honden-parse.new bin/honden-parse",
+    "build:all": "bun run build && bun run build:core"
   },
   "devDependencies": {
     "@types/bun": "latest",
