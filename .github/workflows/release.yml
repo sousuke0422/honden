@@ -127,6 +127,11 @@ jobs:
   publish:
     needs: [gate, build]
     runs-on: ubuntu-latest
+    # **ここにも書く。** 工程の頭にも置いてあるが、署名は id-token が無ければ
+    # 黙って形を変えるのではなく倒れる。要る所で見えるようにしておく。
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with: { path: all, merge-multiple: true }
@@ -168,7 +173,10 @@ jobs:
       # 検め物を `.sigstore.json` へ改めており、古い installer はまだ `.sig` を
       # 探す（実測 2026-08-30）。**新しい物を古い道具に頼むと、道具のほうが
       # 折れる。** installer は v4 を使う。
-      - uses: sigstore/cosign-installer@v4
+      # **浮き札（v4）は無い。** 実在するのは v4.1.2 の類だけであった
+      # （実測 2026-08-30）。固定は版を止めるためでもあり、在る物を指す
+      # ためでもある。
+      - uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: 'v3.1.3'
 
