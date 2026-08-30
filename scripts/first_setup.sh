@@ -93,6 +93,28 @@ ask() {
 
 have(){ command -v "$1" >/dev/null 2>&1; }
 
+# cosign が名乗る版。読めねば空を返す。
+#
+# `--json` の gitVersion を第一とし、無ければ人向けの `GitVersion:` 行を見る。
+# 版によって形が違うゆえ、二つとも見る。
+cosign_ver() {
+  local v
+  v=$("$COSIGN" version --json 2>/dev/null | grep -o '"gitVersion"[^,]*' | cut -d'"' -f4)
+  [ -z "${v:-}" ] && v=$("$COSIGN" version 2>/dev/null | grep -oE 'GitVersion:[[:space:]]*\S+' | awk '{print $2}')
+  printf '%s' "${v:-}"
+}
+
+# その cosign で我らの束を検められるか（v3 以上か）。
+#
+# **読めぬ版は否とする。** 読めぬ物を新しいと見なせば、そこが素通りの口になる。
+cosign_ok() {
+  have "$COSIGN" || return 1
+  local v maj
+  v=$(cosign_ver)
+  maj=$(printf '%s' "$v" | tr -d 'v' | cut -d. -f1)
+  [ -n "${maj:-}" ] && [ "$maj" -ge 3 ] 2>/dev/null
+}
+
 # どの手を、どの順で試すか。**問える形にしておく**——
 # 順は品ごとに違い、しかも外からは見えぬ。`--pkg-order` で覗ける。
 pkg_order() {
@@ -156,32 +178,50 @@ step "二、要る道具"
 #
 # 入れた後に版を検める段は残す。好みは当たる率を上げるだけで、
 # **守りではない**——古い物が入れば、その先で止まる。
+# 一つだけ入れる。
+#   pkg_install <品> [先に試す手] [入った物を検める関数]
+#
+# **検める関数が肝である。** 同じ `apt` でも中身が違う——素の Ubuntu 26.04 は
+# cosign 2.6.2 を配り、WakeMeOps（第三者 repo・upstream の binary を deb に
+# 詰め直す）を足しておれば 3.1.3 が来る。この機体は後者であった
+# （殿の実測 2026-08-31）。
+#
+# 外からは見分けられぬゆえ、**順で当てるのは推量にすぎぬ**。入れた後に検め、
+# 足りねば次の手へ回る。順は当たる率を上げるだけの前置きになる。
 pkg_install() {
-  local what="$1" prefer="${2:-}"
+  local what="$1" prefer="${2:-}" check="${3:-}"
   local order
   order=$(pkg_order "$prefer")
 
-  local m
+  # 入った物が用を成すか。検める関数が無ければ「入れば良し」とする
+  _ok() { [ -z "$check" ] && return 0; "$check"; }
+
+  local m tried=0
   for m in $order; do
     case "$m" in
-      apt)
-        have apt-get || continue
-        ask "$what を apt で入れてよいか（sudo を使う）" || return 1
-        sudo apt-get update && sudo apt-get install -y "$what" && return 0
-        ;;
-      brew)
-        have brew || continue
-        ask "$what を brew で入れてよいか" || return 1
-        brew install "$what" && return 0
-        ;;
-      dnf)
-        have dnf || continue
-        ask "$what を dnf で入れてよいか（sudo を使う）" || return 1
-        sudo dnf install -y "$what" && return 0
-        ;;
+      apt)  have apt-get || continue
+            ask "$what を apt で入れてよいか（sudo を使う）" || continue
+            tried=1
+            sudo apt-get update >/dev/null 2>&1
+            sudo apt-get install -y "$what" >/dev/null 2>&1 ;;
+      brew) have brew || continue
+            ask "$what を brew で入れてよいか" || continue
+            tried=1
+            brew install "$what" >/dev/null 2>&1 ;;
+      dnf)  have dnf || continue
+            ask "$what を dnf で入れてよいか（sudo を使う）" || continue
+            tried=1
+            sudo dnf install -y "$what" >/dev/null 2>&1 ;;
+      *)    continue ;;
     esac
+    if _ok; then
+      ok "$what を $m で入れた"
+      return 0
+    fi
+    # **入ったが用を成さぬ時も、黙って次へは行かぬ。** 何が起きたか告げる
+    [ -n "$check" ] && warn "$m の $what は用を成さぬ。次の手を試す"
   done
-  warn "入れ方が分からぬ。$what を手で入れられよ"
+  [ "$tried" = 0 ] && warn "入れ方が分からぬ。$what を手で入れられよ"
   return 1
 }
 
@@ -293,10 +333,11 @@ else
       # 断る前に、入れてよいか訊く。tmux や curl と同じ扱いである——
       # brew にも apt にも在ることが多い（殿の実測 2026-08-31）。
       warn "署名を検める道具が無い（cosign）"
-      # **brew を先に試す。** 土地の archive は古いことがある（上の覚え書き）
-      pkg_install cosign brew >/dev/null 2>&1 || true
-      if have "$COSIGN"; then
-        ok "cosign が入った"
+      # brew を先に試すが、**決め手は入った後の検め**である（cosign_ok）。
+      # 同じ apt でも v2 を配る土地と v3 を配る土地がある。
+      pkg_install cosign brew cosign_ok || true
+      if cosign_ok; then
+        :
       else
         # **安全な道を先に示す。** 「入れる」か「飛ばす」の二択にすると急ぐ者は
         # 飛ばす。--build は cosign を一切要さぬ——降ろす物が無いゆえ検める物も無い。
@@ -313,10 +354,8 @@ else
     # 第三者 repo 由来・殿の実測 2026-08-31）。入れさせて検められぬのでは
     # 親切が仇になるゆえ、ここで見分けて告げる。
     if [ "$SKIP_SIG" != 1 ]; then
-      cv=$("$COSIGN" version --json 2>/dev/null | grep -o '"gitVersion"[^,]*' | cut -d'"' -f4)
-      [ -z "${cv:-}" ] && cv=$("$COSIGN" version 2>/dev/null | grep -oE 'GitVersion:[[:space:]]*\S+' | awk '{print $2}')
-      cvmaj=$(printf '%s' "${cv:-}" | tr -d 'v' | cut -d. -f1)
-      if [ -z "${cvmaj:-}" ] || ! [ "$cvmaj" -ge 3 ] 2>/dev/null; then
+      cv=$(cosign_ver)
+      if ! cosign_ok; then
         die "cosign が古い、または版が読めぬ（${cv:-不明}）。この束は v3 以上でしか検められぬ。
       ※ 素の apt が配るのは v2 のことがある（Ubuntu 26.04 は 2.6.2）
       手元で建てる: bash scripts/first_setup.sh --build（何も降ろさぬゆえ cosign は要らぬ）

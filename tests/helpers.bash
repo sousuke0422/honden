@@ -91,3 +91,17 @@ stub_tmux_grows() {
   } > "$STUB/tmux"
   chmod +x "$STUB/tmux"
 }
+
+# 特権昇格の贋物。**渡された命をそのまま走らせる。**
+#
+# ただ 0 を返すだけの贋物では、`sudo apt-get install` が apt へ届かぬ——
+# 「入れたはずが入っておらぬ」を作り、試験が嘘をつく（実測で一度踏んだ）。
+# 本物と同じく、後ろの命へ道を譲る。
+stub_sudo_exec() {
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "sudo" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'exec "$@"'
+  } > "$STUB/sudo"
+  chmod +x "$STUB/sudo"
+}

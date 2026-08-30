@@ -62,6 +62,27 @@ fake_cosign() {
   chmod +x "$STUB/cosign"
 }
 
+# 「入れる手」の贋物。走ると $LATE/cosign を書き、指定の版を名乗らせる。
+#   fake_installer <手の名> <入れる版>
+fake_installer() {
+  local mgr="$1" ver="$2"
+  cat > "$STUB/$mgr" <<OUTER
+#!/usr/bin/env bash
+printf '$mgr' >> "\$CALLS"; for a in "\$@"; do printf ' %s' "\$a" >> "\$CALLS"; done; printf '\n' >> "\$CALLS"
+cat > "\$HONDEN_COSIGN" <<'INNER'
+#!/usr/bin/env bash
+case "\$1" in
+  version) printf '{"gitVersion":"$ver"}\n'; exit 0 ;;
+  verify-blob) exit 0 ;;
+esac
+exit 0
+INNER
+chmod +x "\$HONDEN_COSIGN"
+exit 0
+OUTER
+  chmod +x "$STUB/$mgr"
+}
+
 # uname の贋物。土地を linux/x86_64 に固定する。
 fake_uname() {
   {
@@ -255,6 +276,25 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
   assert_success
   assert_line --index 0 --partial "既定:   apt brew dnf"
   assert_line --index 1 --partial "cosign: brew apt dnf"
+}
+
+@test "**入れた物が古ければ、次の手へ回る**（同じ apt でも中身が違う）" {
+  # 素の Ubuntu の apt は cosign 2.6.2、WakeMeOps（第三者 repo）を足しておれば
+  # 3.1.3。**外からは見分けられぬ**ゆえ、順で当てるのではなく入れてから検める。
+  # ここでは先に試す手（brew）が古い物を、次の手（apt）が使える物を入れる。
+  LATE="$BATS_TEST_TMPDIR/late"
+  mkdir -p "$LATE"
+  export HONDEN_COSIGN="$LATE/cosign"     # 初めは無い
+  fake_installer brew    v2.6.2
+  fake_installer apt-get v3.1.3
+  rm -f "$STUB/dnf"                       # 三つ目の手は無いことにする
+  stub_sudo_exec                            # 特権昇格は後ろの命へ道を譲る
+
+  run_fetch
+  assert_success
+  assert_output --partial "brew の cosign は用を成さぬ"
+  assert_output --partial "cosign を apt で入れた"
+  assert_output --partial "署名は我らの物である"
 }
 
 @test "**v2 の cosign では断る**（素の apt が配るのはこちらのことがある）" {

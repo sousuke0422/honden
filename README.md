@@ -277,16 +277,23 @@ sha256sum -c SHA256SUMS
 **束の形が版で変わる。** 出す側は v3 で署名し、v3 の束を書く。v2 の cosign は
 それを素では読めない。
 
-ここが罠になる —— **素の Ubuntu 26.04 の apt が配るのは 2.6.2 である**
-（v3 が入るのは第三者 repo を足している場合）。`apt install cosign` で入れて
-「これで検められる」と思い込むと、そこで止まる。
+ここが罠になる —— **同じ `apt install cosign` でも、入る物が違う。**
+
+| 出どころ | 版 |
+|---|---|
+| Ubuntu 26.04 の archive | 2.6.2 |
+| [WakeMeOps](https://docs.wakemeops.com/packages/cosign/)（upstream の binary を deb に詰め直す第三者 repo） | 3.1.3 |
+
+**外からは見分けられない。** だから honden は順で当てようとせず、
+**入れてから検める** —— 足りなければ次の手（brew / dnf）へ回る。
 
 honden は**版まで見て**、古ければ告げて止まる（版が読めない時も止まる）。
 黙って素通りにはしない。`HONDEN_COSIGN` で別の場所を指せる。
 
 仕度が cosign を入れるときは、**Linux でも brew を先に試す** —— brew は上流に
-近く、土地の archive は古いことがあるため。土台の道具（tmux・git の類）は逆で、
-土地の手を先に試す（brew は `/home/linuxbrew` に入り、土地の物を覆い隠すので）。
+近いため。ただしこれは当たる率を上げるだけの前置きで、**決め手は入れた後の検め**
+である。土台の道具（tmux・git の類）は逆に土地の手を先に試す
+（brew は `/home/linuxbrew` に入り、土地の物を覆い隠すので）。
 順は `bash scripts/first_setup.sh --pkg-order` で見られる。
 
 #### 使う側にも cosign が要るのか
@@ -360,7 +367,7 @@ alpha が降ってくることはない。試すときは手で降ろす。
 | 正本を壊した | `~/.honden/backups` に出陣ごとの写しがある |
 | 降ろした物が検めを通らない | **一つも置かれていない**。網の途中か、出し物が壊れている。`--build` で建てる手もある |
 | cosign が無いと言われる | 仕度は「入れてよいか」を先に訊く（brew / apt / dnf）。断れば `--build` を勧める —— そちらは cosign が要らない |
-| cosign が古いと言われる | 素の apt は v2 のことがある（Ubuntu 26.04 は 2.6.2）。v3 を入れるか、`--build` で建てる |
+| cosign が古いと言われる | 素の apt は v2 のことがある（Ubuntu 26.04 は 2.6.2）。brew か [WakeMeOps](https://docs.wakemeops.com/packages/cosign/) で v3 を入れるか、`--build` で建てる |
 
 `bun test`（単体）と `bats tests/`（出陣の書）で確かめられる。
 
