@@ -95,10 +95,14 @@ export function signCheck(opts: { hasCosign: boolean; skip: boolean }): SignChec
   if (!opts.hasCosign) {
     return {
       kind: 'refuse',
+      // **安全な道を先に示す。** 「入れる」か「飛ばす」の二択にすると、
+      // 急ぐ者は飛ばす。手元で建てる道は cosign を一切要さぬ——降ろす物が
+      // 無いゆえ検める物も無い。順を違えれば、文面が事故を招く。
       message:
         '署名を検める道具が無い（cosign）。**検められぬ物は置かぬ。**\n' +
-        '    入れる:   https://docs.sigstore.dev/cosign/system_config/installation/\n' +
-        `    どうしても急ぐなら: --${SKIP_FLAG}（その旨は台帳に残る）`,
+        '    手元で建てる: bun run build:all（何も降ろさぬゆえ cosign は要らぬ）\n' +
+        '    道具を入れる: https://docs.sigstore.dev/cosign/system_config/installation/\n' +
+        `    どうしても急ぐなら: --${SKIP_FLAG}（**勧めぬ**）`,
     };
   }
   return { kind: 'verify' };

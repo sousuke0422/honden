@@ -79,6 +79,16 @@ describe('signCheck — 検められぬ物は置かぬ', () => {
     }
   });
 
+  test('**安全な道を、危うい旗より先に示す**', () => {
+    const r = signCheck({ hasCosign: false, skip: false });
+    expect(r.kind).toBe('refuse');
+    if (r.kind === 'refuse') {
+      // 手元で建てる道は cosign を要さぬ。これを告げねば、急ぐ者は飛ばす旗へ行く
+      expect(r.message).toContain('build:all');
+      expect(r.message.indexOf('build:all')).toBeLessThan(r.message.indexOf(SKIP_FLAG));
+    }
+  });
+
   test('旗が明示された時だけ飛ばし、その時は必ず警める', () => {
     const r = signCheck({ hasCosign: false, skip: true });
     expect(r.kind).toBe('skip');
