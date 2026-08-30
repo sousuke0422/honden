@@ -154,3 +154,31 @@ describe('卓上の送り口 — 配下の書いた文が作りを壊さぬ', ()
     expect(ps).toContain('殿へ'); // 日本語が無傷で渡る
   });
 });
+
+/**
+ * **素振りは撃たぬ。**
+ *
+ * `--dry-run` は差配の入口で旗から消され、変数へ移る（src/main.ts）。
+ * 旗を見ておったゆえ、素振りが**実際に撃っておった**（実測 2026-08-30）。
+ * 通知は一度撃てば「撃った」と刻まれ、撃ち直せぬ——素振りが撃つのは重い。
+ *
+ * ここは芯（dispatch）の側で「呼ばねば撃たぬ」ことを留める。差配の側の
+ * 取り違えは tests/*.bats と実弾で見る。
+ */
+describe('素振りは撃たぬ', () => {
+  test('dispatch を呼ばねば、報せは残ったまま', () => {
+    const db = seeded(['素振りの検分']);
+    expect(pending(db, VIEWER)).toHaveLength(1);
+    // 素振り＝組むだけで撃たぬ。何度組んでも減らぬ。
+    pending(db, VIEWER);
+    pending(db, VIEWER);
+    expect(pending(db, VIEWER)).toHaveLength(1);
+  });
+
+  test('撃って初めて減る（陽性対照）', () => {
+    const db = seeded(['素振りの検分']);
+    const log: Notice[] = [];
+    dispatch(db, pending(db, VIEWER), [okSink('desktop', log)]);
+    expect(pending(db, VIEWER)).toHaveLength(0);
+  });
+});

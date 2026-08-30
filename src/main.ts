@@ -15,6 +15,7 @@ import { anchorFrom, realProbe } from './anchor';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
+import { config as ntfyConfig, ntfySink, topicWarning } from './notify/ntfy';
 import {
   add as sayAdd,
   list as sayList,
@@ -1975,18 +1976,33 @@ export async function main(argv: string[]): Promise<number> {
       const notices = notifyPending(db, `http://${LOOPBACK}:${port}/`);
       if (notices.length === 0) return '  報せる事は無い（裁可待ちは全て報せ済み）。';
 
-      // 送り口。今は卓上のみ。ntfy はいずれ足す（殿の申し出 2026-08-30）ゆえ、
-      // 芯（src/notify.ts）は送り口を知らぬ作りにしてある。
+      // 送り口を揃える。芯（src/notify.ts）は送り口を知らぬゆえ、
+      // ここで足すだけで済む。
       const sinks: Sink[] = [desktopSink()];
+      const warn: string[] = [];
+      {
+        // ntfy は**設定があれば**加わる。無ければ名乗り出ぬ——
+        // 「配っておらぬ」と「配ったが届かなんだ」を混ぜぬため。
+        const cfg = configLoad(db);
+        const nc = cfg.ok ? ntfyConfig(cfg.doc, process.env) : null;
+        if (nc) {
+          const w = topicWarning(nc.topic);
+          if (w) warn.push(`  ※ ${w}`);
+          sinks.push(ntfySink(nc));
+        }
+      }
 
-      if (flags['dry-run'] === 'true') {
-        return [`  [dry-run] ${notices.length} 件を撃つ所まで来ておる:`]
+      // **旗ではなく dryRun を見る。** 1745 行で旗から消され、変数へ移る——
+      // 旗を見ておったゆえ素振りが実際に撃っておった（実測 2026-08-30）。
+      if (dryRun) {
+        return [`  [dry-run] ${notices.length} 件を ${sinks.map((s) => s.name).join('+')} へ撃つ所まで来ておる:`]
           .concat(notices.map((n) => `    ${n.body}`))
+          .concat(warn)
           .join('\n');
       }
 
       const res = notifyDispatch(db, notices, sinks);
-      const lines = [`  ${res.sent} 件を撃った。`];
+      const lines = [`  ${res.sent} 件を撃った（送り口: ${sinks.map((s) => s.name).join('+')}）。`, ...warn];
       // **届かなんだ物は黙らせぬ。** 見張りの沈黙は健全に見えるゆえ。
       for (const f of res.failed) lines.push(`  ▲ ${f.sink} へ届かず（${f.key}）: ${f.detail ?? ''}`);
       return lines.join('\n');
