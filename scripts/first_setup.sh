@@ -258,7 +258,24 @@ else
       どうしても急ぐなら --insecure-skip-signature（**勧めぬ**）"
       fi
     fi
+    # **版も見る。束の形が版で変わる。**
+    #
+    # 出す側は v3 で署名し、v3 の束を書く。v2 の cosign はそれを素では読めぬ。
+    # そして**素の Ubuntu 26.04 の apt が配るのは 2.6.2 である**（v3 は
+    # 第三者 repo 由来・殿の実測 2026-08-31）。入れさせて検められぬのでは
+    # 親切が仇になるゆえ、ここで見分けて告げる。
     if [ "$SKIP_SIG" != 1 ]; then
+      cv=$("$COSIGN" version --json 2>/dev/null | grep -o '"gitVersion"[^,]*' | cut -d'"' -f4)
+      [ -z "${cv:-}" ] && cv=$("$COSIGN" version 2>/dev/null | grep -oE 'GitVersion:[[:space:]]*\S+' | awk '{print $2}')
+      cvmaj=$(printf '%s' "${cv:-}" | tr -d 'v' | cut -d. -f1)
+      if [ -z "${cvmaj:-}" ] || ! [ "$cvmaj" -ge 3 ] 2>/dev/null; then
+        die "cosign が古い、または版が読めぬ（${cv:-不明}）。この束は v3 以上でしか検められぬ。
+      ※ 素の apt が配るのは v2 のことがある（Ubuntu 26.04 は 2.6.2）
+      手元で建てる: bash scripts/first_setup.sh --build（何も降ろさぬゆえ cosign は要らぬ）
+      新しく入れる: https://docs.sigstore.dev/cosign/system_config/installation/
+      どうしても急ぐなら --insecure-skip-signature（**勧めぬ**）"
+      fi
+      info "cosign $cv"
       curl -fsSL -o "$TMPD/SHA256SUMS.cosign.bundle" "$base/SHA256SUMS.cosign.bundle" \
         || die "署名の束を降ろせなんだ。**一つも置いておらぬ**"
       "$COSIGN" verify-blob \

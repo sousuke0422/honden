@@ -41,7 +41,7 @@
  *
  * 抜け道は残すが、長く醜い旗にして台帳へ残す。押しにくくしておく。
  */
-import { REPO } from './version';
+import { REPO, isNewer, parseVersion } from './version';
 
 /** 署名の束。cosign が一枚に畳んだ物（証書・署名・台帳の控え）。 */
 export const BUNDLE = 'SHA256SUMS.cosign.bundle';
@@ -71,6 +71,37 @@ export function verifyArgs(bundlePath: string, blobPath: string): string[] {
   ];
 }
 
+/**
+ * 検める側に要る cosign の版。
+ *
+ * **束の形が版で変わる。** 出す側は v3 で署名し、v3 の束を書く。v2 の
+ * cosign はそれを素では読めぬ（`--new-bundle-format` を明示せねばならぬ）。
+ *
+ * これは机上の懸念ではない。**素の Ubuntu 26.04 の apt が配るのは
+ * 2.6.2 である**（v3 は第三者 repo 由来・殿の実測 2026-08-31）。ゆえに
+ * 「apt で入れる」を勧めるだけでは、入れた者が検められぬ束を掴む。
+ *
+ * 版が読めぬ時も断る。**読めぬ物を新しいと見なせば、そこが素通りの口になる。**
+ */
+export const MIN_COSIGN = '3.0.0';
+
+/**
+ * `cosign version` の吐き出しから版を拾う。
+ *
+ * `--json` の `gitVersion` を第一とし、無ければ人向けの `GitVersion:` 行を見る。
+ * 版によって形が違うゆえ、二つとも見る。
+ */
+export function parseCosignVersion(out: string): string | null {
+  try {
+    const j = JSON.parse(out) as { gitVersion?: unknown };
+    if (typeof j.gitVersion === 'string' && j.gitVersion.trim() !== '') return j.gitVersion.trim();
+  } catch {
+    /* JSON でなければ次を見る */
+  }
+  const m = /GitVersion:\s*(\S+)/i.exec(out);
+  return m ? m[1]! : null;
+}
+
 export type SignCheck =
   | { kind: 'verify' }
   | { kind: 'skip'; warning: string }
@@ -83,7 +114,7 @@ export type SignCheck =
  * 三つを一つの型に畳んでおるのは意図で、呼ぶ側に「どれでもない」を
  * 作らせぬため——曖昧な四つ目が生まれると、そこが素通りの口になる。
  */
-export function signCheck(opts: { hasCosign: boolean; skip: boolean }): SignCheck {
+export function signCheck(opts: { hasCosign: boolean; skip: boolean; version?: string | null }): SignCheck {
   if (opts.skip) {
     return {
       kind: 'skip',
@@ -102,6 +133,32 @@ export function signCheck(opts: { hasCosign: boolean; skip: boolean }): SignChec
         '署名を検める道具が無い（cosign）。**検められぬ物は置かぬ。**\n' +
         '    手元で建てる: bun run build:all（何も降ろさぬゆえ cosign は要らぬ）\n' +
         '    道具を入れる: https://docs.sigstore.dev/cosign/system_config/installation/\n' +
+        `    どうしても急ぐなら: --${SKIP_FLAG}（**勧めぬ**）`,
+    };
+  }
+  // **版が読めぬ時も断る。** 読めぬ物を新しいと見なせば、そこが素通りの口になる。
+  //
+  // 解けるかを**ここで明に問う**。`isNewer` に任せてはならぬ——あれは
+  // 「降りるべきか」に対して閉じる向き（解けねば false ＝ 降りぬ）ゆえ、
+  // 「受け入れてよいか」に流用すると**向きが反転して素通りになる**。
+  // 釘が即座にこれを突いた（'こわれた' が verify を通っておった）。
+  if (opts.version === undefined || opts.version === null || parseVersion(opts.version) === null) {
+    return {
+      kind: 'refuse',
+      message:
+        `cosign の版が読めぬ${opts.version ? `（${opts.version}）` : ''}。**検められぬ物は置かぬ。**\n` +
+        '    手元で建てる: bun run build:all（何も降ろさぬゆえ cosign は要らぬ）\n' +
+        `    どうしても急ぐなら: --${SKIP_FLAG}（**勧めぬ**）`,
+    };
+  }
+  if (isNewer(MIN_COSIGN, opts.version)) {
+    return {
+      kind: 'refuse',
+      message:
+        `cosign が古い（${opts.version}）。この束は v${MIN_COSIGN} 以上でしか検められぬ。\n` +
+        '    ※ 素の apt が配るのは v2 のことがある（Ubuntu 26.04 は 2.6.2）\n' +
+        '    手元で建てる: bun run build:all（何も降ろさぬゆえ cosign は要らぬ）\n' +
+        '    新しく入れる: https://docs.sigstore.dev/cosign/system_config/installation/\n' +
         `    どうしても急ぐなら: --${SKIP_FLAG}（**勧めぬ**）`,
     };
   }

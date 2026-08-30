@@ -21,7 +21,7 @@ import { VERSION, isPrerelease } from './version';
 import {
   BINARIES, SUMS, platformOf, planFor, decide, tagFrom, verify, parseSums, releaseApiUrl, assetUrl,
 } from './update';
-import { BUNDLE, SKIP_FLAG, signCheck, verifyArgs, readVerify } from './sign';
+import { BUNDLE, SKIP_FLAG, signCheck, verifyArgs, readVerify, parseCosignVersion } from './sign';
 import {
   add as sayAdd,
   list as sayList,
@@ -2128,7 +2128,18 @@ async function runUpdate(checkOnly: boolean, yes: boolean, skipSig: boolean): Pr
   // ── 署名を先に検める。**紙を縛れば、紙が縛る全部が縛られる** ──
   // 道具の名は環境で差し替えられる（試験のため。既定は素の cosign）
   const cosign = process.env['HONDEN_COSIGN'] ?? 'cosign';
-  const sig = signCheck({ hasCosign: which(cosign), skip: skipSig });
+  const hasCosign = which(cosign);
+  // 版も見る。**束の形が版で変わる**ゆえ、在るだけでは足りぬ
+  let cosignVer: string | null = null;
+  if (hasCosign) {
+    const vp = Bun.spawnSync([cosign, 'version', '--json'], { stdout: 'pipe', stderr: 'pipe' });
+    cosignVer = parseCosignVersion(new TextDecoder().decode(vp.stdout));
+    if (!cosignVer) {
+      const v2 = Bun.spawnSync([cosign, 'version'], { stdout: 'pipe', stderr: 'pipe' });
+      cosignVer = parseCosignVersion(new TextDecoder().decode(v2.stdout));
+    }
+  }
+  const sig = signCheck({ hasCosign, skip: skipSig, version: cosignVer });
   if (sig.kind === 'refuse') return { code: EXIT_INVALID, err: `  ${sig.message}` };
   if (sig.kind === 'skip') console.error(`  ▲ ${sig.warning}`);
 

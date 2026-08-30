@@ -9,7 +9,9 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { REPO } from '../src/version';
-import { BUNDLE, IDENTITY_RE, OIDC_ISSUER, SKIP_FLAG, verifyArgs, signCheck, readVerify } from '../src/sign';
+import {
+  BUNDLE, IDENTITY_RE, OIDC_ISSUER, SKIP_FLAG, MIN_COSIGN, verifyArgs, signCheck, readVerify, parseCosignVersion,
+} from '../src/sign';
 
 describe('身元の縛り — ここが全て', () => {
   test('我らの release.yml が、**札から**走った物だけを認める', () => {
@@ -67,7 +69,7 @@ describe('verifyArgs — 縛りを必ず渡す', () => {
 
 describe('signCheck — 検められぬ物は置かぬ', () => {
   test('道具があれば検める', () => {
-    expect(signCheck({ hasCosign: true, skip: false })).toEqual({ kind: 'verify' });
+    expect(signCheck({ hasCosign: true, skip: false, version: 'v3.1.3' })).toEqual({ kind: 'verify' });
   });
 
   test('**道具が無ければ断る**（「あれば検める」にせぬ）', () => {
@@ -96,12 +98,63 @@ describe('signCheck — 検められぬ物は置かぬ', () => {
   });
 
   test('道具があっても、旗があれば飛ばす（人の断りが勝つ）', () => {
-    expect(signCheck({ hasCosign: true, skip: true }).kind).toBe('skip');
+    expect(signCheck({ hasCosign: true, skip: true, version: 'v3.1.3' }).kind).toBe('skip');
   });
 
   test('**抜け道の旗は長く醜い**（気軽に押されては困る）', () => {
     expect(SKIP_FLAG).toBe('insecure-skip-signature');
     expect(SKIP_FLAG.length).toBeGreaterThan(20);
+  });
+});
+
+describe('版の下限 — 束の形は版で変わる', () => {
+  test('v3 以上なら検める', () => {
+    expect(signCheck({ hasCosign: true, skip: false, version: 'v3.0.0' }).kind).toBe('verify');
+    expect(signCheck({ hasCosign: true, skip: false, version: 'v3.1.3' }).kind).toBe('verify');
+  });
+
+  test('**v2 では断る**（素の apt が配るのはこちらのことがある）', () => {
+    // Ubuntu 26.04 の archive は 2.6.2（殿の実測）。入れさせて検められぬのでは
+    // 親切が仇になる
+    const r = signCheck({ hasCosign: true, skip: false, version: 'v2.6.2' });
+    expect(r.kind).toBe('refuse');
+    if (r.kind === 'refuse') {
+      expect(r.message).toContain('2.6.2');
+      expect(r.message).toContain('apt');
+      expect(r.message).toContain('build:all'); // 安全な道が先
+    }
+  });
+
+  test('**版が読めぬ時も断る**（読めぬ物を新しいと見なさぬ）', () => {
+    for (const v of [null, undefined]) {
+      expect(signCheck({ hasCosign: true, skip: false, version: v }).kind).toBe('refuse');
+    }
+    // 形が違う版も同じ
+    expect(signCheck({ hasCosign: true, skip: false, version: 'こわれた' }).kind).toBe('refuse');
+  });
+
+  test('下限は 3.0.0', () => {
+    expect(MIN_COSIGN).toBe('3.0.0');
+  });
+
+  test('旗があれば版は問わぬ（人の断りが勝つ）', () => {
+    expect(signCheck({ hasCosign: true, skip: true, version: 'v2.0.0' }).kind).toBe('skip');
+  });
+});
+
+describe('parseCosignVersion', () => {
+  test('--json の gitVersion を拾う', () => {
+    expect(parseCosignVersion('{"gitVersion":"v3.1.3","goVersion":"go1.26.4"}')).toBe('v3.1.3');
+  });
+
+  test('人向けの吐き出しからも拾う（版で形が違うゆえ二つとも見る）', () => {
+    expect(parseCosignVersion('cosign: A tool ...\nGitVersion:    v2.6.2\n')).toBe('v2.6.2');
+  });
+
+  test('読めねば null（推さぬ）', () => {
+    expect(parseCosignVersion('')).toBeNull();
+    expect(parseCosignVersion('なにか別の物')).toBeNull();
+    expect(parseCosignVersion('{"gitVersion":""}')).toBeNull();
   });
 });
 

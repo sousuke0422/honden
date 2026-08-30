@@ -35,7 +35,7 @@ setup() {
   stub tmux 0 "tmux 3.4"
   stub flock 0 ""
   stub git 0 ""
-  stub cosign 0 "Verified OK"   # 既定は「署名は我らの物」
+  fake_cosign v3.1.3 0          # 既定は「v3 で、署名は我らの物」
   # **本物の導入を走らせぬ。** 試験は --yes で走るゆえ、塞がねば
   # `sudo apt-get install` が実際に動く。贋物を道の先頭に置いて止める。
   stub sudo 1 ""
@@ -44,6 +44,22 @@ setup() {
   stub dnf 1 ""
   # 束も配る（署名の検めが降ろしに行く）
   printf 'にせの束' > "$SERVE/SHA256SUMS.cosign.bundle"
+}
+
+# cosign の贋物。版と、検めの通り不通りを操る。
+#   fake_cosign <名乗る版> <verify-blob の終了コード>
+fake_cosign() {
+  local ver="$1" rc="${2:-0}"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "cosign" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'case "$1" in'
+    echo "  version) printf '{\"gitVersion\":\"$ver\"}\\n'; exit 0 ;;"
+    echo "  verify-blob) exit $rc ;;"
+    echo 'esac'
+    echo 'exit 0'
+  } > "$STUB/cosign"
+  chmod +x "$STUB/cosign"
 }
 
 # uname の贋物。土地を linux/x86_64 に固定する。
@@ -177,7 +193,7 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
 }
 
 @test "**署名が通らねば一つも置かぬ**" {
-  stub cosign 1 "error: none of the entries could be verified"
+  fake_cosign v3.1.3 1
   run_fetch
   assert_failure
   assert_output --partial "署名が我らの物と認められなんだ"
@@ -218,6 +234,23 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
   [ -n "$a" ]
   [ -n "$b" ]
   [ "$a" -lt "$b" ]
+}
+
+@test "**v2 の cosign では断る**（素の apt が配るのはこちらのことがある）" {
+  fake_cosign v2.6.2 0
+  run_fetch
+  assert_failure
+  assert_output --partial "cosign が古い"
+  assert_output --partial "2.6.2"
+  [ ! -e "$FAKE/bin/honden" ]
+}
+
+@test "**版が読めぬ時も断る**（読めぬ物を新しいと見なさぬ）" {
+  fake_cosign "こわれた" 0
+  run_fetch
+  assert_failure
+  assert_output --partial "版が読めぬ"
+  [ ! -e "$FAKE/bin/honden" ]
 }
 
 @test "束が降りてこねば止まる（無い署名を通さぬ）" {
