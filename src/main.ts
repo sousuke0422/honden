@@ -17,6 +17,10 @@ import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, typ
 import { desktopSink } from './notify/desktop';
 import { config as ntfyConfig, ntfySink, topicWarning } from './notify/ntfy';
 import { parseLine, listenArgs, streamUrl, backoffMs, receive } from './notify/listen';
+import { VERSION } from './version';
+import {
+  BINARIES, SUMS, platformOf, planFor, decide, tagFrom, verify, parseSums, releaseApiUrl,
+} from './update';
 import {
   add as sayAdd,
   list as sayList,
@@ -48,7 +52,7 @@ const REPO_ROOT = (() => {
   if (existsSync(join(fromSrc, 'bin', 'honden-parse'))) return fromSrc;
   return fromBin; // 見つからねば realRunner が拒む
 })();
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
@@ -2055,6 +2059,112 @@ async function runNtfyListen(dbPath: string | undefined, once: boolean): Promise
   }
 }
 
+/**
+ * `honden update` — 出し物から本体を取り替える。
+ *
+ * **降ってきた物を、確かめてから置く。** 判断は `update.ts` に純粋な形で
+ * 置いてある。ここは取りに行き、数を計り、置く役だけを負う。
+ *
+ * 置き方は `mv`。陣が立っておる間、芯は己の binary を掴んでおるゆえ
+ * `cp` は `Text file busy` で倒れる。
+ */
+async function runUpdate(checkOnly: boolean, yes: boolean): Promise<RunResult> {
+  const plat = platformOf({ platform: process.platform, arch: process.arch });
+  if (!plat) {
+    return {
+      code: EXIT_INVALID,
+      err: `  ${process.platform}/${process.arch} 向けは配っておらぬ。手元で建てられよ（bun run build:all）。`,
+    };
+  }
+
+  let tag: string | null = null;
+  try {
+    const r = await fetch(releaseApiUrl(), {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': `honden/${VERSION}` },
+    });
+    if (r.ok) tag = tagFrom(await r.json());
+    else if (r.status !== 404) return { code: EXIT_SYSTEM, err: `  出し物を訊けなんだ（HTTP ${r.status}）。` };
+  } catch (e) {
+    return { code: EXIT_SYSTEM, err: `  出し物へ届かなんだ: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const d = decide(tag);
+  if (d.kind === 'current') return { code: EXIT_OK, out: `  いまの版で最新である（${VERSION}）。` };
+  if (d.kind === 'ahead')
+    return { code: EXIT_OK, out: `  手元のほうが新しい（${VERSION} > ${d.latest}）。被せぬ。` };
+  if (d.kind === 'unknown') return { code: EXIT_OK, out: `  ${d.message}` };
+
+  const plan = planFor(d.tag, plat);
+  if (checkOnly) {
+    return {
+      code: EXIT_OK,
+      out: [`  ${plan.current} → ${plan.tag} が出ておる。`, ...plan.items.map((i) => `    ${i.asset}`),
+        '  取り替えるには honden update --yes'].join('\n'),
+    };
+  }
+  if (!yes) {
+    return {
+      code: EXIT_OK,
+      out:
+        `  ${plan.current} → ${plan.tag} が出ておる。取り替えるなら --yes を付けられよ。\n` +
+        '  ※ 数（SHA256）は照らすが、**署名は無い**。守れるのは壊れと途中切れまでである。',
+    };
+  }
+
+  // ── 取る。数の紙を先に取り、揃わぬなら一つも置かぬ ──
+  const dir = join(REPO_ROOT, 'bin');
+  const fetchBytes = async (url: string): Promise<Uint8Array> => {
+    const r = await fetch(url, { headers: { 'User-Agent': `honden/${VERSION}` } });
+    if (!r.ok) throw new Error(`${url} が ${r.status} を返した`);
+    return new Uint8Array(await r.arrayBuffer());
+  };
+
+  let sums: Map<string, string>;
+  const got: { asset: string; sha256: string; bytes: Uint8Array }[] = [];
+  try {
+    const parsed = parseSums(new TextDecoder().decode(await fetchBytes(plan.sumsUrl)));
+    if (!parsed.ok) return { code: EXIT_SYSTEM, err: `  ${parsed.message}` };
+    sums = parsed.sums;
+    for (const it of plan.items) {
+      const bytes = await fetchBytes(it.url);
+      const sha256 = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+      got.push({ asset: it.asset, sha256, bytes });
+    }
+  } catch (e) {
+    return { code: EXIT_SYSTEM, err: `  降ろせなんだ: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  const v = verify(got.map(({ asset, sha256 }) => ({ asset, sha256 })), sums);
+  if (!v.ok) return { code: EXIT_SYSTEM, err: `  ${v.message}` };
+
+  // ── 置く。**全部書き出してから、まとめて名を差し替える** ──
+  const staged: { tmp: string; dest: string }[] = [];
+  try {
+    for (let i = 0; i < plan.items.length; i++) {
+      const tmp = join(dir, `.${plan.items[i]!.name}.new`);
+      writeFileSync(tmp, got[i]!.bytes, { mode: 0o755 });
+      staged.push({ tmp, dest: join(dir, plan.items[i]!.name) });
+    }
+    for (const s of staged) renameSync(s.tmp, s.dest);
+  } catch (e) {
+    for (const s of staged) {
+      try {
+        unlinkSync(s.tmp);
+      } catch {
+        /* 掃除で倒れても本題ではない */
+      }
+    }
+    return { code: EXIT_SYSTEM, err: `  置けなんだ: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  return {
+    code: EXIT_OK,
+    out:
+      `  ${plan.tag} を置いた（${BINARIES.length} 本・${SUMS} と照合済み）。\n` +
+      '  走っておる芯は古い実体を持ったままである。次に立つ時から新しくなる。',
+  };
+}
+
 function sendNotices(
   dbPath: string | undefined,
   port: number,
@@ -2131,6 +2241,12 @@ function notifyAfterNudge(dbPath: string | undefined): void {
 
   if (rest[0] === 'ntfy' && rest[1] === 'listen') {
     return emit(await runNtfyListen(dbPath, flags['once'] !== undefined));
+  }
+
+  if (rest[0] === 'version') return emit({ code: EXIT_OK, out: `honden ${VERSION}` });
+
+  if (rest[0] === 'update') {
+    return emit(await runUpdate(flags['check'] !== undefined, flags['yes'] !== undefined));
   }
 
   if (rest[0] === 'paths') {

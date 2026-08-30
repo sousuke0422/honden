@@ -1,0 +1,130 @@
+# 出し物を作る。札（tag）を打つと、四本の binary が土地ごとに建って降りる。
+#
+# ## 札と版の食い違いを、人ではなく機械が拒む
+#
+# 版は `src/version.ts` が正である。札だけ進めて版を上げ忘れる——これは
+# 必ず起きる。起きた時、`honden update` は「降りてきた物のほうが古い」と
+# 見て何もせぬ（`isNewer` が fail-closed ゆえ）。**黙って効かなくなる**のが
+# 最も悪いので、出す前に照らして食い違えば出さぬ。
+#
+# ## 試験を通してから出す
+#
+# 出し物は取り消せぬ（取り消しても、既に降ろした者の手元は戻らぬ）。
+# 建てる前に検める。
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '出す札（例 v0.2.0）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 一、札と版が合うておるか。合わねば、ここで止まる ──
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+
+      - id: pick
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: 札と src/version.ts を照らす
+        run: |
+          set -euo pipefail
+          tag='${{ steps.pick.outputs.tag }}'
+          ver=$(grep -oE "VERSION = '[^']+'" src/version.ts | head -1 | cut -d"'" -f2)
+          echo "札=$tag  版=$ver"
+          if [ "$tag" != "v$ver" ]; then
+            echo "::error::札 $tag と src/version.ts の $ver が食い違っておる。どちらかを揃えられよ。"
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+
+      - name: 道具を入れる（bats に tmux が要る）
+        run: sudo apt-get update && sudo apt-get install -y tmux bats
+
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bats tests/
+
+  # ── 二、土地ごとに建てる ──
+  build:
+    needs: gate
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { runner: ubuntu-latest,   os: linux,  arch: x64 }
+          - { runner: ubuntu-24.04-arm, os: linux,  arch: arm64 }
+          - { runner: macos-14,        os: darwin, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: bun install --frozen-lockfile
+      - run: bun run build:all
+
+      - name: 土地の名を付ける
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for b in honden honden-bot honden-watch honden-parse; do
+            cp "bin/$b" "out/$b-${{ matrix.os }}-${{ matrix.arch }}"
+          done
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: honden-${{ matrix.os }}-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+
+  # ── 三、数を数えて、まとめて出す ──
+  publish:
+    needs: [gate, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: all, merge-multiple: true }
+
+      - name: 数を数える
+        # **名だけを並べる。** 道つきで数えると、降ろす側が名で引けぬ。
+        run: |
+          set -euo pipefail
+          cd all
+          sha256sum -- * > SHA256SUMS
+          echo "── 出す物 ──"
+          cat SHA256SUMS
+
+      - name: 揃うておるか（三つの土地 × 四本）
+        run: |
+          set -euo pipefail
+          n=$(grep -c . all/SHA256SUMS)
+          [ "$n" -eq 12 ] || { echo "::error::12 本のはずが $n 本しか無い"; exit 1; }
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.gate.outputs.tag }}
+          files: all/*
+          generate_release_notes: true
+          body: |
+            `honden update --check` で確かめ、`honden update --yes` で取り替えられる。
+
+            **数（SHA256）は照らすが、署名は無い。** 守れるのは壊れと途中切れまでである。

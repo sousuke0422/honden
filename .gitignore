@@ -93,6 +93,8 @@
 !config/ntfy_auth.env.sample
 !config/opencode-tui.json
 !config/opencode-permissions.yaml
+# 顔ぶれの雛形。settings.yaml 自身は topic を含みうるゆえ追跡せぬ
+!/config/settings.yaml.example
 
 # Templates
 !templates/
@@ -271,6 +273,12 @@ tests/specs/osato_lms_*
 # 試験環境（tmux で布陣を起こし、配達層を通しで検める）
 # 門が止めた命を検分する役の定義。指図書が名指ししておるゆえ、
 # 無ければ公開した側で呼び出せぬ。
+# 出す仕掛け。**許可行が無ければ Actions は動きようが無い**
+# （scripts/shutsujin.sh が落ちておったのと同じ穴・2026-08-30）。
+!/.github/
+!/.github/**/
+!/.github/workflows/*.yml
+
 !/agents/
 !/agents/*.md
 
@@ -279,6 +287,7 @@ tests/specs/osato_lms_*
 # 根の入口 shutsujin_departure.sh だけが公になっており、それが exec する先が
 # 落ちておった——公開した書が、公開しておらぬ書を呼ぶ形になっておった。
 !/scripts/shutsujin.sh
+!/scripts/first_setup.sh
 !/scripts/switch_cli.sh
 !/scripts/testenv.sh
 !/scripts/testenv/

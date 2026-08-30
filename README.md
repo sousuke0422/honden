@@ -21,14 +21,32 @@ tmux の上に CLI エージェントを何体も並べ、SQLite の正本ひと
 | Rust | 1.75 以上 | 芯（見張り）を建てる |
 | `flock` `curl` `ps` | util-linux 等 | 生死の確かめと配り |
 
+Bun と Rust は**建てるときだけ**要る。出し物から降ろすなら `curl` で足りる。
+
 エージェントの CLI（Claude Code / Codex / Cursor / OpenCode など）は別途入れておく。
 honden はそれらを起こす側で、中身は問わない。
 
-### 建てる
+### 仕度
 
 ```bash
 git clone --recurse-submodules https://github.com/sousuke0422/honden
 cd honden
+bash scripts/first_setup.sh
+```
+
+道具を確かめ、本体を用意し、設定と正本を整えて一覧で結ぶ。
+**勝手には入れない** —— 何かを入れる前に必ず訊く（`--yes` で省ける）。
+
+本体の手に入れ方は二つ。
+
+| | | |
+|---|---|---|
+| `--fetch` | 出し物から降ろす | `curl` だけでよい |
+| `--build` | 手元で建てる | Bun と Rust が要る |
+
+### 建てる（手を入れるなら）
+
+```bash
 bun install
 bun run build:all                   # bin/ に 4 つ揃う
 ```
@@ -45,8 +63,10 @@ bun run build:all                   # bin/ に 4 つ揃う
 
 ### 顔ぶれを入れる
 
+`first_setup.sh` がここまでやる。手で入れ替えるときは次のとおり。
+
 **名簿が空のままでは何も送れない。** 誰が何の CLI でどのモデルを使うかを
-`config/settings.yaml` に書き、正本へ写す。
+`config/settings.yaml` に書き、正本へ写す。雛形は `config/settings.yaml.example`。
 
 ```bash
 bin/honden roster sync --settings config/settings.yaml
@@ -204,6 +224,30 @@ honden paths                     # 正本・合図・錠の道（一箇所で決
 
 ---
 
+## 新しくする
+
+```bash
+honden version              # いまの版
+honden update --check       # 出ておるか見るだけ
+honden update --yes         # 取り替える
+```
+
+出し物（GitHub Releases）から四本を降ろし、`SHA256SUMS` と照らして置く。
+**一つでも違えば一つも置かない** —— 半分だけ新しい `bin/` は、どちらの版とも
+違う物になる。置き方は `mv` なので、走っている芯は古い実体を持ったまま生き、
+次に立つときから新しくなる。
+
+> **数は照らすが、署名は無い。** 守れるのは壊れと途中切れまでで、出す側そのものが
+> 乗っ取られた場合は数も一緒に書き換えられる。署名はまだ無い。
+> 守れていないものを守れていると書かないでおく。
+
+札（`v0.2.0` の形）を打つと GitHub Actions が三つの土地
+（linux-x64 / linux-arm64 / darwin-arm64）で建てて出す。
+出す前に**札と `src/version.ts` の版を照らし、食い違えば出さない** ——
+揃え忘れは必ず起きるので、人ではなく機械に拒ませる。
+
+---
+
 ## 困ったとき
 
 | | |
@@ -215,6 +259,7 @@ honden paths                     # 正本・合図・錠の道（一箇所で決
 | 名簿が空と言われる | `honden roster sync --settings …` を先に |
 | 門に止められた | `honden guard appeal`。同じ紋様が続くなら `honden guard denials` で誤検知を疑う |
 | 正本を壊した | `~/.honden/backups` に出陣ごとの写しがある |
+| 降ろした物が検めを通らない | **一つも置かれていない**。網の途中か、出し物が壊れている。`--build` で建てる手もある |
 
 `bun test`（単体）と `bats tests/`（出陣の書）で確かめられる。
 

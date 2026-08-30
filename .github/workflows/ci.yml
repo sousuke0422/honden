@@ -1,0 +1,36 @@
+# 押すたびに検める。
+#
+# 出す時（release.yml）にも同じ検めを置いてあるが、そこで初めて落ちるのでは
+# 遅い——札を打った後に直すことになる。**手前で落とす。**
+
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 道具を入れる（bats に tmux が要る）
+        run: sudo apt-get update && sudo apt-get install -y tmux bats
+
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+
+      # 門の解析器は bats より先に建てる——`guard selftest` が呼ぶゆえ。
+      - run: bun run build:all
+      - run: bats tests/
+
+      - name: 出陣の書は bash として通るか
+        run: bash -n scripts/shutsujin.sh shutsujin_departure.sh scripts/first_setup.sh

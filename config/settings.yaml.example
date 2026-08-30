@@ -1,0 +1,90 @@
+# 顔ぶれと報せの宛先。**これを写して `settings.yaml` にし、自分の陣に直す。**
+#
+#   cp config/settings.yaml.example config/settings.yaml
+#   $EDITOR config/settings.yaml
+#   bin/honden roster sync --settings config/settings.yaml
+#
+# `settings.yaml` 自身は `.gitignore` で除外してある——ntfy の topic は
+# 合鍵そのものゆえ、公にしてはならぬ。この雛形のほうだけを追跡する。
+
+language: ja
+
+# ─────────────────────────────────────────────
+# 顔ぶれ
+# ─────────────────────────────────────────────
+#
+# `type` は起こす CLI（claude / codex / cursor / opencode …）。
+# `model` はその CLI に渡すモデル名。**CLI とモデルは組で書くこと**——
+# 片方だけ変えると命令は通るのに沈黙する（旧環境で実測）。
+#
+# 足軽は 1 体から 7 体まで。要らぬ者は消してよい。
+# 出陣は名簿の順に pane を配るので、**軍師は最後に置く**。
+
+cli:
+  default: claude
+  agents:
+    shogun:
+      type: claude
+      model: claude-opus-5
+    karo:
+      type: claude
+      model: claude-sonnet-5
+    ashigaru1:
+      type: claude
+      model: claude-fable-5
+    ashigaru2:
+      type: claude
+      model: claude-fable-5
+    ashigaru3:
+      type: codex
+      model: gpt-5.6-sol
+    # 軍師は最後
+    gunshi:
+      type: claude
+      model: claude-sonnet-5
+
+# ─────────────────────────────────────────────
+# 任の振り分け
+# ─────────────────────────────────────────────
+#
+# Bloom の段（1〜6）で誰に振れるかを決める。`manual` なら人が決める。
+
+bloom_routing: manual
+
+available_cost_groups:
+  - claude_max
+  - codex
+
+# **能力に制限があるモデルだけ**を挙げる。表に無いものは制限なし。
+# 「載っておらぬ＝使えぬ」にすると、モデルが増えるたびに表が古くなる。
+capability_tiers:
+  claude-opus-5:
+    max_bloom: 6
+    cost_group: claude_max
+  claude-sonnet-5:
+    max_bloom: 6
+    cost_group: claude_max
+  claude-fable-5:
+    max_bloom: 6
+    cost_group: claude_max
+  gpt-5.6-sol:
+    max_bloom: 6
+    cost_group: codex
+
+# ─────────────────────────────────────────────
+# 報せ（任意）
+# ─────────────────────────────────────────────
+#
+# 卓上の通知は常に出る。ntfy は topic を書いた時だけ加わり、
+# 書けば携帯からの受け口（`honden ntfy listen`）も出陣で立つ。
+#
+# **topic は合鍵そのもの。** 知る者は誰でも読め、誰でも書ける。
+# 長く推測しにくい名にすること（短い名・ありふれた名は honden が戒める）。
+#
+# 合鍵は環境変数から取る——`NTFY_TOKEN`、または `NTFY_USER` と `NTFY_PASS`。
+# **ここには書かぬ。** 書く場所を一つに定める。
+#
+# notify:
+#   ntfy:
+#     base: https://ntfy.example.org   # 省けば https://ntfy.sh
+#     topic: honden-9f3a2b7c1d5e
