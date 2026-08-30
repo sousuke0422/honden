@@ -68,6 +68,19 @@ ok()  { echo "  $(c '1;32' '✓') $*"; }
 warn(){ echo "  $(c '1;33' '▲') $*"; }
 die() { echo "  $(c '1;31' '✗') $*" >&2; exit 1; }
 
+# **`… | grep -q` は pipefail の下で嘘をつく。**
+#
+# `grep -q` は見つけた瞬間に抜ける。書き手がまだ書いておれば SIGPIPE で 141 を
+# 返し、`pipefail` がそれを拾う——**印が合うておるのに「無い」と答える**。
+# 出るか出ぬかは走りの速さ次第ゆえ、気まぐれに見える。
+#
+# 初めての札 v0.1.0-rc.1 の門で、窓の生死がこれで割れた（CI で二度、形を変えて
+# 現れ、手元では一度も出ぬ）。計器を計器で測る釘を置いて、ようやく場所が定まった。
+#
+# 一度受けてから照らす。**パイプを作らねば、この筋は消える。**
+grepq()  { grep -qE  -- "$1" <<<"$2"; }
+grepqi() { grep -qiE -- "$1" <<<"$2"; }
+
 banner() {
   echo ""
   echo "$(c '1;33' '  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓')"
@@ -117,7 +130,7 @@ gate() {
   local out
   out=$("$HONDEN_BIN" guard selftest --root "$ROOT" 2>&1)
   echo "$out" | sed 's/^/  /'
-  if echo "$out" | grep -q '効いておらぬ'; then
+  if grepq '効いておらぬ' "$out"; then
     warn "門が効いておらぬまま出陣する。直すまで守りは無いと思え"
   fi
 }
@@ -288,7 +301,7 @@ up() {
   # 二重起動そのものは芯が flock で防ぐゆえ、ここは目安でよい。
   if ! ours "$SESSION_AGENTS"; then
     warn "$SESSION_AGENTS は我らの陣ではない（@honden の印が無い）。芯は接がぬ"
-  elif tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null | grep -qx core; then
+  elif grepq '^core$' "$(tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null || true)"; then
     warn "芯の窓は既にある"
   else
     # 芯は落ちても立ち直る。exec で置き換えず、輪の中で回す——
@@ -299,7 +312,7 @@ up() {
          --path '$CORE_SIGNAL' --lock '$CORE_LOCK' -- '$HONDEN_BIN' nudge; \
          echo \"[\$(date -Is)] 芯が落ちた。3 秒後に立て直す\"; sleep 3; done"
     sleep 1
-    if tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null | grep -qx core; then
+    if grepq '^core$' "$(tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null || true)"; then
       ok "芯を起こした（旧環境の watcher 9 本ぶん）"
     else
       warn "芯を起こしたが窓が消えた。合図が届かぬ——手で確かめられよ:"
@@ -337,7 +350,7 @@ earpiece() {
     warn "$SESSION_AGENTS は我らの陣ではない（@honden の印が無い）。耳は接がぬ"
     return 0
   fi
-  if tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null | grep -qx ntfy; then
+  if grepq '^ntfy$' "$(tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null || true)"; then
     warn "耳の窓は既にある"
     return 0
   fi
@@ -348,7 +361,7 @@ earpiece() {
     "while true; do HONDEN_DB=$qdb $qhonden ntfy listen; \
        echo \"[\$(date -Is)] 耳が落ちた。5 秒後に張り直す\"; sleep 5; done"
   sleep 1
-  if tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null | grep -qx ntfy; then
+  if grepq '^ntfy$' "$(tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null || true)"; then
     ok "携帯からの耳を立てた（topic は設定に在り）"
   else
     warn "耳を立てたが窓が消えた。携帯からの文は届かぬ——手で確かめられよ:"
@@ -375,8 +388,9 @@ ours() {
 # `--noproxy` を必ず付ける。この機は http_proxy を持っており、**己の内への
 # 問い合わせまで中継へ回される**（将軍自身が検分中に踏んだ・2026-08-29）。
 viewer_alive() {
-  curl -sf --noproxy '*' -m 2 -o /dev/null -D - "http://$1:$2/api/version" 2>/dev/null \
-    | grep -qi '^x-honden:'
+  local head
+  head=$(curl -sf --noproxy '*' -m 2 -o /dev/null -D - "http://$1:$2/api/version" 2>/dev/null) || return 1
+  grepqi '^x-honden:' "$head"
 }
 
 # 戦況の窓。出陣に含めるが、単体でも立て直せる（`shutsujin_departure.sh viewer`）。
@@ -413,13 +427,13 @@ viewer() {
 
   # 口が塞がっておるのに我らが応えぬ——**よその者が座っておる**。
   # 二本目を立てても輪の中で失敗を刷り続けるだけゆえ、立てぬ。
-  if ss -ltn 2>/dev/null | grep -qE "[.:]$VIEWER_PORT[[:space:]]"; then
+  if grepq "[.:]$VIEWER_PORT[[:space:]]" "$(ss -ltn 2>/dev/null || true)"; then
     warn "口 $VIEWER_PORT によその者が座っておる。別の口で開かれよ:"
     echo "      HONDEN_DASHBOARD_PORT=<番号> bash shutsujin_departure.sh viewer"
     return 0
   fi
 
-  if tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null | grep -qx viewer; then
+  if grepq '^viewer$' "$(tmux list-windows -t "=$SESSION_AGENTS" -F '#{window_name}' 2>/dev/null || true)"; then
     warn "viewer 窓はあるが、口 $VIEWER_PORT では応えぬ。別の口で配っておるか、倒れておる:"
     echo "      tmux attach -t $SESSION_AGENTS \\; select-window -t viewer   # 中を見る"
     echo "      （窓を畳んで立て直すのは人の手で。D006 によりこの書は畳めぬ）"
@@ -490,7 +504,7 @@ status() {
   echo "  戦況の窓"
   if viewer_alive "$VIEWER_HOST" "$VIEWER_PORT"; then
     echo "    応えておる — http://$VIEWER_HOST:$VIEWER_PORT"
-  elif ss -ltn 2>/dev/null | grep -qE "[.:]$VIEWER_PORT[[:space:]]"; then
+  elif grepq "[.:]$VIEWER_PORT[[:space:]]" "$(ss -ltn 2>/dev/null || true)"; then
     echo "    口 $VIEWER_PORT は塞がっておるが、我らではない（よその者）"
   else
     echo "    応えぬ（口 $VIEWER_PORT）"

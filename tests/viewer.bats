@@ -46,6 +46,19 @@ run_viewer() { run bash "$ROOT/shutsujin_departure.sh" viewer; }
   assert_success
 }
 
+@test "**応えが長うても、印を見つければ生きておると判ずる**（pipefail × SIGPIPE）" {
+  # 気まぐれの正体はこれであった。`curl | grep -q` は、grep が先に抜けた時
+  # 書き手へ SIGPIPE を送り、pipefail がその 141 を拾う——**印が合うておるのに
+  # 「死んでおる」と答える**。出るか出ぬかは走りの速さ次第ゆえ、CI でだけ、
+  # しかも形を変えて現れた（v0.1.0-rc.1 の門で二度）。
+  #
+  # 長い応えを返させれば SIGPIPE は必ず起きる。気まぐれを**確かな試験**に変える。
+  stub_curl loud
+  run_viewer
+  assert_success
+  assert_output --partial "既に応えておる"
+}
+
 @test "我らが既に応えておれば、それでよい" {
   stub_curl alive
   run_viewer

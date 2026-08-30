@@ -64,6 +64,12 @@ stub_curl() {
     case "$1" in
       alive)    echo 'printf "HTTP/1.1 200 OK\r\nX-Honden: dashboard\r\n\r\n"; exit 0' ;;
       stranger) echo 'printf "HTTP/1.1 200 OK\r\nServer: nazo\r\n\r\n"; exit 0' ;;
+      # **長い応え。** grep -q は印を見つけた瞬間に抜けるゆえ、書き手はまだ
+      # 書いておる最中に SIGPIPE を食う。`… | grep -q` を使うておれば、
+      # pipefail がその 141 を拾い「印は無い」と嘘をつく。
+      loud)     echo 'printf "HTTP/1.1 200 OK\r\nX-Honden: dashboard\r\n"'
+                echo 'for i in $(seq 1 200000); do printf "X-Filler-%s: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n" "$i"; done'
+                echo 'exit 0' ;;
       *)        echo 'exit 7' ;;
     esac
   } > "$STUB/curl"

@@ -23,6 +23,9 @@
 # ============================================================
 set -euo pipefail
 
+# 注: `… | grep -q` は pipefail の下で嘘をつく（grep -q が先に抜け、書き手が
+# SIGPIPE で 141 を返す）。この書では受けてから照らす形に統一してある。
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION="${HONDEN_TEST_SESSION:-honden-test}"
 # **本番と同じ二陣構成にする。** 将軍は別の陣に住む。
@@ -191,7 +194,7 @@ smoke() {
   echo "── karo の受け手に inbox_notice が届くのを待つ（最大 20 秒） ──"
   local waited=0
   while [ $waited -lt 40 ]; do
-    if tail -n "+$((before_lines + 1))" "$RECV/karo.log" 2>/dev/null | grep -q 'inbox_notice'; then
+    if grep -q -- 'inbox_notice' <<<"$(tail -n "+$((before_lines + 1))" "$RECV/karo.log" 2>/dev/null || true)"; then
       echo "  ✓ 届いた（この smoke で新しく現れた行）:"
       tail -n "+$((before_lines + 1))" "$RECV/karo.log" | grep 'inbox_notice' | tail -1 | sed 's/^/    /'
       echo "── 正本側の未読 ──"
@@ -297,7 +300,7 @@ smoke_shogun() {
   echo "── watcher の nudge（inboxN）が karo の受け手へ届くのを待つ（最大 40 秒） ──"
   local waited=0
   while [ $waited -lt 80 ]; do
-    if tail -n "+$((before_lines + 1))" "$RECV/karo.log" 2>/dev/null | grep -qE 'inbox[0-9]+'; then
+    if grep -qE -- 'inbox[0-9]+' <<<"$(tail -n "+$((before_lines + 1))" "$RECV/karo.log" 2>/dev/null || true)"; then
       echo "  ✓ 届いた:"
       tail -n "+$((before_lines + 1))" "$RECV/karo.log" | grep -E 'inbox[0-9]+' | tail -1 | sed 's/^/    /'
       return 0

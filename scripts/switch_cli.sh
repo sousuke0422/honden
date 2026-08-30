@@ -146,7 +146,11 @@ info "抜けさせた（$CUR_TYPE）"
 waited=0
 while [ "$waited" -lt 15 ]; do
   sleep 1; waited=$((waited + 1))
-  if tmux capture-pane -t "$PANE" -p 2>/dev/null | grep -v '^$' | tail -3 | grep -qE '[\$%#❯►] *$'; then
+  # `… | grep -q` は pipefail の下で嘘をつく（grep -q が先に抜け、書き手が
+  # SIGPIPE で 141 を返す）。受けてから照らす。
+  local tail3
+  tail3=$(tmux capture-pane -t "$PANE" -p 2>/dev/null | grep -v '^$' | tail -3 || true)
+  if grep -qE -- '[\$%#❯►] *$' <<<"$tail3"; then
     ok "シェルが戻った（${waited}秒）"
     break
   fi
