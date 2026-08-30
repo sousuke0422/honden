@@ -5,7 +5,7 @@
  * 検めを通らぬ物が `bin/` に座る。ゆえに釘は「置かぬ」側へ厚く打つ。
  */
 import { describe, expect, test } from 'bun:test';
-import { VERSION, REPO, parseVersion, isNewer } from '../src/version';
+import { VERSION, REPO, parseVersion, isNewer, compareVersions, isPrerelease } from '../src/version';
 import {
   BINARIES, SUMS, platformOf, assetName, parseSums, planFor, decide, tagFrom, verify,
   releaseApiUrl, assetUrl,
@@ -13,13 +13,30 @@ import {
 
 describe('版の比べ', () => {
   test('数の並びへ解ける（v は付いても付かなくても）', () => {
-    expect(parseVersion('v1.2.3')).toEqual([1, 2, 3]);
-    expect(parseVersion('1.2.3')).toEqual([1, 2, 3]);
-    expect(parseVersion('v1.2.3-rc1')).toEqual([1, 2, 3]);
+    expect(parseVersion('v1.2.3')).toEqual({ major: 1, minor: 2, patch: 3, pre: [] });
+    expect(parseVersion('1.2.3')).toEqual({ major: 1, minor: 2, patch: 3, pre: [] });
   });
 
-  test('形が違えば解かぬ', () => {
-    for (const s of ['', 'latest', 'v1.2', 'v1.2.3.4x', 'main']) expect(parseVersion(s)).toBeNull();
+  test('仮の版の札を**捨てずに**持つ', () => {
+    // 捨てておった。ゆえに 0.1.0-rc.1 と 0.1.0 が同じ版に見えた（殿のご指摘）
+    expect(parseVersion('v0.1.0-rc.1')!.pre).toEqual(['rc', 1]);
+    expect(parseVersion('1.0.0-alpha')!.pre).toEqual(['alpha']);
+    expect(parseVersion('1.0.0-0.3.7')!.pre).toEqual([0, 3, 7]);
+  });
+
+  test('build（+ の後）は比べに与らぬ', () => {
+    expect(compareVersions('1.0.0+abc', '1.0.0+xyz')).toBe(0);
+    expect(compareVersions('1.0.0-rc.1+a', '1.0.0-rc.1')).toBe(0);
+  });
+
+  test('形が違えば解かぬ（部分一致で読まぬ）', () => {
+    for (const s of ['', 'latest', 'v1.2', 'v1.2.3.4', 'main', 'v1.2.3-', '1.2.3-rc..1', 'v1.2.3 rc'])
+      expect(parseVersion(s)).toBeNull();
+  });
+
+  test('頭の 0 は認めぬ（読み方が二通りある物を推さぬ）', () => {
+    expect(parseVersion('01.2.3')).toBeNull();
+    expect(parseVersion('1.0.0-rc.01')).toBeNull();
   });
 
   test('段ごとに比べる（10 > 9 を字で誤らぬ）', () => {
@@ -35,6 +52,55 @@ describe('版の比べ', () => {
   test('**解けぬ版は新しくないと見る**（壊れた札一つで全員降ろさぬ）', () => {
     expect(isNewer('latest', '0.1.0')).toBe(false);
     expect(isNewer('v9.9.9', 'こわれた')).toBe(false);
+  });
+
+  test('**解けぬ物は「等しい」に化けぬ**（compare は null を返す）', () => {
+    expect(compareVersions('latest', '1.0.0')).toBeNull();
+    expect(compareVersions('1.0.0', '1.0.0')).toBe(0);
+  });
+});
+
+describe('仮の版（rc / beta / alpha）— SemVer 2.0.0 の順序', () => {
+  test('**仮の版は、同じ数の正式版より低い**', () => {
+    expect(isNewer('1.0.0', '1.0.0-rc.1')).toBe(true);
+    expect(isNewer('1.0.0-rc.1', '1.0.0')).toBe(false);
+    // これが直った所である——rc を使う者に正式版が出たと告げられる
+    expect(isNewer('0.1.0', '0.1.0-rc.1')).toBe(true);
+  });
+
+  test('仮の版どうしも順が付く', () => {
+    expect(isNewer('0.1.0-rc.2', '0.1.0-rc.1')).toBe(true);
+    expect(isNewer('1.0.0-beta', '1.0.0-alpha')).toBe(true);
+  });
+
+  test('**数の札は数として比べる**（beta.11 > beta.2）', () => {
+    // 字で比べると "11" < "2" となり、11 が古いことになる
+    expect(isNewer('1.0.0-beta.11', '1.0.0-beta.2')).toBe(true);
+  });
+
+  test('数の札は字の札より低い（1.0.0-1 < 1.0.0-alpha）', () => {
+    expect(isNewer('1.0.0-alpha', '1.0.0-1')).toBe(true);
+  });
+
+  test('札が多いほうが上（alpha < alpha.1）', () => {
+    expect(isNewer('1.0.0-alpha.1', '1.0.0-alpha')).toBe(true);
+  });
+
+  test('SemVer が示す並びを、端から端まで通す', () => {
+    const chain = [
+      '1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta',
+      '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0',
+    ];
+    for (let i = 1; i < chain.length; i++) {
+      expect(isNewer(chain[i]!, chain[i - 1]!)).toBe(true);
+      expect(isNewer(chain[i - 1]!, chain[i]!)).toBe(false);
+    }
+  });
+
+  test('仮の版かを見分けられる', () => {
+    expect(isPrerelease('1.0.0-rc.1')).toBe(true);
+    expect(isPrerelease('1.0.0')).toBe(false);
+    expect(isPrerelease('こわれた')).toBe(false);
   });
 });
 

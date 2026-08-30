@@ -17,7 +17,7 @@ import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, typ
 import { desktopSink } from './notify/desktop';
 import { config as ntfyConfig, ntfySink, topicWarning } from './notify/ntfy';
 import { parseLine, listenArgs, streamUrl, backoffMs, receive } from './notify/listen';
-import { VERSION } from './version';
+import { VERSION, isPrerelease } from './version';
 import {
   BINARIES, SUMS, platformOf, planFor, decide, tagFrom, verify, parseSums, releaseApiUrl,
 } from './update';
@@ -2243,7 +2243,13 @@ function notifyAfterNudge(dbPath: string | undefined): void {
     return emit(await runNtfyListen(dbPath, flags['once'] !== undefined));
   }
 
-  if (rest[0] === 'version') return emit({ code: EXIT_OK, out: `honden ${VERSION}` });
+  if (rest[0] === 'version') {
+    // 仮の版なら、そう名乗る。**己が試し物であることを黙らせぬ**——
+    // 出し物の口（/releases/latest）は仮の版を返さぬゆえ、ここで黙ると
+    // 「更新は無い」と「そもそも降りてこぬ」の区別が付かなくなる。
+    const mark = isPrerelease(VERSION) ? '（仮の版。honden update には降りてこぬ）' : '';
+    return emit({ code: EXIT_OK, out: `honden ${VERSION}${mark}` });
+  }
 
   if (rest[0] === 'update') {
     return emit(await runUpdate(flags['check'] !== undefined, flags['yes'] !== undefined));

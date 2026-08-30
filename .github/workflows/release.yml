@@ -32,12 +32,26 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
+      prerelease: ${{ steps.pick.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
 
       - id: pick
-        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        # **仮の版（-rc.1 / -beta.1 / -alpha.1）を「最新」に据えぬ。**
+        #
+        # GitHub の `/releases/latest` は prerelease を外して返す。降ろす側は
+        # そこしか見ぬゆえ、ここで印を付ければ**安定版の使い手に alpha が
+        # 降ることは無い**。逆に印を付け忘れると、SemVer 上は
+        # `0.2.0-alpha.1 > 0.1.0` ゆえ全員に降ってしまう。
+        run: |
+          set -euo pipefail
+          tag='${{ github.event.inputs.tag || github.ref_name }}'
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          case "$tag" in
+            *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT"; echo "仮の版として出す: $tag" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT"; echo "正式版として出す: $tag" ;;
+          esac
 
       - name: 札と src/version.ts を照らす
         run: |
@@ -124,7 +138,12 @@ jobs:
           tag_name: ${{ needs.gate.outputs.tag }}
           files: all/*
           generate_release_notes: true
+          prerelease: ${{ needs.gate.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.gate.outputs.prerelease != 'true' }}
           body: |
             `honden update --check` で確かめ、`honden update --yes` で取り替えられる。
 
             **数（SHA256）は照らすが、署名は無い。** 守れるのは壊れと途中切れまでである。
+
+            仮の版（`-rc` / `-beta` / `-alpha`）は prerelease として出るので、
+            `honden update` には降りてこぬ。試すなら手で降ろされよ。
