@@ -17,7 +17,7 @@ stub_dir() {
   STUB="$BATS_TEST_TMPDIR/bin"
   CALLS="$BATS_TEST_TMPDIR/calls"
   mkdir -p "$STUB"; : > "$CALLS"
-  PATH="$STUB:$PATH"; export PATH CALLS
+  PATH="$STUB:$PATH"; export PATH CALLS STUB
 }
 
 # stub <名> [終了コード] [吐く文字列]
@@ -68,4 +68,26 @@ stub_curl() {
     esac
   } > "$STUB/curl"
   chmod +x "$STUB/curl"
+}
+
+# 窓が**生える** tmux の贋物。
+#   stub_tmux_grows <has-session の終了コード> <立てる前の窓> <立てた後の窓>
+#
+# 元の stub_tmux は常に同じ窓一覧を返す。それでは「立てたら見えるようになる」
+# を写せず、**立てる筋そのものを試験できぬ**（我が最初の組み方がこれで、
+# 「既にある」枝へ落ちておった）。new-window を受けた跡で応えを変える。
+stub_tmux_grows() {
+  local has="$1" before="$2" after="$3"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "tmux" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'case "$1" in'
+    echo "  has-session) exit $has ;;"
+    echo '  new-window) : > "$STUB/.grown" ;;'
+    echo "  list-windows) if [ -e \"\$STUB/.grown\" ]; then printf '%s\\n' '$after'; else printf '%s\\n' '$before'; fi ;;"
+    echo "  show-options) printf '%s\\n' \"\$HONDEN_TEST_ROOT\" ;;"
+    echo 'esac'
+    echo 'exit 0'
+  } > "$STUB/tmux"
+  chmod +x "$STUB/tmux"
 }

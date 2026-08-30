@@ -269,7 +269,17 @@ tests/specs/osato_lms_*
 !/tests/test_helper/bats-assert
 
 # 試験環境（tmux で布陣を起こし、配達層を通しで検める）
+# 門が止めた命を検分する役の定義。指図書が名指ししておるゆえ、
+# 無ければ公開した側で呼び出せぬ。
+!/agents/
+!/agents/*.md
+
 !/scripts/
+# 出陣の本体。**許可行が無く、一度も追跡されておらなんだ**（2026-08-30 気づく）。
+# 根の入口 shutsujin_departure.sh だけが公になっており、それが exec する先が
+# 落ちておった——公開した書が、公開しておらぬ書を呼ぶ形になっておった。
+!/scripts/shutsujin.sh
+!/scripts/switch_cli.sh
 !/scripts/testenv.sh
 !/scripts/testenv/
 !/scripts/testenv/recv.sh

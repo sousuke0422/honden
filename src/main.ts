@@ -16,6 +16,7 @@ import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
 import { config as ntfyConfig, ntfySink, topicWarning } from './notify/ntfy';
+import { parseLine, listenArgs, streamUrl, backoffMs, receive } from './notify/listen';
 import {
   add as sayAdd,
   list as sayList,
@@ -1975,6 +1976,85 @@ export async function main(argv: string[]): Promise<number> {
  * **口を一つに保つ。** 出来事ごとに撃つ口を散らせば、新しい出来事を足すたびに
  * 撃ち忘れの筋が生まれる（殿の裁可 2026-08-30・「い」の道）。
  */
+/**
+ * `honden ntfy listen` — 携帯からの文を受け、将軍の inbox へ入れる。
+ *
+ * **止めるまで返らぬ。** 繋ぎが落ちれば待って張り直す。
+ *
+ * # 将軍を起こすか
+ *
+ * 起こさぬ。`mode.ts` が言うとおり、将軍へ合図を撃たぬのは将軍が偉い
+ * からではなく、**殿がいま打ち込んでおる最中を潰すゆえ**である。
+ * そして携帯から届いた文は、その判断を覆す証にはならぬ——殿が卓上に
+ * 居られながら携帯から打たれることは有り得る。
+ *
+ * 代わりに正本を動かす。芯（honden-watch）が動きを拾い `honden nudge` を
+ * 叩き、そこに報せが乗っておる。卓上に居られれば通知が出、
+ * 席を外して自律へ移しておられれば合図が飛ぶ。**既にある二本の路で足り、
+ * ここが三本目を生やす要は無い。**
+ */
+async function runNtfyListen(dbPath: string | undefined, once: boolean): Promise<RunResult> {
+  const opened = readingStore(() => openStore({ path: dbPath, create: false }));
+  if (!opened.ok) return opened.result;
+  const db = opened.value;
+
+  const cfg = configLoad(db);
+  const c = cfg.ok ? ntfyConfig(cfg.doc, process.env) : null;
+  if (!c) {
+    return {
+      code: EXIT_INVALID,
+      out:
+        '  ntfy の設定が無い。config/settings.yaml に notify.ntfy.topic を書かれよ。\n' +
+        '  受け口も送り口も同じ設定を見る——別に書けば、いつか片方だけ動く。',
+    };
+  }
+  const w = topicWarning(c.topic);
+  if (w) console.error(`  ※ ${w}`);
+  console.error(`  ${streamUrl(c.base, c.topic)} を聴いておる。止めるは Ctrl-C。`);
+
+  let attempt = 0;
+  for (;;) {
+    const proc = Bun.spawn(listenArgs(c), { stdout: 'pipe', stderr: 'pipe' });
+    let got = false;
+    let buf = '';
+    try {
+      for await (const chunk of proc.stdout) {
+        buf += new TextDecoder().decode(chunk);
+        // **行の途中で切れる。** 最後の断片は次の塊まで持ち越す
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          const m = parseLine(line);
+          if (!m) continue;
+          got = true;
+          const r = tx(db, () => receive(db, m, new Date()));
+          if (!r.stored) continue;
+          inboxSignal(db); // 芯が拾い、報せと合図はそちらに乗る
+          console.error(`  📱 受けた: ${m.text.slice(0, 60)}`);
+          // 受けた旨を携帯へ返す。**返しは本務ではない**ゆえ躓いても続ける
+          try {
+            ntfySink(c).send({ title: '', body: r.ack ?? '', key: `ntfy:ack:${m.id}` });
+          } catch {
+            /* 返せずとも、受けた事実は正本に在る */
+          }
+          if (once) {
+            proc.kill();
+            return { code: EXIT_OK, out: '  一通受けて退いた。' };
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`  繋ぎが切れた: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    // **一通でも受けておれば、待ちを一から数え直す。** 長く繋がっておった
+    // 後の切断は、繋げぬ状態とは違う
+    attempt = got ? 1 : attempt + 1;
+    const wait = backoffMs(attempt);
+    console.error(`  ${Math.round(wait / 1000)} 秒後に張り直す（${attempt} 度目）。`);
+    await Bun.sleep(wait);
+  }
+}
+
 function sendNotices(
   dbPath: string | undefined,
   port: number,
@@ -2047,6 +2127,10 @@ function notifyAfterNudge(dbPath: string | undefined): void {
     const port = Number(flags['port'] ?? DASHBOARD_PORT) || DASHBOARD_PORT;
     const r = readingStore(() => sendNotices(dbPath, port, dryRun).out);
     return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
+  }
+
+  if (rest[0] === 'ntfy' && rest[1] === 'listen') {
+    return emit(await runNtfyListen(dbPath, flags['once'] !== undefined));
   }
 
   if (rest[0] === 'paths') {
