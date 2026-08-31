@@ -8,7 +8,7 @@
 //! そこで**ただ一つの道**を開ける。ここは次を守る。
 //!
 //! 一、撃つ相手が**己の pane の系譜の下**にあること
-//! 二、検めと送信を**一息で**行うこと（間に pid が別物へ移る隙を残さぬ）
+//! 二、**pidfd で掴んでから検め、掴んだまま撃つ**こと（pid の使い回しが届かぬ）
 //! 三、**群れを撃つ形は受けぬ**（負の pid、`0`、複数）
 //!
 //! # 門は pid を見ない
@@ -32,6 +32,45 @@
 
 use std::process::Command;
 
+/// `pidfd_open(2)` と `pidfd_send_signal(2)`。
+///
+/// # なぜ pid で撃たぬか
+///
+/// pid は**使い回される**。検めてから撃つまでの間に相手が終わり、同じ番号が
+/// 別の process へ渡ることがある。元は「検めた直後に撃つゆえ隙は無い」と
+/// 書いていた。**嘘であった**（sol の点検が釣った・2026-09-01）。
+/// 隣に置くだけでは窓は狭くなるが、閉じはせぬ。
+///
+/// pidfd は**その process そのもの**を掴む。掴んだ後にその process が終われば、
+/// 番号が誰に渡ろうと fd は死んだ相手を指したままで、他人へは届かぬ。
+///
+/// ゆえに順を変える。**掴む → 検める → 掴んだまま撃つ。**
+///
+/// libc crate には版によって載っておらぬので、番号で呼ぶ。
+/// この二つは Linux 5.1（2019）以降で、番号は主要な土地で共通である。
+const SYS_PIDFD_SEND_SIGNAL: libc::c_long = 424;
+const SYS_PIDFD_OPEN: libc::c_long = 434;
+
+/// その process を掴む。掴めねば `None`（既に居らぬか、権が無い）。
+fn pidfd_open(pid: i32) -> Option<i32> {
+    let fd = unsafe { libc::syscall(SYS_PIDFD_OPEN, pid as libc::c_int, 0 as libc::c_uint) };
+    if fd < 0 { None } else { Some(fd as i32) }
+}
+
+/// 掴んだ相手へ送る。**番号ではなく fd へ送るゆえ、使い回しが届かぬ。**
+fn pidfd_send_signal(fd: i32, sig: i32) -> Result<(), std::io::Error> {
+    let rc = unsafe {
+        libc::syscall(
+            SYS_PIDFD_SEND_SIGNAL,
+            fd as libc::c_int,
+            sig as libc::c_int,
+            std::ptr::null_mut::<libc::siginfo_t>(),
+            0 as libc::c_uint,
+        )
+    };
+    if rc == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
 /// 撃ってよい信号。
 ///
 /// **少なく保つ。** `KILL`(9) を入れていないのは意図である——後始末をさせずに
@@ -45,7 +84,12 @@ const SIGNALS: &[(&str, i32)] = &[
 /// 系譜を辿る深さの上限。輪や深すぎる木で止まらぬため（`anchor.ts` と同じ）。
 const MAX_DEPTH: usize = 24;
 
-fn die(msg: &str) -> ! {
+/// 拒んで退く。**必ず帳へ残す。**
+///
+/// 元は `journal` を呼ぶ拒みと呼ばぬ拒みが混じっていた（sol の点検・2026-09-01）。
+/// 検める側から見れば、記録の無い拒みは**起きなかったのと区別が付かぬ**。
+fn die(reason: &str, msg: &str) -> ! {
+    journal(&format!("refused\treason={reason}"));
     eprintln!("  {msg}");
     std::process::exit(2);
 }
@@ -99,10 +143,16 @@ fn pane_pid() -> Option<i32> {
 /// 正本（SQLite）は抱えない。抱えれば、この物が「何でもできる物」に近づく。
 /// 隣に追記するだけの帳で足りる——**後から誰が何を撃ったか辿れれば良い。**
 fn journal(line: &str) {
-    let db = std::env::var("HONDEN_DB").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{home}/.honden/honden.db")
-    });
+    // **道は絶対で、遡りを含まぬ物だけ受ける。** `HONDEN_DB=/tmp/../../x/db` の
+    // ような形で帳を任意の場所へ向けられる（sol の点検・2026-09-01）。
+    // この物は特権を持たぬので実害は小さいが、**帳の行き先を外から動かせるのは
+    // 検めの筋として悪い**。怪しければ既定へ落とす。
+    let home = std::env::var("HOME").unwrap_or_default();
+    let fallback = format!("{home}/.honden/honden.db");
+    let db = match std::env::var("HONDEN_DB") {
+        Ok(v) if v.starts_with('/') && !v.split('/').any(|seg| seg == "..") => v,
+        _ => fallback,
+    };
     let dir = match db.rfind('/') {
         Some(i) => &db[..i],
         None => ".",
@@ -145,15 +195,18 @@ fn main() {
         match a {
             "--signal" | "-s" => {
                 i += 1;
-                sig_name = args.get(i).map(String::as_str).unwrap_or_else(|| usage());
+                match args.get(i) {
+                    Some(v) => sig_name = v.as_str(),
+                    None => die("no-signal-value", "--signal に値が無い"),
+                }
             }
             _ if a.starts_with('-') => {
-                die(&format!("知らぬ旗である: {a}（受けるのは --signal だけ）"));
+                die("unknown-flag", &format!("知らぬ旗である: {a}（受けるのは --signal だけ）"))
             }
             _ => {
                 if pid_arg.is_some() {
                     // **複数は受けぬ。** 一つ検めても、残りが漏れる
-                    die("pid は一つだけ受ける。**群れを撃つ形は通さぬ**");
+                    die("multiple-pids", "pid は一つだけ受ける。群れを撃つ形は通さぬ");
                 }
                 pid_arg = Some(a);
             }
@@ -161,66 +214,85 @@ fn main() {
         i += 1;
     }
 
-    let raw = pid_arg.unwrap_or_else(|| usage());
+    let raw = match pid_arg {
+        Some(r) => r,
+        None => die("no-pid", "pid が要る"),
+    };
     let pid: i32 = match raw.parse() {
         Ok(p) => p,
-        Err(_) => die(&format!("pid が数でない: {raw}")),
+        Err(_) => die("not-a-number", &format!("pid が数でない: {raw}")),
     };
 
     // 負の pid は process group、`0` は己の group、`-1` は撃てるすべて。
     // いずれも「一つを撃つ」ではない。
     if pid <= 0 {
-        journal(&format!("refused\tpid={pid}\treason=group"));
-        die("pid は 1 以上でなければならぬ（0 は己の group、負は group、-1 は撃てるすべて）");
+        die("group", "pid は 1 以上でなければならぬ（0 は己の group、負は group、-1 は撃てるすべて）");
     }
 
     let sig = match SIGNALS.iter().find(|(n, _)| n.eq_ignore_ascii_case(sig_name)) {
         Some((_, s)) => *s,
-        None => die(&format!(
-            "受けぬ信号である: {sig_name}（{})",
-            SIGNALS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(" / ")
-        )),
+        None => die(
+            "bad-signal",
+            &format!(
+                "受けぬ信号である: {sig_name}（{}）",
+                SIGNALS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(" / ")
+            ),
+        ),
     };
 
     let root = match pane_pid() {
         Some(p) => p,
-        None => {
-            journal(&format!("refused\tpid={pid}\treason=no-pane"));
-            die("陣の中ではない（TMUX_PANE から pane を引けぬ）。ここは布陣の中だけの道である");
-        }
+        None => die("no-pane", "陣の中ではない（TMUX_PANE から pane を引けぬ）。ここは布陣の中だけの道である"),
     };
 
     // **名乗りをそのまま信じぬ。** TMUX_PANE は環境変数ゆえ騙れる。
     // 己の系譜がその pane の下にあることを、まず照らす。
     let me = std::process::id() as i32;
     if !chain_from(me).contains(&root) {
-        journal(&format!("refused\tpid={pid}\treason=not-in-pane"));
-        die("名乗った pane の下に己がおらぬ。TMUX_PANE を騙ってはならぬ");
+        die("not-in-pane", "名乗った pane の下に己がおらぬ。TMUX_PANE を騙ってはならぬ");
     }
 
-    // 相手が己の系譜の下か。**ここが本題である。**
-    let target = chain_from(pid);
-    if !target.contains(&root) {
-        journal(&format!("refused\tpid={pid}\treason=outside\troot={root}"));
-        die(&format!(
-            "その process は己の pane（pid {root}）の下におらぬ。他人の物は撃たぬ"
-        ));
-    }
     // 己自身と pane の根は撃たせぬ。落とせば、その pane ごと死ぬ
     if pid == me || pid == root {
-        journal(&format!("refused\tpid={pid}\treason=self"));
-        die("己または pane の根は撃たぬ");
+        die("self", "己または pane の根は撃たぬ");
     }
 
-    // **検めた直後に撃つ。** 間に何も挟まぬ——挟めば、その隙に pid が
-    // 別の process へ移りうる（使い回し）。
-    let rc = unsafe { libc::kill(pid, sig) };
-    if rc != 0 {
-        let e = std::io::Error::last_os_error();
-        journal(&format!("failed\tpid={pid}\tsig={sig_name}\terr={e}"));
-        eprintln!("  撃てなんだ（pid {pid}）: {e}");
-        std::process::exit(1);
+    // ── ここから順が肝である ──
+    //
+    // **掴む → 検める → 掴んだまま撃つ。**
+    //
+    // pid で撃つと、検めてから撃つまでに相手が終わり、同じ番号が別の process へ
+    // 渡りうる。隣に並べても窓は狭くなるだけで閉じはせぬ（sol の点検・2026-09-01）。
+    // 先に pidfd で掴めば、以後その fd は**その process そのもの**を指す。
+    // 掴んだ後に相手が終われば fd は死んだ相手を指したままで、他人へは届かぬ。
+    let fd = match pidfd_open(pid) {
+        Some(f) => f,
+        None => {
+            let e = std::io::Error::last_os_error();
+            die("no-such-process", &format!("その process を掴めぬ（pid {pid}）: {e}"));
+        }
+    };
+
+    // 掴んだ**後**に系譜を見る。掴む前に見ると、見てから掴むまでが隙になる。
+    let target = chain_from(pid);
+    if !target.contains(&root) {
+        unsafe { libc::close(fd) };
+        journal(&format!("refused\tpid={pid}\treason=outside\troot={root}"));
+        eprintln!("  その process は己の pane（pid {root}）の下におらぬ。他人の物は撃たぬ");
+        std::process::exit(2);
     }
-    journal(&format!("sent\tpid={pid}\tsig={sig_name}\troot={root}"));
-    println!("  {sig_name} を送った（pid {pid}・pane {root} の下）");
+
+    match pidfd_send_signal(fd, sig) {
+        Ok(()) => {
+            unsafe { libc::close(fd) };
+            journal(&format!("sent\tpid={pid}\tsig={sig_name}\troot={root}"));
+            println!("  {sig_name} を送った（pid {pid}・pane {root} の下）");
+        }
+        Err(e) => {
+            unsafe { libc::close(fd) };
+            journal(&format!("failed\tpid={pid}\tsig={sig_name}\terr={e}"));
+            eprintln!("  撃てなんだ（pid {pid}）: {e}");
+            std::process::exit(1);
+        }
+    }
 }

@@ -13,8 +13,18 @@ pub struct LinuxWatch {
     ino: Inotify,
     /// 見張る先。起きるたびに付け直すために持つ。
     paths: Vec<PathBuf>,
+    /// 見張る先の**親**。消えて作り直された時に気づくために持つ。
+    dirs: Vec<PathBuf>,
     mask: u32,
+    /// 付け直しに続けて失敗しておるか。黙って死なぬために数える。
+    blind: std::cell::Cell<u32>,
 }
+
+/// 親を見る時の目。**生まれと入りだけ**を見る。
+///
+/// `IN_MODIFY` まで入れると、同じ棚にある正本や WAL の書き込みで毎回起きる。
+/// 生まれと入りは稀ゆえ、これだけなら騒がしくならない。
+const DIR_MASK: u32 = IN_CREATE | IN_MOVED_TO;
 
 impl LinuxWatch {
     /// 見張りを付け直す。
@@ -28,10 +38,49 @@ impl LinuxWatch {
     /// どの名が動いたかを見て分岐すると、見落とした名が黙って落ちる。
     ///
     /// 付け直しに失敗しても倒れない。**芯が落ちると誰も起こせなくなる。**
-    /// 次に起きた時にまた試す。
+    ///
+    /// # 「次に起きた時にまた試す」は嘘であった
+    ///
+    /// 元はそう書いてあった。**次が来ぬ。** 見張りが外れておるのだから、
+    /// 何が起きても起こされぬ。実測（2026-09-01・sol の点検が釣った）:
+    ///
+    /// ```text
+    /// 書き換え        起きた
+    /// 消す            起きた（消滅の報せ）→ 付け直しが ENOENT で失敗
+    /// 作り直して書く   **起きぬ**
+    /// さらに書く       **起きぬ**
+    /// ```
+    ///
+    /// 合図の口が消えて作り直される筋は実際にある。そこで黙れば、
+    /// **誰も起こされぬまま、何も壊れていないように見える。**
+    ///
+    /// ゆえに**親も見る**。子が居らずとも親は在るので、作り直された折に
+    /// 生まれの報せで起き、そこで付け直せる。
     fn rearm(&self) {
+        let mut failed = 0;
+        for d in &self.dirs {
+            if self.ino.add(d, DIR_MASK).is_err() {
+                failed += 1;
+            }
+        }
+        let mut lost = 0;
         for p in &self.paths {
-            let _ = self.ino.add(p, self.mask);
+            if self.ino.add(p, self.mask).is_err() {
+                lost += 1;
+            }
+        }
+        // **黙らせぬ。** 見張りが一つも付いておらぬ状態が続くのは、
+        // 芯が生きたまま耳が死んでおるのと同じである。
+        if lost > 0 && lost == self.paths.len() && failed == self.dirs.len() {
+            let n = self.blind.get() + 1;
+            self.blind.set(n);
+            if n == 1 || n % 30 == 0 {
+                eprintln!(
+                    "見張りが一つも付いておらぬ（{n} 度目）。合図が届かぬ恐れがある"
+                );
+            }
+        } else {
+            self.blind.set(0);
         }
     }
 }
@@ -75,7 +124,23 @@ impl Oal for Linux {
         if ok == 0 {
             return Err(io::Error::new(io::ErrorKind::NotFound, "見張れる先が一つも無い"));
         }
-        Ok(LinuxWatch { ino, paths: paths.to_vec(), mask })
+
+        // **親も見る。** 子が消されて作り直されると、子への見張りは古い inode に
+        // 付いたまま黙る。親を見ておけば生まれの報せで起き、そこで付け直せる。
+        // 親が無ければ諦める——子が見えておるなら親は在るはずで、無いのは
+        // 相対路などの例外である。
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for p in paths {
+            if let Some(d) = p.parent() {
+                if !d.as_os_str().is_empty() && !dirs.iter().any(|x| x == d) {
+                    if ino.add(d, DIR_MASK).is_ok() {
+                        dirs.push(d.to_path_buf());
+                    }
+                }
+            }
+        }
+
+        Ok(LinuxWatch { ino, paths: paths.to_vec(), dirs, mask, blind: std::cell::Cell::new(0) })
     }
 
     fn single_instance(&self, path: &Path) -> io::Result<Option<FileLock>> {
