@@ -250,6 +250,10 @@ tests/specs/osato_lms_*
 !/skills/**/SKILL.md
 # 借り物の免許と出所。MIT は著作権表示の保持を求めるゆえ、追跡から外さぬ。
 !/skills/**/NOTICE.md
+# 借り物が Apache-2.0 の時、免許の全文を同梱する要がある（§4.1）
+!/skills/**/LICENSE
+# 近道は一本ごとに許す（skills/* を丸ごと開けると白名簿の意味が消える）
+!/skills/honden-review
 
 # 借り物への近道。skills/ を他所へ ln する時、平らな名でも辿れるようにする。
 #

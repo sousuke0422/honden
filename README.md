@@ -541,3 +541,14 @@ shogun から whitelist 方式をそのまま継承している。
 ## ライセンス
 
 MIT。上流の `multi-agent-shogun` も `kagemusha` も MIT で揃っている。
+
+**ただし `skills/vendor/` は別である。** 借り物はそれぞれの免許のまま置く
+—— MIT へ付け替えはしない。いま入っているのは次のとおり。
+
+| | 免許 |
+|---|---|
+| `skills/vendor/find-skills` | MIT（vercel-labs/skills） |
+| `skills/vendor/honden-review` | **Apache-2.0**（gemini-cli-extensions / anthropics / openai の code-review を混ぜた派生） |
+
+各ディレクトリの `NOTICE.md` に出所・版・免許・**こちらが変えた箇所**を書いてある。
+Apache-2.0 のものには免許の全文（`LICENSE`）を同梱している。

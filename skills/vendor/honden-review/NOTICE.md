@@ -1,0 +1,73 @@
+# 借り物である
+
+このディレクトリのものは、**こちらが一から書いたものではない**。
+三つの Apache-2.0 の成果を混ぜ、こちらの好みを足して仕立てたものである。
+
+```
+出所 1  https://github.com/gemini-cli-extensions/code-review
+        skills/code-review-commons/SKILL.md ほか
+版      dd1a10d2c9d0  2026-03-10
+免許    Apache License 2.0
+
+出所 2  https://github.com/anthropics/claude-plugins-official
+        plugins/code-review/commands/code-review.md
+版      aecd4c852f10  2026-02-20
+免許    Apache License 2.0
+
+出所 3  https://github.com/openai/codex
+        codex CLI に同梱のレビュー手順
+版      d58d0e5841e0  2026-08-31
+免許    Apache License 2.0
+```
+
+三つとも Apache-2.0 ゆえ、守るべき条件は一つで足りる。免許の全文を
+`LICENSE` に置いた（Apache-2.0 §4.1）。
+
+## 何を借り、何がこちらのものか
+
+**借りているのは、指摘を絞る規則である。** これらは同じ考えに別々に至った
+ものではない——項目が一つずつ対応しており、日本語へ移し替えたものである。
+
+| こちらの `SKILL.md` | 出所 |
+|---|---|
+| 「確認せよ」「検討せよ」「検証せよ」など検証系の曖昧な指示は禁止 | 出所 1: `DO NOT ... Tell the user to "check," "confirm," "verify," or "ensure" something` |
+| `+`/`-` 行以外の pre-existing な問題は対象外 | 出所 1: `comments must refer only to lines beginning with + or -` / 出所 2: `Pre-existing issues` |
+| **確信度 ≥ 80% の指摘のみ出力する** | 出所 2: `Filter out any issues with a score less than 80` |
+| lint / 型エラー / フォーマットは指摘しない（CI が検出する） | 出所 2: `Issues that a linter, typechecker, or compiler would catch ... run separately as part of CI` |
+| nitpick（命名の好み・スタイル議論）は対象外 | 出所 2: `Pedantic nitpicks that a senior engineer wouldn't call out` |
+| `// intentional` 等で意図的に無視されている問題は対象外 | 出所 2: `explicitly silenced in the code (eg. due to a lint ignore comment)` |
+| 変更されていないファイルの問題は対象外 | 出所 2: `Real issues, but on lines that the user did not modify` |
+| 重大度で分類する | 出所 1: `CRITICAL / HIGH / MEDIUM / LOW` |
+
+**こちらのものは、次のとおり**（Apache-2.0 §4.2 の「変えた箇所」に当たる）。
+
+- **五段階への組み替え。** 出所 1 は四段階。ここでは 🟡 Low-Medium を足して
+  五段階にし、各段の基準を日本語で書き下ろした
+- **🔵 Low の範囲を狭める節。** 「挙動の欠陥を 🔵 に入れない」「復旧できる・
+  発生頻度が低い・自然に直るは、実バグを 🔵 に落とす理由にならない」——
+  出所のいずれにも無い
+- **出力の形。** 総合判定 → 指摘 → ✅ 良い点 → ✅ PR 内で既修正 →
+  🗒️ 仕様による意図的設計。後ろ二節は出所のいずれにも無い
+- **総合判定の基準表**（`REQUEST CHANGES` / `APPROVE with Comments` / `APPROVE`）
+- 日本語であること。ペルソナ由来の口調を禁じる一行
+- honden へ写す折に変えた所——名（`shogun-review` → `honden-review`）・
+  honden に無いスキルへの参照・`honden-review-to-task` への案内
+
+## なぜ `vendor/` に置くか
+
+`skills/README.md` の定めである。自作と混ぜると、次に触る者が
+「変えてよいもの」と「変えれば免許に触れるもの」を見分けられない。
+
+**honden 自体は MIT だが、ここは Apache-2.0 である。** 混ぜて MIT と
+名乗ってはならない——Apache-2.0 の成果を MIT へ付け替えることはできぬ。
+
+## 経緯（同じ誤りを繰り返さぬために）
+
+写す前、こちらは git の履歴から出所を調べ、「上流（yohey-w）に無く、
+こちらにのみ在り、外来の断りも無いゆえ我らの物」と結論した。**誤りであった。**
+
+元の `shogun-review` は旧 repo の白名簿から漏れて**一度も追跡されておらず**、
+履歴そのものが存在しなかった。無い履歴を「何も出てこぬ＝外来ではない」と
+読んだのが誤りである。**沈黙を陰性の証拠として扱った。**
+
+出所は殿の証言で判明した。git に無いものは、git では確かめられぬ。
