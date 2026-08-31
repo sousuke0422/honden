@@ -22,6 +22,7 @@ import {
   BINARIES, SUMS, platformOf, planFor, decide, tagFrom, verify, parseSums, releaseApiUrl, assetUrl,
 } from './update';
 import { BUNDLE, SKIP_FLAG, signCheck, verifyArgs, readVerify, parseCosignVersion } from './sign';
+import { check as reviewCheck, render as renderReview, parseTally } from './review';
 import {
   add as sayAdd,
   list as sayList,
@@ -2060,6 +2061,43 @@ async function runNtfyListen(dbPath: string | undefined, once: boolean): Promise
   }
 }
 
+/**
+ * `honden review check` — レビュー指摘を、投入する前に検める。
+ *
+ * `/shogun-review` の結果を task の review-findings へ入れる前に通す。
+ * スキル自体は改めぬ（殿の下知 2026-08-31）ゆえ、後から走らせる別のスキルが
+ * 己の指摘を構造へ書き写す——**その書き写しの誤りを、ここで機械が捕らえる**。
+ *
+ * 標準入力からも受ける（`-` か、道を渡さぬ時）。
+ */
+function runReviewCheck(file: string | undefined, expect: string | undefined): RunResult {
+  let text: string;
+  try {
+    text = file && file !== '-' ? readFileSync(file, 'utf8') : readFileSync(0, 'utf8');
+  } catch (e) {
+    return { code: EXIT_INVALID, err: `  読めぬ: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch (e) {
+    return { code: EXIT_INVALID, err: `  JSON として解けぬ: ${String(e).slice(0, 160)}` };
+  }
+
+  let want;
+  if (expect !== undefined) {
+    const t = parseTally(expect);
+    if (!t.ok) return { code: EXIT_INVALID, err: `  ${t.message}` };
+    want = t.tally;
+  }
+
+  const r = reviewCheck(doc, want);
+  const out = renderReview(r, want);
+  // **通らねば投入させぬ。** 終了コードで止める——人の目に頼らぬ
+  return r.ok ? { code: EXIT_OK, out } : { code: EXIT_INVALID, err: out };
+}
+
 /** その道具は道に在るか。**名で判ぜず、実際に引けるかで見る。** */
 function which(cmd: string): boolean {
   return Bun.spawnSync(['sh', '-c', `command -v ${cmd}`], { stdout: 'ignore', stderr: 'ignore' }).success;
@@ -2288,6 +2326,10 @@ function notifyAfterNudge(dbPath: string | undefined): void {
 
   if (rest[0] === 'ntfy' && rest[1] === 'listen') {
     return emit(await runNtfyListen(dbPath, flags['once'] !== undefined));
+  }
+
+  if (rest[0] === 'review' && rest[1] === 'check') {
+    return emit(runReviewCheck(rest[2] ?? flags['file'], flags['expect']));
   }
 
   if (rest[0] === 'version') {
