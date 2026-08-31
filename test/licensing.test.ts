@@ -132,17 +132,28 @@ describe('前書き — 手で発火できるか', () => {
     expect(skills.length).toBeGreaterThan(0);
   });
 
-  test('**すべての書が `user-invocable` を明に述べておる**', () => {
-    // 手で発火させるための欄である。**既定に頼らぬ**——いまの版では書かずとも
-    // 出るのかもしれぬが、**出なかった時期がある**（殿の実測 2026-08-31）。
+  test('**手で呼ぶ入口を持つ書は、user-invocable を宣しておる**', () => {
+    // 見分けは `argument-hint` である——引数を取る書は、名指しで呼ばれる
+    // ことを前提にしておる。そこで宣しておらねば、**呼べぬのに呼ぶつもりの書**
+    // になる。
     //
-    // 棚の六つとも書いておらなんだ。**そう決めたのではなく、誰も書かなかった**
-    // だけである。既定に任せると、決めたのか漏れたのかが見分けられなくなる。
-    // `true` でも `false` でもよい——**明に書かせる**ことに意味がある。
-    const missing = skills
-      .filter((f) => !/^user-invocable:\s*(true|false)\s*$/m.test(readFileSync(f, 'utf8')))
-      .map((f) => relative(ROOT, f).split('\\').join('/'));
-    expect(missing, `user-invocable が無い: ${missing.join(', ')}`).toEqual([]);
+    // **これは「必ず要る」の線であって、「これ以外は書くな」ではない。**
+    // 引数を取らずとも手で呼びたい書はある（`japanese-tech-writing` がそれ・
+    // 殿の判断）。ゆえにここでは**足りぬ物だけを咎め、多い分は咎めぬ**。
+    //
+    // 自律で回るだけの書へ足しても意味は無い。一度それを六つ全部にやって
+    // 正された——**要らぬ欄を全部に足すのは、決めたことにならぬ。**
+    //
+    // 手で呼ぶなら明に書く。いまの版では書かずとも出るのかもしれぬが、
+    // **出なかった時期がある**（殿の実測）。既定は版で変わりうる。
+    const bad: string[] = [];
+    for (const f of skills) {
+      const t = readFileSync(f, 'utf8');
+      const head = t.slice(0, t.indexOf('\n---\n', 3) + 1);
+      if (!/^argument-hint:/m.test(head)) continue;
+      if (!/^user-invocable:\s*true\s*$/m.test(head)) bad.push(relative(ROOT, f).split('\\').join('/'));
+    }
+    expect(bad, `argument-hint を持つのに user-invocable: true が無い: ${bad.join(', ')}`).toEqual([]);
   });
 
   test('前書きは閉じておる（欄を足した折に壊さぬため）', () => {
