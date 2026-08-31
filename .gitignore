@@ -258,6 +258,7 @@ tests/specs/osato_lms_*
 # **相対で貼ること。** 絶対で貼ると、skills/ ごと他所へ ln した先で解けぬ。
 # 一本ごとに許可を書く。skills/* を丸ごと開けると、白名簿にした意味が消える。
 !/skills/find-skills
+!/skills/japanese-tech-writing
 
 # 棚の作法
 !/skills/README.md

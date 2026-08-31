@@ -10,7 +10,9 @@ skills/
   honden-review/            派生。Apache-2.0 — NOTICE.md と LICENSE が隣に在る
   vendor/                   借り物。追える上流がある
     find-skills/            MIT — vercel-labs/skills
-  find-skills -> vendor/find-skills    近道
+    japanese-tech-writing/  Unlicense — k16shikano の gist
+  find-skills -> vendor/find-skills                      近道
+  japanese-tech-writing -> vendor/japanese-tech-writing  近道
 ```
 
 ## 三つに分ける
@@ -35,6 +37,11 @@ skills/
 `NOTICE.md` には出所・版・免許・**借りた所と足した所の別**を書く。
 版を書かないと、後から「いつのものか」が辿れない。
 Apache-2.0 のように免許の全文の同梱を求めるものは、`LICENSE` も隣に置く。
+
+**紙を置く理由は二つある。** 一つは免許が求めるから。もう一つは、
+**出所と版を残さないと後から追えなくなる**から。Unlicense（公有）のように
+何も求めない免許でも、後者のために置く——`japanese-tech-writing` がそれで、
+上流が更新を続けているため、版を控えていないと取り込み損ねに気づけない。
 
 ### 派生に手を入れたら
 

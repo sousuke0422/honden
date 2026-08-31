@@ -554,11 +554,12 @@ shogun から whitelist 方式をそのまま継承している。
 **「追える上流があるか」**の別であって、免許の別ではない
 （`skills/README.md` に三つの別を書いてある）。
 
-いまの例外は二つ。
+いまの例外は三つ。
 
 | | 免許 |
 |---|---|
 | `skills/vendor/find-skills` | MIT（vercel-labs/skills を丸ごと） |
+| `skills/vendor/japanese-tech-writing` | Unlicense（k16shikano の gist を丸ごと。公有ゆえ条件は無い） |
 | `skills/honden-review` | **Apache-2.0**（gemini-cli-extensions / anthropics / openai の code-review を混ぜた派生） |
 
 `skills/honden-review` を MIT で配ることはできない —— Apache-2.0 は再許諾を

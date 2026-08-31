@@ -88,7 +88,8 @@ describe('免許の例外 — 紙と表が合うておるか', () => {
   test('紙には出所と版が書いてある（後から辿れねば意味が無い）', () => {
     for (const d of dirs) {
       const n = readFileSync(join(ROOT, d, 'NOTICE.md'), 'utf8');
-      expect(n.includes('https://github.com/'), `${d}/NOTICE.md に出所が無い`).toBe(true);
+      // gist も出所になる（`japanese-tech-writing` がそれ）
+      expect(/https:\/\/(gist\.)?github\.com\//.test(n), `${d}/NOTICE.md に出所が無い`).toBe(true);
       expect(/[0-9a-f]{12}/.test(n), `${d}/NOTICE.md に版（commit）が無い`).toBe(true);
     }
   });
