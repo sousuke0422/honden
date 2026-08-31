@@ -1070,7 +1070,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/guard.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/guard.sh",
             "timeout": 10
           }
         ]
@@ -1082,7 +1082,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/session-start.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
             "timeout": 10
           }
         ]
@@ -1092,7 +1092,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/session-start.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
             "timeout": 10
           }
         ]
@@ -1102,7 +1102,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/session-start.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
             "timeout": 10
           }
         ]
@@ -1112,7 +1112,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/session-start.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
             "timeout": 10
           }
         ]
@@ -1122,7 +1122,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/session-start.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh",
             "timeout": 10
           }
         ]
@@ -1133,7 +1133,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /mnt/c/Users/aki/work/honden/.claude/hooks/stop-inbox.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/stop-inbox.sh",
             "timeout": 15
           }
         ]
