@@ -540,16 +540,28 @@ shogun から whitelist 方式をそのまま継承している。
 
 ## ライセンス
 
-MIT。上流の `multi-agent-shogun` も `kagemusha` も MIT で揃っている。
+**既定は MIT。** 上流の `multi-agent-shogun` も `kagemusha` も MIT で揃っている。
+明示された例外を除き、この repo のものはすべて MIT で配る。
 
-**ただし `skills/` の一部は別である。** 他所から来たものは、それぞれの免許の
-まま置く —— MIT へ付け替えはしない。
+### 見分け方は一つ —— `NOTICE.md` の有無
+
+| | |
+|---|---|
+| `NOTICE.md` が**無い** | MIT |
+| `NOTICE.md` が**在る** | その紙に書いてある免許。MIT ではない |
+
+置き場では見分けない。`skills/vendor/` に在るか直下かは
+**「追える上流があるか」**の別であって、免許の別ではない
+（`skills/README.md` に三つの別を書いてある）。
+
+いまの例外は二つ。
 
 | | 免許 |
 |---|---|
 | `skills/vendor/find-skills` | MIT（vercel-labs/skills を丸ごと） |
 | `skills/honden-review` | **Apache-2.0**（gemini-cli-extensions / anthropics / openai の code-review を混ぜた派生） |
 
-**`NOTICE.md` が在れば、それは自作ではない。** 置き場ではなくその紙で見分ける
-（`skills/README.md` に三つの別を書いてある）。出所・版・免許・こちらが変えた
-箇所が書いてあり、Apache-2.0 のものは免許の全文（`LICENSE`）も隣に置いてある。
+`skills/honden-review` を MIT で配ることはできない —— Apache-2.0 は再許諾を
+許しておらず、他者の寄与を MIT へ付け替える権をこちらは持たないため。
+各 `NOTICE.md` に出所・版・免許・**こちらが変えた箇所**が書いてあり、
+Apache-2.0 のものは免許の全文（`LICENSE`）も隣に置いてある。
