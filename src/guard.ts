@@ -59,6 +59,122 @@ export function stripEnvPrefix(cmd: string): string {
 }
 
 /**
+ * 命の頭に被さった**包み**を剥がす。
+ *
+ * # なぜ要るか
+ *
+ * 紋様は命の名を行頭で見る。ゆえに名の前に一語置くだけで外れる。
+ * 実測（2026-08-31・codex の監査が釣った）:
+ *
+ * ```
+ * rm -rf /          止めた（D001・絶対域）
+ * env rm -rf /      通ってよし   ← 破れておる
+ * command rm -rf /  通ってよし
+ * /bin/rm -rf /     通ってよし
+ * ```
+ *
+ * **絶対域が包み一語で破れておった。** `stripEnvPrefix` は同じ型の穴を
+ * 一度塞いでいる（`X=1 pkill …`・2026-08-27）。あの折は代入だけを見て、
+ * **命として使う包みを見落とした。**
+ *
+ * # 何を剥がすか
+ *
+ * 中の命へ道を譲るだけの物を剥がす。剥がしても意味が変わらぬ物だけである。
+ *
+ * - 代入（`FOO=bar`）
+ * - `env` とその旗（`-i` / `-u NAME` / `--unset=…` / `-C DIR`）
+ * - `command` / `builtin` / `exec` / `nohup` / `setsid` / `stdbuf`
+ * - `nice` / `ionice` / `time` / `timeout <長さ>` / `xargs`
+ * - 名の前の道（`/bin/rm` → `rm`、`./x/rm` → `rm`）
+ *
+ * 入れ子も剥がす（`env command /bin/rm …`）。ただし回数は限る——
+ * 際限なく回すのは、壊れた入力に食わせる隙になる。
+ *
+ * # 剥がしても、元も見る
+ *
+ * 判定は**元と剥がした後の両方**に当てる。剥がすと `~/bin/kill-old.sh` が
+ * `kill-old.sh` になり、行頭で `kill` に見える形が生まれるゆえ、
+ * 名の切れ目（`(?![\w.-])`）も併せて締めてある。
+ */
+const WRAPPERS = new Set([
+  'env', 'command', 'builtin', 'exec', 'nohup', 'setsid', 'stdbuf',
+  'nice', 'ionice', 'time', 'timeout', 'xargs', 'doas',
+]);
+
+/**
+ * 旗の後に値を一つ取りうる物。
+ *
+ * **「取るか否か」は包みによって違う。** `env -i` は値を取らぬが
+ * `stdbuf -i 0` は取る。決め打ちすれば必ずどちらかで穴が開く——
+ * 実際 `-i` を値ありと決めたところ、`env -i rm -rf /` が `rm` を値として
+ * 食い、素通りした（2026-08-31）。
+ *
+ * ゆえに決めぬ。**両様を試し、いずれかが当たれば止める。**
+ */
+const MAY_TAKE_VALUE = new Set(['-u', '-C', '-n', '-c', '-s', '-k', '-I', '-P', '-a', '-o', '-i', '-e']);
+
+/** 名から道を落とす。`/bin/rm` → `rm`。 */
+export function basename(word: string): string {
+  const i = word.lastIndexOf('/');
+  return i < 0 ? word : word.slice(i + 1);
+}
+
+export function unwrap(cmd: string): string {
+  return unwrapAll(cmd)[0] ?? normalize(cmd);
+}
+
+/**
+ * 剥がし方が一通りに定まらぬので、**候補を並べて全部見る。**
+ *
+ * 旗が値を取るかで分岐する所だけ枝が増える。数は上限で抑える——
+ * 際限なく増やすのは、壊れた入力で計算を焼く隙になる。
+ */
+export function unwrapAll(cmd: string, cap = 12): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const work = [normalize(cmd)];
+
+  while (work.length > 0 && out.length < cap) {
+    const cur = work.shift()!;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    out.push(cur);
+
+    let s = stripEnvPrefix(cur);
+    const words = s.split(' ');
+    const head = basename(words[0] ?? '');
+
+    // 道つきの名は、道を落とした姿も候補にする
+    if (head !== words[0]) {
+      work.push([head, ...words.slice(1)].join(' '));
+      continue;
+    }
+    if (s !== cur) {
+      work.push(s);
+      continue;
+    }
+    if (!WRAPPERS.has(head)) continue;
+
+    // 包みを一つ落とす。
+    //
+    // **どこまでが旗で、どこからが命かは決め切れぬ。** `env -i` は値を取らぬが
+    // `stdbuf -i 0` は取る。決め打ちすれば必ずどちらかで穴が開く
+    // （`env -i rm -rf /` が `rm` を値として食われ素通りした・2026-08-31）。
+    //
+    // ゆえに決めぬ。**包みの後にある「命らしき語」すべてを候補にする。**
+    // 旗（`-` 始まり）と代入は命の名になれぬので落とす。多めに挙げて、
+    // 一つでも当たれば止める側へ倒す。
+    for (let k = 1; k < words.length; k++) {
+      const w = words[k]!;
+      if (w.startsWith('-') || /^\w+=/.test(w)) continue;
+      const next = words.slice(k).join(' ');
+      if (next !== '' && next !== cur) work.push(next);
+    }
+  }
+  return out;
+}
+
+/**
  * コマンドから手形（HONDEN_OTP=札）を抜き取る。頭の env 代入の群れの
  * 中ならどこにあってもよい——cursor は HONDEN_DB= を先に置く癖がある。
  */
@@ -130,17 +246,17 @@ const RULES: Rule[] = [
   },
   {
     id: 'D005',
-    pattern: /(?:^|[;&|]\s*)(?:sudo|su)\b|(?:chmod|chown)\s+-R\s+\S*\s*(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd])/,
+    pattern: /(?:^|[;&|]\s*)(?:sudo|su)(?![\w.-])|(?:chmod|chown)\s+-R\s+\S*\s*(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd])/,
     reason: '権限昇格・システム経路の一括変更である',
   },
   {
     id: 'D006',
-    pattern: /(?:^|[;&|]\s*)(?:kill|killall|pkill)\b|tmux\s+kill-(?:server|session)\b/,
+    pattern: /(?:^|[;&|]\s*)(?:killall|pkill|kill)(?![\w.-])|tmux\s+kill-(?:server|session)\b/,
     reason: '他エージェントや土台を殺す形である',
   },
   {
     id: 'D007',
-    pattern: /(?:^|[;&|]\s*)(?:mkfs|fdisk)\b|dd\s+if=|(?:^|[;&|]\s*)(?:mount|umount)\b/,
+    pattern: /(?:^|[;&|]\s*)(?:mkfs(?:\.[\w-]+)?|fdisk)(?![\w-])|dd\s+if=|(?:^|[;&|]\s*)(?:umount|mount)(?![\w.-])/,
     reason: 'ディスク・区画を壊す形である',
     absolute: true,
   },
@@ -326,8 +442,12 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
 
 export function judge(cmd: string): Verdict {
   const n = stripEnvPrefix(normalize(cmd));
+  // **包みを剥がした姿も見る。** 名の前に一語置くだけで紋様が外れるゆえ
+  // （`env rm -rf /` が通っておった・2026-08-31）。元も見るのは、
+  // 剥がす過程で形が変わって取りこぼす筋を残さぬため。
+  const forms = unwrapAll(n);
   for (const r of RULES) {
-    if (r.pattern.test(n)) {
+    if (forms.some((f) => r.pattern.test(f))) {
       return {
         permission: 'deny',
         rule: r.id,

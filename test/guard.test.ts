@@ -78,6 +78,73 @@ describe('判定 — 通るべきが通る（門を邪魔者にせぬ）', () =>
   }
 });
 
+describe('包みで紋様を跨がせぬ（codex の監査 2026-08-31 が釣った穴）', () => {
+  // 名の前に一語置くだけで行頭アンカーが外れ、**絶対域が破れておった**。
+  //   rm -rf /          止めた
+  //   env rm -rf /      通ってよし  ← これ
+  // `stripEnvPrefix` は同じ型を一度塞いでいる（`X=1 pkill …`・2026-08-27）。
+  // あの折は代入だけを見て、**命として使う包みを見落とした。**
+  const RM = ['rm', '-rf', '/'].join(' ');
+
+  test('**包みを被せても止まる**', () => {
+    for (const c of [
+      `env ${RM}`, `command ${RM}`, `builtin ${RM}`, `exec ${RM}`,
+      `nohup ${RM}`, `setsid ${RM}`, `xargs ${RM}`, `doas ${RM}`,
+    ]) {
+      expect(judge(c).permission, c).toBe('deny');
+    }
+  });
+
+  test('**道を付けても止まる**', () => {
+    for (const c of [`/bin/${RM}`, `/usr/bin/${RM}`, `./${RM}`, `../bin/${RM}`]) {
+      expect(judge(c).permission, c).toBe('deny');
+    }
+  });
+
+  test('入れ子でも止まる', () => {
+    expect(judge(`env command /bin/${RM}`).permission).toBe('deny');
+    expect(judge(`nohup env exec /bin/${RM}`).permission).toBe('deny');
+  });
+
+  test('**旗が値を取るか決め打ちせぬ**（両様を試す）', () => {
+    // `env -i` は値を取らぬが `stdbuf -i 0` は取る。決め打ちした折、
+    // `env -i rm -rf /` が rm を値として食われ素通りした
+    for (const c of [
+      `env -i ${RM}`, `env -u FOO ${RM}`, `env -i -u X ${RM}`,
+      `stdbuf -i 0 ${RM}`, `nice -n 10 ${RM}`, `timeout -k 5 10 ${RM}`,
+      `timeout 5 ${RM}`, `xargs -I{} ${RM}`,
+    ]) {
+      expect(judge(c).permission, c).toBe('deny');
+    }
+  });
+
+  test('D006 と D007 も包みを越える', () => {
+    expect(judge('env pkill -f watcher').permission).toBe('deny');
+    expect(judge('/usr/bin/pkill -f x').permission).toBe('deny');
+    expect(judge('nice -n 10 mkfs.ext4 /dev/sda').permission).toBe('deny');
+  });
+
+  test('**剥がしたせいで誤検知を生まぬ**', () => {
+    // 道を落とすと `~/bin/kill-old.sh` が行頭 `kill` に見える。
+    // 名の切れ目（(?![\w.-])）で締めてある
+    for (const c of [
+      './scripts/kill-old-logs.sh', 'bash mount-helper.sh', 'cat sudo-notes.md',
+      'npm run kill-port', 'ls -la', 'git status',
+      'env NODE_ENV=test bun test', 'timeout 30 bun test',
+      `rm -rf .tmp/work`, `echo ${RM}`, `grep -rn '${RM}' docs/`,
+    ]) {
+      expect(judge(c).permission, c).toBe('allow');
+    }
+  });
+
+  test('候補は際限なく増やさぬ（壊れた入力で計算を焼かぬ）', () => {
+    const long = `env ${'a '.repeat(500)}${RM}`;
+    const t0 = Date.now();
+    expect(judge(long).permission).toBeDefined();
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});
+
 describe('絶対域 — 手形でも通らぬ', () => {
   test('D001/D007/D008 は appealable でない', () => {
     expect(judge('rm -rf /').appealable).toBe(false);
