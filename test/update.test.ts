@@ -168,7 +168,7 @@ describe('取りに行く先 — 出所を固定する', () => {
 });
 
 describe('planFor — 四つとも取る', () => {
-  test('binary は四つ、数の紙も一枚', () => {
+  test('binary は五つ、数の紙も一枚', () => {
     const p = planFor('v1.0.0', { os: 'linux', arch: 'x64' });
     expect(p.items.map((i) => i.name)).toEqual([...BINARIES]);
     expect(p.items[0]!.asset).toBe('honden-linux-x64');

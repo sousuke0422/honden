@@ -50,10 +50,10 @@ bash scripts/first_setup.sh
 
 ```bash
 bun install
-bun run build:all                   # bin/ に 4 つ揃う
+bun run build:all                   # bin/ に 5 つ揃う
 ```
 
-`build` だけなら CLI（`honden` と `honden-bot`）、`build:core` なら Rust の二つ（芯 `honden-watch` と門の解析器 `honden-parse`）である。
+`build` だけなら CLI（`honden` と `honden-bot`）、`build:core` なら Rust の三つ（芯 `honden-watch`、門の解析器 `honden-parse`、始末の `honden-kill`）である。
 cargo の産物は `bin/` へ移す。
 出陣も門も `bin/` しか見ないからである。
 
@@ -63,6 +63,10 @@ cargo の産物は `bin/` へ移す。
 
 芯は依存ゼロで 350 KiB、解析器は 520 KiB。
 CLI は Bun ごと抱えるので 95 MiB になる。
+
+`honden-kill` だけは `libc` を借りている。
+芯の依存ゼロは**常駐する側**の掟で、数ミリ秒で終わるこれには理由が及ばない。
+`kill(2)` を手で宣すると、土地で幅の変わる型を数で書くことになる（arm64 で一度それをやった）。
 
 ### 顔ぶれを入れる
 
@@ -160,6 +164,29 @@ honden guard denials                            # 同じ紋様が叩かれ続け
 `D001`、`D006`、`D007`、`D008` は手形でも通らない。
 ここだけは絶対域とした。
 
+### 己の下だけを始末する
+
+D006 は生の `kill`、`pkill`、`killall`、`tmux kill-*` を拒む。
+だが滞った process を止める道が一つも無いと、詰まったときに人を呼ぶしかない。
+
+そこで**ただ一つの道**を開けてある。
+
+```bash
+honden-kill <pid> [--signal TERM|INT|HUP]
+```
+
+- **己の pane の系譜の下にある pid だけ**を撃つ。外なら拒み、跡を残す
+- 検めと送信を**一息で**行う。間に pid が別の process へ移る隙を残さない
+- **群れを撃つ形は受けない**。負の pid は process group、`0` は自分の group、`-1` は撃てるすべてである
+- `SIGKILL` は入れていない。後始末をさせずに落とすと、掴んでいた錠やファイルが残る
+
+`TMUX_PANE` は環境変数なので騙れる。
+だから名乗りをそのまま信じず、**自分の系譜がその pane の下にあるか**を先に照らす。
+
+**門は pid を見ない。**
+系譜を辿るのは「いま」を見る仕事で、紋様の層は静のまま置きたい。
+門に動を持たせると、門の側に検めと実行の隙が生まれる。
+
 ---
 
 ## 携帯から（ntfy）
@@ -246,7 +273,7 @@ honden update --check       # 出ているか見るだけ
 honden update --yes         # 取り替える
 ```
 
-出し物（GitHub Releases）から四本を降ろし、`SHA256SUMS` と照らして置く。
+出し物（GitHub Releases）から五本を降ろし、`SHA256SUMS` と照らして置く。
 **一つでも違えば一つも置かない。**
 半分だけ新しい `bin/` は、どちらの版とも違う物になるからである。
 置き方は `mv` なので、走っている芯は古い実体を持ったまま生き、次に立つときから新しくなる。

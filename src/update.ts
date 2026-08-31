@@ -34,7 +34,7 @@
 import { REPO, VERSION, isNewer } from './version';
 
 /** 配る binary の名。`bin/` に置かれる名でもある。 */
-export const BINARIES = ['honden', 'honden-bot', 'honden-watch', 'honden-parse'] as const;
+export const BINARIES = ['honden', 'honden-bot', 'honden-watch', 'honden-parse', 'honden-kill'] as const;
 export type BinaryName = (typeof BINARIES)[number];
 
 /** 数を並べた紙の名。 */

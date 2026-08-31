@@ -1,0 +1,28 @@
+[package]
+name = "honden-kill"
+version = "0.1.0"
+edition = "2021"
+description = "己の系譜の下だけを撃つ。門が生の kill を拒む代わりの、ただ一つの道"
+
+# libc だけを借りる。
+#
+# `honden-watch` は依存を一つも持たぬが、あれは**常駐する側**の掟である
+# （「他のすべてが壊れた時にも生きていなければならない」）。この物は数ミリ秒で
+# 終わるので、その理由は及ばない。
+#
+# そして `kill(2)` と信号の数を手で宣すると、**土地で幅の変わる型を数で書く**
+# 筋が生まれる。同じ誤りを一度している——`inotify_add_watch` の `*const i8` が
+# arm64 で建たなかった（2026-08-30）。ここは叩き上げた物を借りる。
+#
+# uutils の `kill` も、撃つ所は自前で書かず `libc` / `rustix` へ委ねている
+# （`platform::send_signal`）。借りるべきはそこであって、その周りの
+# clap・i18n・`-l` の一覧ではない。
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

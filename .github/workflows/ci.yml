@@ -47,6 +47,7 @@ jobs:
           rustup target add aarch64-unknown-linux-gnu
           cargo check --target aarch64-unknown-linux-gnu --manifest-path core/watch/Cargo.toml
           cargo check --target aarch64-unknown-linux-gnu --manifest-path core/guard/Cargo.toml
+          cargo check --target aarch64-unknown-linux-gnu --manifest-path core/kill/Cargo.toml
 
       - name: 出陣の書は bash として通るか
         run: bash -n scripts/shutsujin.sh shutsujin_departure.sh scripts/first_setup.sh

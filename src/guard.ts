@@ -250,9 +250,14 @@ const RULES: Rule[] = [
     reason: '権限昇格・システム経路の一括変更である',
   },
   {
+    // 生の kill は拒む。**唯一の道は `honden-kill`** である——己の pane の
+    // 系譜の下にある pid だけを、検めと送信を一息で撃つ（core/kill）。
+    //
+    // 門は pid を見ぬ。系譜を辿るのは「いま」を見る仕事で、紋様の層は静のまま
+    // 置きたい。門に動を持たせれば、門の側に検めと実行の隙が生まれる。
     id: 'D006',
     pattern: /(?:^|[;&|]\s*)(?:killall|pkill|kill)(?![\w.-])|tmux\s+kill-(?:server|session)\b/,
-    reason: '他エージェントや土台を殺す形である',
+    reason: '他エージェントや土台を殺す形である。己の下を始末するなら honden-kill <pid> を使え',
   },
   {
     id: 'D007',

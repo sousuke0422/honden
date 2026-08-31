@@ -145,6 +145,32 @@ describe('包みで紋様を跨がせぬ（codex の監査 2026-08-31 が釣っ�
   });
 });
 
+describe('D006 — 生の kill は拒み、honden-kill だけを通す', () => {
+  test('生の形は包みを被せても拒む', () => {
+    for (const c of [
+      'kill 12345', 'killall node', 'pkill -f watcher',
+      'env kill 1', '/bin/kill 1', 'nohup pkill -f x',
+      'tmux kill-session -t multiagent', 'tmux kill-server',
+    ]) {
+      expect(judge(c).permission, c).toBe('deny');
+    }
+  });
+
+  test('**honden-kill は通す**（唯一の道ゆえ）', () => {
+    // 己の pane の系譜の下だけを、検めと送信を一息で撃つ（core/kill）。
+    // 門は pid を見ぬ——系譜を辿るのは「いま」を見る仕事で、紋様の層は
+    // 静のまま置きたい。門に動を持たせれば、門の側に隙が生まれる。
+    for (const c of ['honden-kill 12345', 'honden-kill 999 --signal TERM', 'bin/honden-kill 1']) {
+      expect(judge(c).permission, c).toBe('allow');
+    }
+  });
+
+  test('拒みの文は、行き先を告げる', () => {
+    // 「駄目だ」だけでは、詰まった者が人を呼ぶしかない
+    expect(judge('pkill -f x').reason).toContain('honden-kill');
+  });
+});
+
 describe('絶対域 — 手形でも通らぬ', () => {
   test('D001/D007/D008 は appealable でない', () => {
     expect(judge('rm -rf /').appealable).toBe(false);
