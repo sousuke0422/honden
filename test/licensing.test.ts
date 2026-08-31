@@ -118,6 +118,42 @@ describe('免許の例外 — 紙と表が合うておるか', () => {
   });
 });
 
+describe('前書き — 手で発火できるか', () => {
+  const skills = (function walk(dir: string, out: string[] = []): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p, out);
+      else if (e.name === 'SKILL.md') out.push(p);
+    }
+    return out;
+  })(SKILLS);
+
+  test('棚に書がある', () => {
+    expect(skills.length).toBeGreaterThan(0);
+  });
+
+  test('**すべての書が `user-invocable` を明に述べておる**', () => {
+    // 手で発火させるための欄である。**既定に頼らぬ**——いまの版では書かずとも
+    // 出るのかもしれぬが、**出なかった時期がある**（殿の実測 2026-08-31）。
+    //
+    // 棚の六つとも書いておらなんだ。**そう決めたのではなく、誰も書かなかった**
+    // だけである。既定に任せると、決めたのか漏れたのかが見分けられなくなる。
+    // `true` でも `false` でもよい——**明に書かせる**ことに意味がある。
+    const missing = skills
+      .filter((f) => !/^user-invocable:\s*(true|false)\s*$/m.test(readFileSync(f, 'utf8')))
+      .map((f) => relative(ROOT, f).split('\\').join('/'));
+    expect(missing, `user-invocable が無い: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  test('前書きは閉じておる（欄を足した折に壊さぬため）', () => {
+    for (const f of skills) {
+      const t = readFileSync(f, 'utf8');
+      expect(t.startsWith('---\n'), `${f} の前書きが開いておらぬ`).toBe(true);
+      expect(t.indexOf('\n---\n', 3), `${f} の前書きが閉じておらぬ`).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('定めが書いてあること', () => {
   test('README が既定を述べておる', () => {
     const t = readme();

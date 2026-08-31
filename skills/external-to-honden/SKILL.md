@@ -1,5 +1,6 @@
 ---
 name: external-to-honden
+user-invocable: true
 description: |
   布陣の外（standalone セッション）から honden の inbox へ報せを送る手順。
   旧 external-to-shogun の後継。honden が名乗り・本文・書き戻しを引き受けるので、

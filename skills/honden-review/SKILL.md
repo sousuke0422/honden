@@ -1,5 +1,6 @@
 ---
 name: honden-review
+user-invocable: true
 description: |
   GitHub PR または手元の diff をセキュリティ・正確性・コード品質の観点でレビューする。
   総合判定（APPROVE / APPROVE with Comments / REQUEST CHANGES）と

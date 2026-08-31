@@ -52,6 +52,8 @@
 - 日本語であること。ペルソナ由来の口調を禁じる一行
 - honden へ写す折に変えた所——名（`shogun-review` → `honden-review`）・
   honden に無いスキルへの参照・`honden-review-to-task` への案内
+- 前書きへ `user-invocable: true` を足した。手で発火させるための欄で、
+  **既定に頼らず明に書く**——出なかった時期がある（殿の実測 2026-08-31）
 
 ## なぜ `vendor/` に置かないか
 

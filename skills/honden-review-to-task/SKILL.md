@@ -1,5 +1,6 @@
 ---
 name: honden-review-to-task
+user-invocable: true
 description: |
   `/honden-review` が出した指摘を koyori-app/task の review-findings へ投入する。
   レビューの**後に**走らせる。レビュー自体は行わない。
