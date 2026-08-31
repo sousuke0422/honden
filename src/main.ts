@@ -2064,7 +2064,7 @@ async function runNtfyListen(dbPath: string | undefined, once: boolean): Promise
 /**
  * `honden review check` — レビュー指摘を、投入する前に検める。
  *
- * `/shogun-review` の結果を task の review-findings へ入れる前に通す。
+ * `/honden-review` の結果を task の review-findings へ入れる前に通す。
  * スキル自体は改めぬ（殿の下知 2026-08-31）ゆえ、後から走らせる別のスキルが
  * 己の指摘を構造へ書き写す——**その書き写しの誤りを、ここで機械が捕らえる**。
  *

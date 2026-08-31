@@ -3,7 +3,7 @@
  *
  * # なぜ要るか
  *
- * `/shogun-review` は人向けの markdown を吐く。それを task へ入れるのは、
+ * `/honden-review` は人向けの markdown を吐く。それを task へ入れるのは、
  * **後から走らせる別のスキル**が己の指摘を構造へ書き写す形になる
  * （スキル自体は改めぬ・殿の下知 2026-08-31）。
  *
@@ -26,7 +26,7 @@
  * # 重大度の対応づけ
  *
  * task は四段階で `critical` を持たぬ（綴り違いは投入時に弾かれる）。
- * `/shogun-review` は五段階。**💥 Critical と 🚨 High が一つに潰れる。**
+ * `/honden-review` は五段階。**💥 Critical と 🚨 High が一つに潰れる。**
  *
  * 潰れてもマージを止めるか否かは変わらぬ（task では `high` も `medium` も
  * 止める）。失うのは表示の細かさだけゆえ、**題の頭に 💥 を残して見分ける**。
@@ -36,7 +36,7 @@
 export const SEVERITIES = ['high', 'medium', 'low', 'nit'] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
-/** `/shogun-review` の印と、投入先の重大度の対応。 */
+/** `/honden-review` の印と、投入先の重大度の対応。 */
 export const BADGE_TO_SEVERITY: Record<string, Severity> = {
   '💥': 'high', // Critical。潰れる先ゆえ題に印を残す
   '🚨': 'high',

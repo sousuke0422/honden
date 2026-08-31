@@ -1,40 +1,40 @@
 ---
-name: review-to-task
+name: honden-review-to-task
 description: |
-  `/shogun-review` が出した指摘を koyori-app/task の review-findings へ投入する。
+  `/honden-review` が出した指摘を koyori-app/task の review-findings へ投入する。
   レビューの**後に**走らせる。レビュー自体は行わない。
   重大度を task の四段階へ写し、head SHA を確かめ、投入前に honden が数を検める。
-  「レビュー結果を task へ」「指摘を投入」「review-to-task」「/review のあと task へ」で起動。
-  Do NOT use for: レビューそのもの（`/shogun-review` を先に走らせよ）、
+  「レビュー結果を task へ」「指摘を投入」「honden-review-to-task」「/review のあと task へ」で起動。
+  Do NOT use for: レビューそのもの（`/honden-review` を先に走らせよ）、
   PR に紐づかぬ課題の起票（task の通常タスクを使え）、
   GitHub へのインラインコメント投稿（**仕様で禁じられている**）。
 allowed-tools: Bash
 argument-hint: "<PR番号> [--project <キー>]"
 ---
 
-# review-to-task — レビュー指摘を task へ移す
+# honden-review-to-task — レビュー指摘を task へ移す
 
 ## North Star
 
 **レビューの結果を、会話の外へ残すこと。**
 
-いま `/shogun-review` の指摘は画面へ出て終わる。読んだ者が直したかどうかは
+いま `/honden-review` の指摘は画面へ出て終わる。読んだ者が直したかどうかは
 誰も追わず、PR を後から見る者には届かない。task の review-findings に置けば、
 直した／繰り延べた／棄却したまでが記録に残り、**未解決が残る間はマージが止まる**。
 
 ## When to Use
 
-- `/shogun-review` を走らせた直後、**同じ会話の中で**
+- `/honden-review` を走らせた直後、**同じ会話の中で**
 - 「レビュー結果を task へ入れて」と言われた時
 
 Do NOT use for:
-- レビューそのもの → 先に `/shogun-review N` を走らせる
+- レビューそのもの → 先に `/honden-review N` を走らせる
 - PR に紐づかない課題 → task の通常タスクとして起票する
 - GitHub へのインラインコメント → **仕様で禁じられている**（要約 1 本のみ）
 
 ## 前提
 
-- 直前の `/shogun-review` の出力が**この会話に残っている**こと
+- 直前の `/honden-review` の出力が**この会話に残っている**こと
 - `task` CLI が使えること（`task review submit` があること）
 - `honden` が道に在ること（投入前の検めに使う）
 
@@ -73,9 +73,9 @@ R2（第二ラウンド）ができ、「同じ commit を二度レビューし�
 
 ### Step 3: 重大度を写す
 
-`/shogun-review` は五段階、task は四段階で **`critical` を持たない**。
+`/honden-review` は五段階、task は四段階で **`critical` を持たない**。
 
-| `/shogun-review` | task | |
+| `/honden-review` | task | |
 |---|---|---|
 | 💥 Critical | `high` | **潰れる。題の頭に 💥 を残す** |
 | 🚨 High | `high` | |
@@ -150,7 +150,7 @@ task review summary --project <キー> --pr <PR番号>
 ```
 
 **未解決の High/Medium が残っていれば終了コード 1** になる。これがマージ可否の
-答えであり、`/shogun-review` の総合判定はその要約に添える形で伝える。
+答えであり、`/honden-review` の総合判定はその要約に添える形で伝える。
 
 ```
 レビュー指摘を task へ入れた（R1 / <head SHA の先頭 7 桁>）
@@ -178,5 +178,5 @@ task review summary --project <キー> --pr <PR番号>
 - レビュー専用の鍵は `write:review` だけを持たせる。タスク書き換えの権を
   レビュー用の鍵に渡さない
 - この手順は task が繋がっている時だけ意味を持つ。繋がっていなければ
-  `/shogun-review` の出力をそのまま残せばよい——**投入できないことを、
+  `/honden-review` の出力をそのまま残せばよい——**投入できないことを、
   レビューが失敗したことにしない**

@@ -294,7 +294,7 @@ EOF`,
     flags: [['--expect', '重大度ごとの件数を申告する。実際と食い違えば止める']],
     notes: [
       '守るのは**書き写す時の誤り**——落とし・言い換え・作り足し。書式のずれではない',
-      '`/shogun-review` は改めぬ。後から走らせるスキル（skills/review-to-task）が使う',
+      '`/honden-review` は改めぬ。後から走らせるスキル（skills/honden-review-to-task）が使う',
       '**💥 Critical は high へ潰す**（task に critical は無い）。題に 💥 を残して見分ける',
       '🟡 Low-Medium は low。medium へ上げるとマージを止める側へ寄り、方針が黙って変わる',
       'head_sha は 40 桁の小文字 16 進のみ。短縮はそのラウンドを永久に通らなくする',
