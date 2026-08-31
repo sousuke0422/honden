@@ -13,13 +13,15 @@ argument-hint: "<PR/MR番号 or #番号>"
 
 # /honden-review — コードレビュースキル
 
-> **これは借り物である。** Apache-2.0 の三つの成果（gemini-cli-extensions/
+> **これは派生物である。** Apache-2.0 の三つの成果（gemini-cli-extensions/
 > code-review・anthropics/claude-plugins-official・openai/codex）から
 > 指摘を絞る規則を借り、こちらの重大度と出力の形を足したものである。
 >
-> **honden 自体は MIT だが、このディレクトリは Apache-2.0 である。**
-> 借りた所と足した所の別、出所の版、免許の全文は隣の `NOTICE.md` と
-> `LICENSE` にある。
+> **手を入れてよい。** 追うべき上流は無く、これはこちらで育てるものである。
+> ただし **honden 自体は MIT だが、このディレクトリは Apache-2.0** ——
+> 変えたら、隣の `NOTICE.md` の「こちらのもの」へ書き足すこと（Apache-2.0 §4.2）。
+>
+> 借りた所と足した所の別、出所の版、免許の全文は `NOTICE.md` と `LICENSE` にある。
 
 ## North Star
 
