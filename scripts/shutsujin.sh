@@ -21,8 +21,10 @@
 #   門        **新しい**。出陣の前に honden guard selftest で
 #             禁じ手の門が生きておるかを確かめる
 #
-# 撤収（tmux kill-session）は人の手でなされよ。この文を書いた者は
-# D006 により他者の陣を畳めぬ——出陣は組めても、撤収は組めぬ。
+# 撤収は `down`。**己が立てた陣だけ**を畳む——立てた折に付けた印（@honden）が
+# この置き場を指す陣に限る。印の無い陣・よその置き場の陣は名が同じでも畳まぬ。
+# 己が起こした物は己で片付けねば困る（殿・2026-09-02）。生の tmux kill-session を
+# 打つ道は D006 が閉じたままで、畳む筋はこの一つに寄せる。
 # **己で構えを取る。** 根の入口（shutsujin_departure.sh）が `set -euo pipefail`
 # を敷いても、`exec bash` は SHELLOPTS を渡さぬ——中では errexit が off に
 # なっておる（実測 2026-08-30・Issue #8）。入口に頼れば、半端な陣でも 0 で終わる。
@@ -384,6 +386,36 @@ ours() {
   [ "$mark" = "$ROOT" ]
 }
 
+# 撤収。己が立てた陣だけを畳む。
+#
+# 芯・耳・窓は陣の中の窓で回っておるゆえ、陣が消えれば共に終わる
+# （SIGHUP）。陣の外で回る迷い子（status の strays）はここでは触らぬ——
+# 誰が起こしたか判ぜぬ物を撃つのは honden-kill の領分でもない。
+#
+# 順は働き手の陣が先。将軍の陣を先に畳むと、働き手の報せが宛先を失って
+# 芯が空撃ちを重ねる。
+down() {
+  step "撤収"
+  local n
+  for n in "$SESSION_AGENTS" "$SESSION_SHOGUN"; do
+    if ! tmux has-session -t "=$n" 2>/dev/null; then
+      ok "$n は立っておらぬ"
+      continue
+    fi
+    if ! ours "$n"; then
+      warn "$n は我らの陣ではない（@honden の印が $ROOT を指さぬ）。畳まぬ"
+      echo "      名が同じでも、印の無い陣・よその置き場の陣には手を出さぬ。"
+      echo "      人の手で畳むなら: tmux kill-session -t $n"
+      continue
+    fi
+    if tmux kill-session -t "=$n" 2>/dev/null; then
+      ok "$n を畳んだ"
+    else
+      warn "$n を畳めなんだ（tmux が拒んだ）"
+    fi
+  done
+}
+
 # 我らの戦況の窓が、その口で応えておるか。
 #
 # 見分けは**印**で行う（配信が返す X-Honden）。「口が塞がっておる」でも
@@ -527,6 +559,7 @@ case "${1:-up}" in
   gate)   gate ;;
   viewer) viewer ;;
   earpiece) earpiece ;;
-  *)      echo "使い方: shutsujin_departure.sh [up|status|gate|viewer|earpiece]"
-          echo "  撤収は人の手で: tmux kill-session -t <名>"; exit 1 ;;
+  down)   down ;;
+  *)      echo "使い方: shutsujin_departure.sh [up|status|gate|viewer|earpiece|down]"
+          echo "  撤収は down（己が立てた陣だけを畳む）"; exit 1 ;;
 esac

@@ -106,12 +106,15 @@ CLI を変えるなら模型も対で求められる。
 ```bash
 bash shutsujin_departure.sh              # 陣を組み、CLI を起こし、芯と窓と耳を立てる
 bash shutsujin_departure.sh status       # 陣、芯、窓、門の生死
-tmux attach -t shogun                    # 本陣（人が座る）
+tmux attach -t honden                    # 本陣（人が座る）
+bash shutsujin_departure.sh down         # 撤収
 ```
 
 窓は `http://127.0.0.1:8788` にある。
-**撤収は人の手で行う。**
-エージェントは D006 によりセッションを畳めない。
+
+撤収は自分が立てた陣だけを畳む。
+立てたときに付けた印（`@honden`）がこの置き場を指す陣に限り、名が同じでも印の無い陣やよその陣には手を出さない。
+生の `tmux kill-session` を打つ道は D006 が閉じたままで、畳む筋はこの一つに寄せてある。
 
 ---
 

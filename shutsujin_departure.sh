@@ -10,10 +10,8 @@
 #   bash shutsujin_departure.sh status   様子見
 #   bash shutsujin_departure.sh gate     禁じ手の門だけを叩く
 #
-# 撤収は人の手でなされよ。この文を書いた者は D006 により他者の陣を畳めぬ。
-#
-#   tmux kill-session -t honden
-#   tmux kill-session -t honden-agents
+#   bash shutsujin_departure.sh down     撤収（己が立てた陣だけを畳む。
+#                                        印の無い陣・よその陣は名が同じでも畳まぬ）
 #
 # 戦況の窓（http://127.0.0.1:8788）は出陣に含まれる。口や繋ぎ先を変えるなら:
 #
