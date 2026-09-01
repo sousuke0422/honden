@@ -12,8 +12,8 @@
 #
 # 撤収は人の手でなされよ。この文を書いた者は D006 により他者の陣を畳めぬ。
 #
-#   tmux kill-session -t shogun
-#   tmux kill-session -t multiagent
+#   tmux kill-session -t honden
+#   tmux kill-session -t honden-agents
 #
 # 戦況の窓（http://127.0.0.1:8788）は出陣に含まれる。口や繋ぎ先を変えるなら:
 #

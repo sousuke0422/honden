@@ -83,6 +83,24 @@ bin/honden roster sync --settings config/settings.yaml
 bin/honden roster                                       # 入ったか確かめる
 ```
 
+### 顔ぶれを差し替える
+
+役ごとの CLI と模型、足軽の頭数は `honden roster set` で変えられる。
+端末なら一人ずつ訊き、空で送れば据え置きになる。
+`settings.yaml` の注釈は残る。
+
+```
+bash configure-agents.sh                 訊く
+bash configure-agents.sh --dry-run       下見（書かぬ）
+honden roster set --karo claude:claude-sonnet-5 --yes
+```
+
+macOS は `configure-agents.command` を、Windows は `configure-agents.bat` を二度打ちすれば同じ物が WSL で起きる。
+
+CLI を変えるなら模型も対で求められる。
+模型だけ残すと黙って動かない（Cursor に Claude の模型を指したまま沈黙した実例がある）。
+立っている陣には効かず、次の出陣から反映される。
+
 ### 出陣
 
 ```bash

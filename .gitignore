@@ -85,6 +85,10 @@
 
 # Setup and deployment scripts
 !shutsujin_departure.sh
+# 顔ぶれの差し替えの入口（三つ揃えて置く）
+!configure-agents.sh
+!configure-agents.command
+!configure-agents.bat
 !first_setup.sh
 !setup.sh
 !install.bat
