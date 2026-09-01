@@ -1,0 +1,8 @@
+# betterleaks が見逃してよい指紋（commit:path:rule:line）。
+#
+# 足すのは「本物ではない」と検めた物だけ。ここが伸びるほど門は薄くなる。
+#
+# 陽性対照の偽鍵を workflow の書に文字で置いた一手（2026-09-02・自業自得）。
+# 実在せぬ鍵だが履歴に残った。以後は走らせる時に組み立てる形にした。
+a3d2bfe617d1d2a46f900cc09e4ee501e2bae214:.github/workflows/secrets.yml:github-pat:79
+a3d2bfe617d1d2a46f900cc09e4ee501e2bae214:.github/workflows/secrets.yml:generic-api-key:79

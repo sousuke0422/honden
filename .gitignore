@@ -13,6 +13,8 @@
 !.gitignore
 !.gitattributes
 !.gitleaks.toml
+# 秘密検めの見逃し帳。追跡から漏れると CI が毎回同じ物を釣る
+!.betterleaksignore
 !CLAUDE.md
 !LICENSE
 # 上流（yohey-w/multi-agent-shogun・MIT）の告知。**許しを書き忘れて追跡から
