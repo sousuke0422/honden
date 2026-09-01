@@ -48,7 +48,10 @@ stub_tmux() {
     echo "  has-session) exit $has ;;"
     echo "  list-windows) printf '%s\\n' '$windows' ;;"
     # 既定は「我らの陣」。@honden の印は出陣の書が見る $ROOT と揃える。
-    echo "  show-options) printf '%s\\n' \"\$HONDEN_TEST_ROOT\" ;;"
+    # 印は一覧（list-sessions）で引く。show-options -t "=名" は本物の 3.7b で
+    # 空を返し、贋物だけが答えておった（実戦で踏んだ・2026-09-02）。
+    # 試験で使う陣の名をすべて並べる。
+    echo "  list-sessions) for n in honden honden-agents jin-a jin-s; do printf '%s\\t%s\\n' \"\$n\" \"\$HONDEN_TEST_ROOT\"; done ;;"
     echo 'esac'
     echo 'exit 0'
   } > "$STUB/tmux"
@@ -91,7 +94,10 @@ stub_tmux_grows() {
     echo "  has-session) exit $has ;;"
     echo '  new-window) : > "$STUB/.grown" ;;'
     echo "  list-windows) if [ -e \"\$STUB/.grown\" ]; then printf '%s\\n' '$after'; else printf '%s\\n' '$before'; fi ;;"
-    echo "  show-options) printf '%s\\n' \"\$HONDEN_TEST_ROOT\" ;;"
+    # 印は一覧（list-sessions）で引く。show-options -t "=名" は本物の 3.7b で
+    # 空を返し、贋物だけが答えておった（実戦で踏んだ・2026-09-02）。
+    # 試験で使う陣の名をすべて並べる。
+    echo "  list-sessions) for n in honden honden-agents jin-a jin-s; do printf '%s\\t%s\\n' \"\$n\" \"\$HONDEN_TEST_ROOT\"; done ;;"
     echo 'esac'
     echo 'exit 0'
   } > "$STUB/tmux"

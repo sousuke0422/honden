@@ -141,7 +141,7 @@ run_viewer() { run bash "$ROOT/shutsujin_departure.sh" viewer; }
     echo 'printf "tmux" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
     echo 'case "$1" in'
     echo '  has-session) exit 0 ;;'
-    echo '  show-options) printf "\n" ;;'      # 印が無い
+    echo '  list-sessions) printf "honden-agents\t\n" ;;'      # 印が無い
     echo '  list-windows) printf "agents\n" ;;'
     echo 'esac'
     echo 'exit 0'

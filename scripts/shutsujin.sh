@@ -386,9 +386,17 @@ earpiece() {
 # 名だけで判ずると、同じ名のよその陣へ窓を接ぐ。接いだ後で「撤収は
 # tmux kill-session -t multiagent」と案内すれば、他人の陣ごと畳ませてしまう。
 ours() {
+  # **`show-options -t "=名"` は tmux 3.7b で黙って空を返す**（`=` 無しなら
+  # 返る）。has-session / kill-session は `=` で正しく効くゆえ、印を読む所
+  # だけが空になり、立てた直後の己の陣を「我らの物ではない」と言うた
+  # （実戦で踏んだ・2026-09-02。贋の tmux で試しておったゆえ釣れなんだ）。
+  #
+  # `=` を外せば前方一致になり、`honden` が `honden-agents` を掴みうる。
+  # ゆえに一覧を引いて**名の完全一致**で取る——芯（src/pane.ts）と同じ手。
   local mark
-  mark=$(tmux show-options -t "=$1" -qv @honden 2>/dev/null)
-  [ "$mark" = "$ROOT" ]
+  mark=$(tmux list-sessions -F '#{session_name}'$'\t''#{@honden}' 2>/dev/null \
+    | awk -F'\t' -v n="$1" '$1 == n { print $2; exit }')
+  [ -n "$mark" ] && [ "$mark" = "$ROOT" ]
 }
 
 # 撤収。己が立てた陣だけを畳む。
