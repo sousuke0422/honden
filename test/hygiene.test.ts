@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 /**
  * 公にする前の身体検査。
@@ -42,6 +43,24 @@ describe('追跡している品に、育った場所の跡を残さぬ', () => {
     expect(t).not.toContain('.codex/hooks.json');
     expect(t).toContain('.codex/hooks.json.example');
     expect(body('.codex/hooks.json.example')).toContain('__HONDEN_ROOT__');
+  });
+
+  test('skill の隣に住む script は、盤上に在れば追跡されている', () => {
+    // `.gitignore` は whitelist 式。SKILL.md は広い許しで拾えるが scripts/ は
+    // 個別の許しが要り、書き忘れると**黙って漏れる**（honden-coder・2026-09-02）。
+    // 盤上に在る物と追跡されている物を突き合わせる。
+    const t = new Set(tracked());
+    const missing: string[] = [];
+    for (const d of readdirSync('skills', { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const sd = join('skills', d.name, 'scripts');
+      if (!existsSync(sd)) continue;
+      for (const f of readdirSync(sd)) {
+        const p = join(sd, f);
+        if (!t.has(p)) missing.push(p);
+      }
+    }
+    expect(missing).toEqual([]);
   });
 
   test('設定の正本は追わず、雛形だけを追う', () => {

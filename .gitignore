@@ -193,6 +193,10 @@ logs/
 !skills/shogun-screenshot/scripts/
 !skills/shogun-screenshot/scripts/*.sh
 !skills/shogun-screenshot/scripts/*.py
+# skill の隣に住む script。SKILL.md は広い許しで拾えるが、scripts/ は個別に要る
+# （honden-coder の写しが黙って漏れた・2026-09-02。test/hygiene.test.ts が釣る）
+!skills/*/scripts/
+!skills/*/scripts/*.sh
 
 # Python venv (explicit deny — whitelist patterns like LICENSE leak through !*/)
 .venv/
