@@ -7,6 +7,7 @@ skills/
   competitive-survey/       自作
   external-to-honden/       自作
   honden-coder/             自作。旧 shogun-coder の移し。script を隣（scripts/）に持つ
+  honden-remote-ssh/        自作。旧 shogun-remote-ssh の移し
   honden-review-to-task/    自作
   honden-review/            派生。Apache-2.0（NOTICE.md と LICENSE が隣に在る）
   vendor/                   借り物。追える上流がある
