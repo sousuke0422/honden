@@ -142,6 +142,61 @@ describe('**後で走る命**を取り出す（二度目の監査 2026-09-01 が
   });
 });
 
+describe('表の中の取りこぼし（三度目の監査 2026-09-01 が釣った）', () => {
+  const RM = ['rm', '-rf', '/'].join(' ');
+  const S = (c: string) => judgeStructured(c, run).permission;
+
+  test('**値を取る旗を書き漏らすと、真の命を飛ばす**', () => {
+    // `ssh -J` と `env --argv0` を落としていた。旗が値を取ると知らねば、
+    // その値を命と読み、真の命はもう見ない
+    expect(S(`ssh -J jump host '${RM}'`)).toBe('deny');
+    expect(S(`env --argv0 x ${RM}`)).toBe('deny');
+  });
+
+  test('**find は -exec だけではない。しかも一つとは限らぬ**', () => {
+    const SEMI = String.raw`\;`;   // shell へ渡る `\;` をそのまま作る
+    expect(S(`find /tmp -ok ${RM} ${SEMI}`)).toBe('deny');
+    expect(S(`find /tmp -okdir ${RM} ${SEMI}`)).toBe('deny');
+    expect(S(`find /tmp -exec echo {} ${SEMI} -exec ${RM} ${SEMI}`)).toBe('deny');
+  });
+
+  test('別の名で走らせる包みも辿る', () => {
+    for (const c of [
+      `setarch x86_64 ${RM}`, `taskset -c 0 ${RM}`, `strace ${RM}`,
+      `nsenter -t 1 -m ${RM}`, `systemd-run ${RM}`, `busybox sh -c '${RM}'`,
+      `script -c '${RM}' /dev/null`,
+    ]) {
+      expect(S(c), c).toBe('deny');
+    }
+  });
+
+  test('**それでも一覧の外は通る。これは堀であって城壁ではない**', () => {
+    // 守れておらぬ範囲を、釘としても残す。次に読む者が「全部止まる」と
+    // 誤解せぬように。列挙では原理的に届かぬ形がある
+    for (const c of [
+      `python3 -c "import os; os.system('${RM}')"`,
+      `node -e "require('child_process').execSync('${RM}')"`,
+      `echo '${RM}' | sh`,
+    ]) {
+      expect(S(c), c).toBe('allow');
+    }
+  });
+
+  test('実務の命を止めぬ', () => {
+    for (const c of [
+      'ssh -J bastion prod uptime', 'ssh -o StrictHostKeyChecking=no host ls',
+      "find . -type f -name '*.rs' -exec grep -l TODO {} +",
+      `find /tmp -exec echo {} ${String.raw`\;`}`,
+      'xargs -a list.txt -I{} cp {} /backup/', 'strace -o /tmp/t.log ls',
+      'nsenter --target 1 --mount true', 'taskset -c 0-3 make',
+      'timeout --foreground 60 bun test', 'env -u NODE_OPTIONS npm test',
+      'busybox ls -la', "python3 -c 'print(1)'",
+    ]) {
+      expect(S(c), c).toBe('allow');
+    }
+  });
+});
+
 describe('D006 — 生の kill は拒み、honden-kill だけを通す', () => {
   test('生の形は包みを被せても拒む', () => {
     // 包みを跨ぐ判定は構造の層（`judgeStructured`）の役である。

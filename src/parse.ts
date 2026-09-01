@@ -288,7 +288,7 @@ export function baseName(w: string): string {
  * **旗を正しく読めば、命の位置は一つに定まる。**
  */
 const WRAP: Record<string, { value?: string[]; pos?: number; scriptFlag?: string; script?: 'rest' }> = {
-  env: { value: ['-u', '--unset', '-C', '--chdir'] },
+  env: { value: ['-u', '--unset', '-C', '--chdir', '--argv0', '-S', '--split-string'] },
   command: {},
   builtin: {},
   exec: { value: ['-a'] },
@@ -297,22 +297,56 @@ const WRAP: Record<string, { value?: string[]; pos?: number; scriptFlag?: string
   doas: { value: ['-u'] },
   stdbuf: { value: ['-i', '-o', '-e'] },
   nice: { value: ['-n'] },
-  ionice: { value: ['-c', '-n', '-p'] },
-  time: {},
+  ionice: { value: ['-c', '-n', '-p', '-P', '-u'] },
+  time: { value: ['-f', '--format', '-o', '--output'] },
   watch: { value: ['-n', '--interval'] },
-  unshare: { value: ['--map-user', '--map-group', '--setuid', '--setgid'] },
-  xargs: { value: ['-n', '-I', '-P', '-a', '-d', '-E', '-s', '--replace', '--max-args'] },
-  parallel: { value: ['-j', '-N'] },
+  unshare: {
+    value: ['--map-user', '--map-group', '--map-groups', '--map-users', '--setuid', '--setgid',
+      '--propagation', '--wd', '-S', '-G', '-R', '--root'],
+  },
+  xargs: {
+    value: ['-a', '--arg-file', '-d', '--delimiter', '-E', '-e', '--eof', '-I', '-i', '--replace',
+      '-L', '-l', '--max-lines', '-n', '--max-args', '-P', '--max-procs', '-s', '--max-chars',
+      '--process-slot-var'],
+  },
+  parallel: { value: ['-j', '-N', '--jobs'] },
+  // 中身を見られぬまま別の命を起こす物。**値を取る旗を書き漏らせば、
+  // 真の命を飛ばして素通りする**（`ssh -J jump host '…'` がそれであった・
+  // 三度目の監査 2026-09-01）。man に照らして並べた。
+  setarch: { pos: 1 },
+  taskset: { value: ['-c', '-p'] },
+  // `-m` `-u` `-n` の類は値を**取らぬ**のが常（任意引数）。値を取る側に
+  // 入れると次の語を食い、真の命を飛ばす（実測 2026-09-01）
+  nsenter: { value: ['-t', '--target', '-S', '--setuid', '-G', '--setgid', '--wd', '--wdns'] },
+  'systemd-run': {
+    value: ['-p', '--property', '-u', '--unit', '--on-calendar', '--on-active', '--slice',
+      '--uid', '--gid', '-E', '--setenv', '--working-directory'],
+  },
+  strace: { value: ['-o', '-e', '-p', '-s', '-E', '-u'] },
+  ltrace: { value: ['-o', '-e', '-p', '-s', '-u'] },
+  // busybox は applet 名を位置引数に取る。`busybox sh -c '…'` は shell である
+  // ——`pos: 1` で飛ばすと applet ごと見失う。飛ばさず、applet を命として辿る
+  busybox: {},
+  script: { value: ['-o', '--log-out', '-I', '-B', '-T', '--timing'], scriptFlag: '-c' },
   // 位置引数を一つ食ってから命が来る
-  timeout: { value: ['-s', '--signal', '-k', '--kill-after'], pos: 1 },
+  timeout: {
+    value: ['-s', '--signal', '-k', '--kill-after'],
+    pos: 1,
+  },
   chroot: { value: ['--userspec', '--groups'], pos: 1 },
-  // **ssh は遠方の shell へ文字列を渡す。** 位置引数（host）の後は argv では
-  // なく一つの文字列であることが多い。shell と同じく解き直す。
-  // 遠方で走るとて、我らが撃たせておることに変わりはない。
-  ssh: { value: ['-p', '-i', '-l', '-o', '-F'], pos: 1, script: 'rest' },
-  // 文字列で命を渡す旗を持つ包み
-  flock: { value: ['-w', '--timeout', '-E', '--conflict-exit-code'], pos: 1, scriptFlag: '-c' },
-  runuser: { value: ['-u', '-g', '-G'], scriptFlag: '-c' },
+  flock: {
+    value: ['-w', '--timeout', '-E', '--conflict-exit-code'],
+    pos: 1,
+    scriptFlag: '-c',
+  },
+  runuser: { value: ['-u', '-g', '-G', '-s', '--shell'], scriptFlag: '-c' },
+  ssh: {
+    // man ssh の値を取る短旗を並べた。**`-J` を落としていて素通りした。**
+    value: ['-B', '-b', '-c', '-D', '-E', '-e', '-F', '-I', '-i', '-J', '-L', '-l', '-m',
+      '-O', '-o', '-p', '-Q', '-R', '-S', '-W', '-w'],
+    pos: 1,
+    script: 'rest',
+  },
 };
 
 const MAX_UNITS = 64;
@@ -371,16 +405,24 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
 
   // ── find の -exec / -execdir ──
   if (name === 'find') {
-    const ei = argv.findIndex((w) => w.value === '-exec' || w.value === '-execdir');
-    if (ei >= 0) {
-      const rest = argv.slice(ei + 1);
-      // 終端は `;` `\;` `+`。**書かれ方が幾通りもある**——shell に食われぬよう
-      // 逃がすのが常で、解析器は `\;` をそのまま値に持つ（実測 2026-09-01）
-      const end = rest.findIndex((w) => w.value === ';' || w.value === '\\;' || w.value === '+');
-      resolveArgv(end >= 0 ? rest.slice(0, end) : rest, run, depth - 1, out);
-      return;
+    // **命を起こす述語は四つあり、しかも一つとは限らぬ。**
+    // `-ok` は訊いてから走らせるだけで、走らせることに変わりはない。
+    // 二つ目の `-exec` を見落として素通りした（三度目の監査 2026-09-01）。
+    const RUNS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+    // 終端は `;` `\;` `+`。**書かれ方が幾通りもある**——shell に食われぬよう
+    // 逃がすのが常で、解析器は `\;` をそのまま値に持つ（実測 2026-09-01）
+    const END = new Set([';', '\\;', '+']);
+    let found = false;
+    for (let k = 1; k < argv.length; k++) {
+      if (!RUNS.has(argv[k]!.value)) continue;
+      found = true;
+      const rest = argv.slice(k + 1);
+      const e = rest.findIndex((w) => END.has(w.value));
+      resolveArgv(e >= 0 ? rest.slice(0, e) : rest, run, depth - 1, out);
+      if (e >= 0) k += e + 1;
+      else break;
     }
-    emit();
+    if (!found) emit();
     return;
   }
 
