@@ -2,7 +2,8 @@
 
 多エージェント運用の差配層。
 
-`multi-agent-shogun` の後継として起こしたが、乗り換えではない。
+`multi-agent-shogun` の流れを汲む。跡目を継いだのではなく、
+あちらの考え方と作法を受けて別に起こした。
 軍勢はそのまま残し、配管だけを書き換える。
 
 tmux の上に CLI エージェントを何体も並べ、SQLite の正本ひとつを介して働かせる。
@@ -631,6 +632,23 @@ shogun から whitelist 方式をそのまま継承している。
 
 **既定は MIT。** 上流の `multi-agent-shogun` も `kagemusha` も MIT で揃っている。
 明示された例外を除き、この repo のものはすべて MIT で配る。
+
+### 上流への謝辞
+
+honden は `yohey-w/multi-agent-shogun`（MIT）の流れを汲む。
+考え方と作法を受けただけでなく、**上流の表現をそのまま引き継いだ品が三つある**。
+
+| 品 | 引き継いだ量 |
+|---|---|
+| `config/opencode-permissions.yaml` | 3,726 字すべて。一字も違わない |
+| `.gitignore` | 上流 4,981 字のうち 4,952 字 |
+| `instructions/common/forbidden_actions.md` | 上流 2,459 字のうち 1,421 字。禁じ手の表が骨格 |
+
+MIT は、実質的な部分を配るときに著作権表示を残すことを求めている。
+`LICENSE` に yohey-w の表示を並べ、`NOTICE` に引き継いだ範囲を書いたのはこれによる。
+
+上流はさらに [Claude-Code-Communication](https://github.com/Akira-Papa/Claude-Code-Communication)（Akira-Papa）を出所として挙げている。
+honden がそこから直に引き継いだ品は確認していないが、系譜としてここに記す。
 
 ### 見分け方は `NOTICE.md` の有無
 

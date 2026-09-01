@@ -54,7 +54,10 @@ function licensedInReadme(): string[] {
   const out: string[] = [];
   for (const line of section.split('\n')) {
     const m = /^\|\s*`([^`]+)`\s*\|/.exec(line.trim());
-    if (m) out.push(m[1]!);
+    // **免許の節には表が二つある。** 借り物の例外の表と、上流から引き継いだ
+    // 品の表である。後者は `skills/` の外を指すので、混ぜると「紙が無い」と
+    // 誤って落ちる（実際に落ちた・2026-09-01）。見るのは借り物の表だけ。
+    if (m && m[1]!.startsWith('skills/')) out.push(m[1]!);
   }
   return out;
 }
@@ -175,5 +178,47 @@ describe('定めが書いてあること', () => {
   test('**置き場では見分けぬ**と明記しておる（我が一度誤った所）', () => {
     // vendor/ は「追える上流があるか」の別であって、免許の別ではない
     expect(readme()).toContain('置き場では見分けない');
+  });
+});
+
+
+/**
+ * 上流（`yohey-w/multi-agent-shogun`・MIT）の告知。
+ *
+ * honden は跡目を継いだのではなく流れを汲んだものだが、**三つの品は上流の
+ * 表現をそのまま引き継いでいる**（`config/opencode-permissions.yaml` は
+ * 一字も違わない）。MIT は実質的な部分を配るときに著作権表示を残すことを
+ * 求めており、これは好意ではなく条件である。
+ *
+ * 一度は落としていた（公開前の検分で釣った・2026-09-01）。
+ */
+describe('上流の告知を落とさぬ', () => {
+  const read = (p: string) => readFileSync(join(import.meta.dir, '..', p), 'utf8');
+
+  test('LICENSE に上流の権利者が並んでいる', () => {
+    const l = read('LICENSE');
+    expect(l).toContain('Copyright (c) 2026 sousuke0422');
+    expect(l).toContain('yohey-w');
+  });
+
+  test('NOTICE に引き継いだ品が書いてある', () => {
+    const n = read('NOTICE');
+    expect(n).toContain('multi-agent-shogun');
+    // 「引き継いだ」と言うなら、どれをどれだけかが書かれていなければ検めようがない
+    for (const f of [
+      'config/opencode-permissions.yaml',
+      '.gitignore',
+      'instructions/common/forbidden_actions.md',
+    ]) {
+      expect(n).toContain(f);
+    }
+  });
+
+  test('README の免許の節にも謝辞がある', () => {
+    const r = read('README.md');
+    expect(r).toContain('上流への謝辞');
+    expect(r).toContain('yohey-w/multi-agent-shogun');
+    // 上流がさらに挙げている出所も、系譜として残す
+    expect(r).toContain('Claude-Code-Communication');
   });
 });
