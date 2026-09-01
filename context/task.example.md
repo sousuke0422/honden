@@ -15,7 +15,7 @@ GitHub 上の旧名 TeamBlackCrystal/task は koyori-app/task へ転送される
 - 実体: Coder workspace `<workspace>` の `/home/coder/task`
 - git はすべて Coder の中で打つ（`/honden-coder` の exec 経由）。
   worktree も `/home/coder/` 配下に作る
-- WSL の `/mnt/c/Users/aki/work/task` は **grep・参照専用**。deploy key が無く
+- WSL の `/mnt/c/Users/example/work/task` は **grep・参照専用**。deploy key が無く
   push は 403。ここで commit するな（足軽が二度踏んだ: cmd_266, cmd_273）
 - SSHFS mount（`~/coder/<workspace>/task`）は**編集・閲覧のみ、git 厳禁**
 
