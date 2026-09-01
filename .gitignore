@@ -113,6 +113,7 @@
 # 旧環境で 80KB の設計書に育った教訓もそこに書いてある。
 !/context/
 !/context/README.md
+!/context/*.example.md
 
 # Templates
 !templates/
