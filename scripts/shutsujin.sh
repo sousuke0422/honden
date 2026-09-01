@@ -206,9 +206,14 @@ up() {
   # 入力欄へ `claude --dangerously-skip-permissions` が流れ込む——手が止まり、
   # 途中の仕事が壊れる。出陣を二度打った時に起きる（敵対レビュー critical・
   # 2026-08-29）。「既にある」と警めながら、その後そのまま打っておった。
+  #
+  # **己の陣なら畳んで立て直す。** 旧環境の出陣は引数無しで打てば常に
+  # 撤収してから立てた——その手癖を引き継ぐ（殿・2026-09-02）。
+  # ただし旧は名だけで畳んだ。ここは印（@honden）で己の物と判じた時だけ畳み、
+  # よその陣なら触らずに召喚も行わぬ。
   local made_shogun=0 made_agents=0
-  if tmux has-session -t "=$SESSION_SHOGUN" 2>/dev/null; then
-    warn "$SESSION_SHOGUN は既にある。召喚は行わぬ（畳むのは人の手で: tmux kill-session -t $SESSION_SHOGUN）"
+  if tmux has-session -t "=$SESSION_SHOGUN" 2>/dev/null && ! { info "$SESSION_SHOGUN は立っておる。畳んで立て直す"; fold "$SESSION_SHOGUN"; }; then
+    warn "$SESSION_SHOGUN は既にあり、我らの物ではない。召喚は行わぬ"
   else
     made_shogun=1
     tmux new-session -d -s "$SESSION_SHOGUN" -n main -c "$ROOT" "${NO_HIST[@]}"
@@ -220,8 +225,8 @@ up() {
   fi
 
   # ── 陣（家老・足軽・軍師）──
-  if tmux has-session -t "=$SESSION_AGENTS" 2>/dev/null; then
-    warn "$SESSION_AGENTS は既にある。召喚は行わぬ（畳むのは人の手で）"
+  if tmux has-session -t "=$SESSION_AGENTS" 2>/dev/null && ! { info "$SESSION_AGENTS は立っておる。畳んで立て直す"; fold "$SESSION_AGENTS"; }; then
+    warn "$SESSION_AGENTS は既にあり、我らの物ではない。召喚は行わぬ"
   else
     made_agents=1
     tmux new-session -d -s "$SESSION_AGENTS" -n agents -c "$ROOT" "${NO_HIST[@]}"
@@ -402,18 +407,26 @@ down() {
       ok "$n は立っておらぬ"
       continue
     fi
-    if ! ours "$n"; then
-      warn "$n は我らの陣ではない（@honden の印が $ROOT を指さぬ）。畳まぬ"
-      echo "      名が同じでも、印の無い陣・よその置き場の陣には手を出さぬ。"
-      echo "      人の手で畳むなら: tmux kill-session -t $n"
-      continue
-    fi
-    if tmux kill-session -t "=$n" 2>/dev/null; then
-      ok "$n を畳んだ"
-    else
-      warn "$n を畳めなんだ（tmux が拒んだ）"
-    fi
+    fold "$n" || true
   done
+}
+
+# 一つの陣を畳む。**己の物でなければ畳まず 1 を返す。**
+# 出陣（立て直し）と撤収の両方がここを通る。畳む筋は一つに寄せる。
+fold() {
+  local n="$1"
+  if ! ours "$n"; then
+    warn "$n は我らの陣ではない（@honden の印が $ROOT を指さぬ）。畳まぬ"
+    echo "      名が同じでも、印の無い陣・よその置き場の陣には手を出さぬ。"
+    echo "      人の手で畳むなら: tmux kill-session -t $n"
+    return 1
+  fi
+  if tmux kill-session -t "=$n" 2>/dev/null; then
+    ok "$n を畳んだ"
+  else
+    warn "$n を畳めなんだ（tmux が拒んだ）"
+    return 1
+  fi
 }
 
 # 我らの戦況の窓が、その口で応えておるか。

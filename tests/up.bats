@@ -62,11 +62,28 @@ run_up() { run bash "$FAKE/shutsujin_departure.sh" up; }
   called_with tmux "send-keys"
 }
 
-@test "陣が既にあれば召喚せぬ（働いておる者の手を止めぬ）" {
+@test "**己の陣が立っておれば、畳んでから立て直す**（旧環境の手癖を引き継ぐ）" {
   fake_root
-  stub tmux 0 ""            # has-session が「ある」と答える
+  stub_tmux 0               # has-session が「ある」と答え、印は己の置き場
+  export HONDEN_TEST_ROOT="$FAKE"   # 出陣は $FAKE を根と見る。$ROOT ではよその陣になる
+  run_up
+  assert_output --partial "畳んで立て直す"
+  called "tmux kill-session"
+  called_with tmux "new-session"
+  called_with tmux "send-keys"
+  # 畳むのが立てるより先。逆なら生きた陣へ命が流れ込む
+  k=$(grep -n "^tmux kill-session" "$CALLS" | head -1 | cut -d: -f1)
+  n=$(grep -n "^tmux new-session" "$CALLS" | head -1 | cut -d: -f1)
+  [ "$k" -lt "$n" ]
+}
+
+@test "よその陣が既にあれば畳まず召喚もせぬ（働いておる者の手を止めぬ）" {
+  fake_root
+  stub tmux 0 ""            # has-session が「ある」と答え、印は空（我らの物ではない）
   run_up
   assert_output --partial "召喚は行わぬ"
+  run bash -c "grep -c '^tmux kill-session' '$CALLS' || true"
+  assert_output "0"
   # **これが本丸。** 既存の pane へ命を打ち込んではならぬ。
   refute_line --partial "send-keys"
   run bash -c "grep -c '^tmux send-keys' '$CALLS' || true"
