@@ -46,10 +46,16 @@ use std::process::Command;
 ///
 /// ゆえに順を変える。**掴む → 検める → 掴んだまま撃つ。**
 ///
-/// libc crate には版によって載っておらぬので、番号で呼ぶ。
-/// この二つは Linux 5.1（2019）以降で、番号は主要な土地で共通である。
-const SYS_PIDFD_SEND_SIGNAL: libc::c_long = 424;
-const SYS_PIDFD_OPEN: libc::c_long = 434;
+/// 番号は `libc` から取る。**土地ごとに違う。**
+///
+/// はじめ 424 / 434 を直に書いた。我らが配る二つの土地（x86_64・aarch64）では
+/// それで正しい——`asm-generic/unistd.h` と x86_64 の表が同じ数を持つ。
+/// だが **mips では `4000 + 434` である**（`libc` の表で確かめた・2026-09-01）。
+///
+/// いま当たっているから良い、では arm64 の `c_char` と同じ轍になる。
+/// **土地で変わる数を、数で書かぬ。**
+const SYS_PIDFD_SEND_SIGNAL: libc::c_long = libc::SYS_pidfd_send_signal;
+const SYS_PIDFD_OPEN: libc::c_long = libc::SYS_pidfd_open;
 
 /// その process を掴む。掴めねば `None`（既に居らぬか、権が無い）。
 fn pidfd_open(pid: i32) -> Option<i32> {

@@ -7,7 +7,11 @@
  * 同じである。
  */
 import { describe, expect, test } from 'bun:test';
-import { judge, normalize, issue, verify, sha256, splitOtp, OTP_DEFAULT_TTL_MS } from '../src/guard';
+import { judge, judgeStructured, normalize, issue, verify, sha256, splitOtp, OTP_DEFAULT_TTL_MS } from '../src/guard';
+import { realRunner } from '../src/parse';
+
+/** 本物の解析器で見る。**贋物では、解けぬ形の扱いが試せぬ。** */
+const run = realRunner(new URL('..', import.meta.url).pathname);
 import { openStore } from '../src/store';
 
 const T0 = new Date('2026-08-27T12:00:00Z');
@@ -78,81 +82,78 @@ describe('判定 — 通るべきが通る（門を邪魔者にせぬ）', () =>
   }
 });
 
-describe('包みで紋様を跨がせぬ（codex の監査 2026-08-31 が釣った穴）', () => {
-  // 名の前に一語置くだけで行頭アンカーが外れ、**絶対域が破れておった**。
-  //   rm -rf /          止めた
-  //   env rm -rf /      通ってよし  ← これ
-  // `stripEnvPrefix` は同じ型を一度塞いでいる（`X=1 pkill …`・2026-08-27）。
-  // あの折は代入だけを見て、**命として使う包みを見落とした。**
+describe('**後で走る命**を取り出す（二度目の監査 2026-09-01 が釣った穴）', () => {
+  // 一度目の直しは「包みの名」を数えて剥がした。**筋が違った。**
+  // 問いは「これは包みか」ではなく「この語は、後で命として実行されるか」。
+  // 名を増やしても追いつかず、実際に次がすべて素通りしておった:
+  //   sh -c '…' / bash -lc '…' / chroot / … / flock … / find -exec … / ssh …
+  //
+  // 判定は `judgeStructured`（門の正の口）で見る。紋様の層だけでは届かぬ。
   const RM = ['rm', '-rf', '/'].join(' ');
+  const S = (c: string) => judgeStructured(c, run).permission;
 
-  test('**包みを被せても止まる**', () => {
+  test('**shell へ文字列で渡した命は解き直す**', () => {
+    for (const c of [`sh -c '${RM}'`, `bash -lc '${RM}'`, `dash -c "${RM}"`, `/bin/sh -c '${RM}'`]) {
+      expect(S(c), c).toBe('deny');
+    }
+  });
+
+  test('**入れ子の包みも降りる**', () => {
     for (const c of [
-      `env ${RM}`, `command ${RM}`, `builtin ${RM}`, `exec ${RM}`,
-      `nohup ${RM}`, `setsid ${RM}`, `xargs ${RM}`, `doas ${RM}`,
+      `chroot / ${RM}`, `flock /tmp/x ${RM}`, `ssh host '${RM}'`,
+      `unshare -Ur /bin/sh -c '${RM}'`, `env command /bin/${RM}`, `nohup timeout 5 ${RM}`,
     ]) {
-      expect(judge(c).permission, c).toBe('deny');
+      expect(S(c), c).toBe('deny');
     }
   });
 
-  test('**道を付けても止まる**', () => {
-    for (const c of [`/bin/${RM}`, `/usr/bin/${RM}`, `./${RM}`, `../bin/${RM}`]) {
-      expect(judge(c).permission, c).toBe('deny');
-    }
-  });
-
-  test('入れ子でも止まる', () => {
-    expect(judge(`env command /bin/${RM}`).permission).toBe('deny');
-    expect(judge(`nohup env exec /bin/${RM}`).permission).toBe('deny');
-  });
-
-  test('**旗が値を取るか決め打ちせぬ**（両様を試す）', () => {
-    // `env -i` は値を取らぬが `stdbuf -i 0` は取る。決め打ちした折、
-    // `env -i rm -rf /` が rm を値として食われ素通りした
+  test('**find の -exec の後ろは命である**', () => {
     for (const c of [
-      `env -i ${RM}`, `env -u FOO ${RM}`, `env -i -u X ${RM}`,
-      `stdbuf -i 0 ${RM}`, `nice -n 10 ${RM}`, `timeout -k 5 10 ${RM}`,
-      `timeout 5 ${RM}`, `xargs -I{} ${RM}`,
+      `find /tmp -exec ${RM} \\;`, `find /tmp -exec ${RM} +`, `find . -name x -execdir ${RM} \\;`,
     ]) {
-      expect(judge(c).permission, c).toBe('deny');
+      expect(S(c), c).toBe('deny');
     }
   });
 
-  test('D006 と D007 も包みを越える', () => {
-    expect(judge('env pkill -f watcher').permission).toBe('deny');
-    expect(judge('/usr/bin/pkill -f x').permission).toBe('deny');
-    expect(judge('nice -n 10 mkfs.ext4 /dev/sda').permission).toBe('deny');
+  test('**旗で枠を食い潰しても届く**（上限で素通りせぬ）', () => {
+    // 一度目の直しは候補の上限に達したら通しており、無害な候補で枠を
+    // 食い潰す形で素通りできた
+    const many = Array.from({ length: 12 }, (_, i) => `-u v${i}`).join(' ');
+    expect(S(`env ${many} ${RM}`)).toBe('deny');
   });
 
-  test('**剥がしたせいで誤検知を生まぬ**', () => {
-    // 道を落とすと `~/bin/kill-old.sh` が行頭 `kill` に見える。
-    // 名の切れ目（(?![\w.-])）で締めてある
+  test('**命の名が展開に依るなら拒む**（走らせるまで判らぬ）', () => {
+    for (const c of [`$SHELL -c '${RM}'`, `\${CMD:-rm} -rf /`]) {
+      expect(S(c), c).toBe('deny');
+    }
+  });
+
+  test('**引数にすぎぬ語を命と読まぬ**（誤検知を生まぬ）', () => {
+    // 一度目の直しは「包みの後の命らしき語すべて」を候補にし、
+    // `env echo rm -rf /` を止めてしまっていた。echo の引数にすぎぬ
     for (const c of [
-      './scripts/kill-old-logs.sh', 'bash mount-helper.sh', 'cat sudo-notes.md',
-      'npm run kill-port', 'ls -la', 'git status',
-      'env NODE_ENV=test bun test', 'timeout 30 bun test',
-      `rm -rf .tmp/work`, `echo ${RM}`, `grep -rn '${RM}' docs/`,
+      `env echo ${RM}`, `timeout 30 echo ${RM}`, `env printf '%s' ${RM}`,
+      'ls -la', 'git status', 'rm -rf .tmp/work', 'env NODE_ENV=test bun test',
+      "find . -name '*.ts'", 'find /tmp -exec echo {} \\;',
+      './scripts/kill-old-logs.sh', 'bash mount-helper.sh',
     ]) {
-      expect(judge(c).permission, c).toBe('allow');
+      expect(S(c), c).toBe('allow');
     }
-  });
-
-  test('候補は際限なく増やさぬ（壊れた入力で計算を焼かぬ）', () => {
-    const long = `env ${'a '.repeat(500)}${RM}`;
-    const t0 = Date.now();
-    expect(judge(long).permission).toBeDefined();
-    expect(Date.now() - t0).toBeLessThan(1000);
   });
 });
 
 describe('D006 — 生の kill は拒み、honden-kill だけを通す', () => {
   test('生の形は包みを被せても拒む', () => {
+    // 包みを跨ぐ判定は構造の層（`judgeStructured`）の役である。
+    // 紋様の層は文字列をそのまま見るだけで、そこで包みを剥がすと
+    // 引数にすぎぬ語を命と読む（誤検知の因・2026-09-01）
     for (const c of [
       'kill 12345', 'killall node', 'pkill -f watcher',
       'env kill 1', '/bin/kill 1', 'nohup pkill -f x',
       'tmux kill-session -t multiagent', 'tmux kill-server',
+      "sh -c 'pkill -f x'",
     ]) {
-      expect(judge(c).permission, c).toBe('deny');
+      expect(judgeStructured(c, run).permission, c).toBe('deny');
     }
   });
 

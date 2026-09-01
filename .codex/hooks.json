@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "HONDEN_GUARD_TRACE=\"$HOME/.honden/guard-trace.log\" bash __HONDEN_ROOT__/.codex/hooks/guard.sh",
+            "command": "HONDEN_GUARD_TRACE=\"$HOME/.honden/guard-trace.log\" bash /mnt/c/Users/aki/work/honden/.codex/hooks/guard.sh",
             "timeout": 10,
             "statusMessage": "禁じ手の門で検めておる"
           }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash __HONDEN_ROOT__/.codex/hooks/session-start.sh",
+            "command": "bash /mnt/c/Users/aki/work/honden/.codex/hooks/session-start.sh",
             "timeout": 10,
             "statusMessage": "名乗りと作法を確かめておる"
           }
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash __HONDEN_ROOT__/.codex/hooks/session-start.sh",
+            "command": "bash /mnt/c/Users/aki/work/honden/.codex/hooks/session-start.sh",
             "timeout": 10,
             "statusMessage": "圧縮の後に名乗りを言い直す"
           }

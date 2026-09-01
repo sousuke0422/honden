@@ -28,6 +28,7 @@ import {
   substUnits,
   heredocUnits,
   type Runner as ParseRunner,
+  execUnits,
 } from './parse';
 import { journal } from './store';
 
@@ -59,120 +60,18 @@ export function stripEnvPrefix(cmd: string): string {
 }
 
 /**
- * 命の頭に被さった**包み**を剥がす。
+ * 包みを剥がす仕事は、ここには無い。
  *
- * # なぜ要るか
+ * 一度ここへ `unwrapAll` を置いた（包みの名を数えて剥がし、候補を並べる形）。
+ * **筋が違った。** 問いは「これは包みか」ではなく「この語は、後で命として
+ * 実行されるか」であり、名を増やしても `sh -c '…'` には追いつかぬ。
+ * 加えて候補の上限で素通りし、引数にすぎぬ語を命と読んで誤検知も生んだ
+ * （二度目の監査が釣った・2026-09-01）。
  *
- * 紋様は命の名を行頭で見る。ゆえに名の前に一語置くだけで外れる。
- * 実測（2026-08-31・codex の監査が釣った）:
- *
- * ```
- * rm -rf /          止めた（D001・絶対域）
- * env rm -rf /      通ってよし   ← 破れておる
- * command rm -rf /  通ってよし
- * /bin/rm -rf /     通ってよし
- * ```
- *
- * **絶対域が包み一語で破れておった。** `stripEnvPrefix` は同じ型の穴を
- * 一度塞いでいる（`X=1 pkill …`・2026-08-27）。あの折は代入だけを見て、
- * **命として使う包みを見落とした。**
- *
- * # 何を剥がすか
- *
- * 中の命へ道を譲るだけの物を剥がす。剥がしても意味が変わらぬ物だけである。
- *
- * - 代入（`FOO=bar`）
- * - `env` とその旗（`-i` / `-u NAME` / `--unset=…` / `-C DIR`）
- * - `command` / `builtin` / `exec` / `nohup` / `setsid` / `stdbuf`
- * - `nice` / `ionice` / `time` / `timeout <長さ>` / `xargs`
- * - 名の前の道（`/bin/rm` → `rm`、`./x/rm` → `rm`）
- *
- * 入れ子も剥がす（`env command /bin/rm …`）。ただし回数は限る——
- * 際限なく回すのは、壊れた入力に食わせる隙になる。
- *
- * # 剥がしても、元も見る
- *
- * 判定は**元と剥がした後の両方**に当てる。剥がすと `~/bin/kill-old.sh` が
- * `kill-old.sh` になり、行頭で `kill` に見える形が生まれるゆえ、
- * 名の切れ目（`(?![\w.-])`）も併せて締めてある。
+ * いまは `parse.ts` の `execUnits` が、解析器の argv から**実際に走る命**を
+ * 取り出す。**この層は文字列をそのまま見るだけ**にしてある——
+ * 取りこぼしはあれど、取り過ぎはせぬ。
  */
-const WRAPPERS = new Set([
-  'env', 'command', 'builtin', 'exec', 'nohup', 'setsid', 'stdbuf',
-  'nice', 'ionice', 'time', 'timeout', 'xargs', 'doas',
-]);
-
-/**
- * 旗の後に値を一つ取りうる物。
- *
- * **「取るか否か」は包みによって違う。** `env -i` は値を取らぬが
- * `stdbuf -i 0` は取る。決め打ちすれば必ずどちらかで穴が開く——
- * 実際 `-i` を値ありと決めたところ、`env -i rm -rf /` が `rm` を値として
- * 食い、素通りした（2026-08-31）。
- *
- * ゆえに決めぬ。**両様を試し、いずれかが当たれば止める。**
- */
-const MAY_TAKE_VALUE = new Set(['-u', '-C', '-n', '-c', '-s', '-k', '-I', '-P', '-a', '-o', '-i', '-e']);
-
-/** 名から道を落とす。`/bin/rm` → `rm`。 */
-export function basename(word: string): string {
-  const i = word.lastIndexOf('/');
-  return i < 0 ? word : word.slice(i + 1);
-}
-
-export function unwrap(cmd: string): string {
-  return unwrapAll(cmd)[0] ?? normalize(cmd);
-}
-
-/**
- * 剥がし方が一通りに定まらぬので、**候補を並べて全部見る。**
- *
- * 旗が値を取るかで分岐する所だけ枝が増える。数は上限で抑える——
- * 際限なく増やすのは、壊れた入力で計算を焼く隙になる。
- */
-export function unwrapAll(cmd: string, cap = 12): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const work = [normalize(cmd)];
-
-  while (work.length > 0 && out.length < cap) {
-    const cur = work.shift()!;
-    if (seen.has(cur)) continue;
-    seen.add(cur);
-    out.push(cur);
-
-    let s = stripEnvPrefix(cur);
-    const words = s.split(' ');
-    const head = basename(words[0] ?? '');
-
-    // 道つきの名は、道を落とした姿も候補にする
-    if (head !== words[0]) {
-      work.push([head, ...words.slice(1)].join(' '));
-      continue;
-    }
-    if (s !== cur) {
-      work.push(s);
-      continue;
-    }
-    if (!WRAPPERS.has(head)) continue;
-
-    // 包みを一つ落とす。
-    //
-    // **どこまでが旗で、どこからが命かは決め切れぬ。** `env -i` は値を取らぬが
-    // `stdbuf -i 0` は取る。決め打ちすれば必ずどちらかで穴が開く
-    // （`env -i rm -rf /` が `rm` を値として食われ素通りした・2026-08-31）。
-    //
-    // ゆえに決めぬ。**包みの後にある「命らしき語」すべてを候補にする。**
-    // 旗（`-` 始まり）と代入は命の名になれぬので落とす。多めに挙げて、
-    // 一つでも当たれば止める側へ倒す。
-    for (let k = 1; k < words.length; k++) {
-      const w = words[k]!;
-      if (w.startsWith('-') || /^\w+=/.test(w)) continue;
-      const next = words.slice(k).join(' ');
-      if (next !== '' && next !== cur) work.push(next);
-    }
-  }
-  return out;
-}
 
 /**
  * コマンドから手形（HONDEN_OTP=札）を抜き取る。頭の env 代入の群れの
@@ -443,8 +342,23 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
     };
   }
 
+  // **実際に走る命を取り出す。** 単純命令をそのまま見るだけでは足りぬ——
+  // `sh -c '…'` の引用の中も、`find -exec` の後ろも、包みの中も命である
+  // （二度目の監査が釣った・2026-09-01）。
+  const scan = execUnits(parsed, run);
+  if (scan.unresolved !== undefined) {
+    // **解けぬなら通さぬ。** 一度目の直しは候補の上限に達したら通しており、
+    // 無害な候補で枠を食い潰す形で素通りできた（実測）。
+    return {
+      permission: 'deny',
+      rule: 'D000',
+      reason: `何が走るか解けぬゆえ通せぬ（${scan.unresolved}）。解ける形で書き直されよ`,
+      appealable: true,
+    };
+  }
+
   const all = [
-    ...parseUnits(parsed),
+    ...scan.units,
     ...substUnits(parsed, run),
     ...heredocUnits(parsed, run),
   ];
@@ -460,9 +374,13 @@ export function judge(cmd: string): Verdict {
   // **包みを剥がした姿も見る。** 名の前に一語置くだけで紋様が外れるゆえ
   // （`env rm -rf /` が通っておった・2026-08-31）。元も見るのは、
   // 剥がす過程で形が変わって取りこぼす筋を残さぬため。
-  const forms = unwrapAll(n);
+  // **ここは紋様だけを見る。** 包みを剥がす仕事は構造の層（`execUnits`）が
+  // 担う。ここでも剥がすと、`env echo rm -rf /` のような「引数にすぎぬ語」を
+  // 命と読んで止めてしまう（二度目の監査が釣った・2026-09-01）。
+  //
+  // 取りこぼしはあれど、取り過ぎはせぬ——それがこの層の役である。
   for (const r of RULES) {
-    if (forms.some((f) => r.pattern.test(f))) {
+    if (r.pattern.test(n)) {
       return {
         permission: 'deny',
         rule: r.id,
@@ -637,10 +555,44 @@ export interface GateCheck {
  * 設定の中身を読んで「据わっておる」と判ずるだけでは足りぬ。
  * 皮を実際に走らせ、deny が返ることまで見る——それが陽性対照である。
  */
+/**
+ * 設定が**その皮を指しておるか**を見る。
+ *
+ * # なぜ要るか
+ *
+ * 元は「設定の file が在るか」と「皮を直に叩いて拒むか」だけを見ていた。
+ * **繋ぎを見ていない。** 設定が別の道を指していても、皮そのものは拒むので
+ * 「生きておる」と答える。
+ *
+ * 実際にそれで通った。`.codex/hooks.json` の道を印（`__HONDEN_ROOT__`）の
+ * ままにして叩いたところ、`codex 生きておる` と出た（2026-09-01）。
+ * 本番では host が存在せぬ道を呼び、非零で倒れ、**Claude はそれを
+ * 「止めぬ誤り」と読んで命を通す**。
+ *
+ * **皮が生きておることと、皮が呼ばれることは別である。**
+ */
+function wiredTo(cfgText: string | null, script: string, root: string): { ok: boolean; note?: string } {
+  if (cfgText === null) return { ok: false, note: '設定を読めぬ' };
+  if (cfgText.includes('__HONDEN_ROOT__')) {
+    return { ok: false, note: '**道が印のまま**（`__HONDEN_ROOT__`）。仕度が置き換えておらぬ' };
+  }
+  // 皮の名で指しておればよい。道の書き方（変数・相対・絶対）は host ごとに違う
+  const base = script.slice(script.lastIndexOf('/') + 1);
+  const dir = script.slice(0, script.lastIndexOf('/'));
+  const rel = dir.startsWith(root) ? dir.slice(root.length).replace(/^\//, '') : dir;
+  if (!cfgText.includes(base)) return { ok: false, note: `設定が ${base} を指しておらぬ` };
+  if (rel !== '' && !cfgText.includes(rel)) {
+    return { ok: false, note: `設定が ${rel}/ を指しておらぬ` };
+  }
+  return { ok: true };
+}
+
 export function selftest(opts: {
   root: string;
   exists: (p: string) => boolean;
   run: (script: string, input: string) => string | null;
+  /** 設定の中身。繋ぎを見るために要る。読めぬなら null */
+  read?: (p: string) => string | null;
   /** codex の信頼記録があるか。無ければ黙って飛ばされる。 */
   codexTrusted?: (hooksPath: string) => boolean;
 }): GateCheck[] {
@@ -650,13 +602,16 @@ export function selftest(opts: {
   const cursorCfg = `${opts.root}/.cursor/hooks.json`;
   const cursorSh = `${opts.root}/.cursor/hooks/guard-shell.sh`;
   {
-    const configured = opts.exists(cursorCfg) && opts.exists(cursorSh);
-    const res = configured ? opts.run(cursorSh, JSON.stringify({ command: probe })) : null;
+    const present = opts.exists(cursorCfg) && opts.exists(cursorSh);
+    const wire = present && opts.read ? wiredTo(opts.read(cursorCfg), cursorSh, opts.root) : { ok: present };
+    const res = present ? opts.run(cursorSh, JSON.stringify({ command: probe })) : null;
     out.push({
       cli: 'cursor',
-      configured,
-      denies: !!res && res.includes('"permission":"deny"'),
-      note: configured ? undefined : '設定か皮が無い',
+      configured: present,
+      // **繋がっておらねば「効いておらぬ」と言う。** 皮が拒めても、
+      // 呼ばれぬなら守りは無い
+      denies: !!res && res.includes('"permission":"deny"') && wire.ok,
+      note: !present ? '設定か皮が無い' : wire.note,
     });
   }
 
@@ -664,14 +619,15 @@ export function selftest(opts: {
     ['codex', `${opts.root}/.codex/hooks/guard.sh`, `${opts.root}/.codex/hooks.json`],
     ['claude', `${opts.root}/.claude/hooks/guard.sh`, `${opts.root}/.claude/settings.json`],
   ] as const) {
-    const configured = opts.exists(cfg) && opts.exists(sh);
-    const res = configured ? opts.run(sh, JSON.stringify({ tool_name: 'Bash', tool_input: { command: probe } })) : null;
-    const denies = !!res && res.includes('"permissionDecision":"deny"');
-    let note: string | undefined = configured ? undefined : '設定か皮が無い';
-    if (cli === 'codex' && configured && opts.codexTrusted && !opts.codexTrusted(cfg)) {
+    const present = opts.exists(cfg) && opts.exists(sh);
+    const wire = present && opts.read ? wiredTo(opts.read(cfg), sh, opts.root) : { ok: present, note: undefined };
+    const res = present ? opts.run(sh, JSON.stringify({ tool_name: 'Bash', tool_input: { command: probe } })) : null;
+    const denies = !!res && res.includes('"permissionDecision":"deny"') && wire.ok;
+    let note: string | undefined = !present ? '設定か皮が無い' : wire.note;
+    if (cli === 'codex' && present && wire.ok && opts.codexTrusted && !opts.codexTrusted(cfg)) {
       note = '**信頼の記録が無い。codex は未信頼の hook を黙って飛ばす**——対話で起こして /hooks で信頼を与えよ';
     }
-    out.push({ cli, configured, denies, note });
+    out.push({ cli, configured: present, denies, note });
   }
   return out;
 }

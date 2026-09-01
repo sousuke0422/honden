@@ -263,6 +263,35 @@ fi
 
 [ "$MISSING" -gt 0 ] && warn "$MISSING 件足りぬ。揃えてからもう一度走らせられよ"
 
+# ── 二の二、門の入口 ──────────────────────────────────────────────
+#
+# **本体を得る前に置く。** ここは本体の在る無しと関わらぬ話で、後ろに置くと
+# 本体の入手でつまずいた時に届かぬ（実測: `--fetch` が出し物なしで倒れ、
+# 門の入口が印のまま残った・2026-09-01）。
+step "二の二、門の入口"
+
+# `.codex/hooks.json` は道を印（`__HONDEN_ROOT__`）で持っている。
+#
+# **絶対で焼き付けると二つ困る。** 公にすれば書いた者の利用者名と作業場の配置が
+# 出るし、他所へ clone すれば無い binary を指す。Claude 側は
+# `$CLAUDE_PROJECT_DIR` で書けるが、codex 側にその変数が無い。
+#
+# **印のまま残せば門が黙る。** ここで実の道へ直し、直したことを告げる。
+CODEX_HOOKS="$ROOT/.codex/hooks.json"
+if [ -f "$CODEX_HOOKS" ]; then
+  if grep -q '__HONDEN_ROOT__' "$CODEX_HOOKS"; then
+    tmp=$(mktemp) && sed "s|__HONDEN_ROOT__|$ROOT|g" "$CODEX_HOOKS" > "$tmp" && mv "$tmp" "$CODEX_HOOKS"
+    ok "codex の門の入口を、この置き場へ向けた"
+    note "門の入口: 直した"
+  else
+    ok "codex の門の入口は既に向いておる"
+    note "門の入口: OK"
+  fi
+else
+  warn ".codex/hooks.json が無い。codex を使うなら門が効かぬ"
+  note "門の入口: **無い**"
+fi
+
 # ── 三、本体をどう手に入れるか ────────────────────────────────────
 step "三、本体"
 
@@ -443,31 +472,6 @@ if [ -x "$ROOT/bin/honden" ] && [ -f "$SETTINGS" ]; then
 else
   warn "本体か設定が無いゆえ、正本には触らぬ"
   note "正本: 未了"
-fi
-
-# ── 五の二、門の入口 ──────────────────────────────────────────────
-step "五の二、門の入口"
-
-# `.codex/hooks.json` は道を印（`__HONDEN_ROOT__`）で持っている。
-#
-# **絶対で焼き付けると二つ困る。** 公にすれば書いた者の利用者名と作業場の配置が
-# 出るし、他所へ clone すれば無い binary を指す。Claude 側は
-# `$CLAUDE_PROJECT_DIR` で書けるが、codex 側にその変数が無い。
-#
-# **印のまま残せば門が黙る。** ここで実の道へ直し、直したことを告げる。
-CODEX_HOOKS="$ROOT/.codex/hooks.json"
-if [ -f "$CODEX_HOOKS" ]; then
-  if grep -q '__HONDEN_ROOT__' "$CODEX_HOOKS"; then
-    tmp=$(mktemp) && sed "s|__HONDEN_ROOT__|$ROOT|g" "$CODEX_HOOKS" > "$tmp" && mv "$tmp" "$CODEX_HOOKS"
-    ok "codex の門の入口を、この置き場へ向けた"
-    note "門の入口: 直した"
-  else
-    ok "codex の門の入口は既に向いておる"
-    note "門の入口: OK"
-  fi
-else
-  warn ".codex/hooks.json が無い。codex を使うなら門が効かぬ"
-  note "門の入口: **無い**"
 fi
 
 # ── 六、道 ────────────────────────────────────────────────────────

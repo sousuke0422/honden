@@ -228,3 +228,197 @@ export function heredocUnits(p: Parsed, run: Runner): string[] {
   }
   return out;
 }
+
+/**
+ * **後で実行される命**を取り出す。
+ *
+ * # なぜ `units` では足りぬか
+ *
+ * `units` は解析器が返した単純命令をそのまま並べる。だが命の中には、
+ * **別の命を起こすもの**がある。
+ *
+ * ```
+ * sh -c 'rm -rf /'              引用の中は文字ではなく命である
+ * find /tmp -exec rm -rf / \;   -exec の後ろは命である
+ * env -i rm -rf /               包み。中の命が本体
+ * chroot / rm -rf /             同上
+ * ```
+ *
+ * `units` はこれらを一つの命として返し、門は `sh` や `find` を見て通す。
+ * 実測（2026-09-01・二度目の監査が釣った）——`sh -c '…'`、`bash -lc '…'`、
+ * `chroot / …`、`flock /tmp/x …`、`find -exec …`、`ssh host '…'`、
+ * いずれも**素通りしておった**。
+ *
+ * # 名の一覧で追うのをやめる
+ *
+ * 一度目の直しでは「包みの名」を数えて剥がした。**筋が違った。**
+ * 問いは「これは包みか」ではなく、**「この語は、後で命として実行されるか」**
+ * である。名を増やしても追いつかぬ。
+ *
+ * ゆえに**包みごとに旗を正しく読み**、命の位置に来た語を取り出し、
+ * 文字列として渡される命（`-c` の後ろ）は**解き直して再帰する**。
+ *
+ * # 解けぬなら通さぬ
+ *
+ * 命の名が変数や命令置換なら（`$SHELL -c …`、`${CMD:-rm} …`）、走らせるまで
+ * 判らぬ。**判らぬ物は拒む。** 深さや数の上限に達した時も同じ——
+ * 一度目の直しは上限に達したら通しており、無害な候補で枠を食い潰す形で
+ * 素通りできた（実測）。
+ */
+export interface ExecScan {
+  /** 実際に走る命（argv を空白で繋いだ形） */
+  units: string[];
+  /** 解けなんだ理由。**在れば拒む** */
+  unresolved?: string;
+}
+
+/** 名から道を落とす。`/bin/rm` → `rm`。 */
+export function baseName(w: string): string {
+  const i = w.lastIndexOf('/');
+  return i < 0 ? w : w.slice(i + 1);
+}
+
+/**
+ * 包みの仕様。**旗をどう読むかを、包みごとに書く。**
+ *
+ * `value`: 値を一つ取る旗。`pos`: 命の前に来る位置引数の数。
+ *
+ * 一度目の直しは「包みの後にある命らしき語すべて」を候補にした。
+ * 乱暴すぎた——`env echo rm -rf /` を止めてしまう（`echo` の引数にすぎぬ）。
+ * **旗を正しく読めば、命の位置は一つに定まる。**
+ */
+const WRAP: Record<string, { value?: string[]; pos?: number; scriptFlag?: string; script?: 'rest' }> = {
+  env: { value: ['-u', '--unset', '-C', '--chdir'] },
+  command: {},
+  builtin: {},
+  exec: { value: ['-a'] },
+  nohup: {},
+  setsid: {},
+  doas: { value: ['-u'] },
+  stdbuf: { value: ['-i', '-o', '-e'] },
+  nice: { value: ['-n'] },
+  ionice: { value: ['-c', '-n', '-p'] },
+  time: {},
+  watch: { value: ['-n', '--interval'] },
+  unshare: { value: ['--map-user', '--map-group', '--setuid', '--setgid'] },
+  xargs: { value: ['-n', '-I', '-P', '-a', '-d', '-E', '-s', '--replace', '--max-args'] },
+  parallel: { value: ['-j', '-N'] },
+  // 位置引数を一つ食ってから命が来る
+  timeout: { value: ['-s', '--signal', '-k', '--kill-after'], pos: 1 },
+  chroot: { value: ['--userspec', '--groups'], pos: 1 },
+  // **ssh は遠方の shell へ文字列を渡す。** 位置引数（host）の後は argv では
+  // なく一つの文字列であることが多い。shell と同じく解き直す。
+  // 遠方で走るとて、我らが撃たせておることに変わりはない。
+  ssh: { value: ['-p', '-i', '-l', '-o', '-F'], pos: 1, script: 'rest' },
+  // 文字列で命を渡す旗を持つ包み
+  flock: { value: ['-w', '--timeout', '-E', '--conflict-exit-code'], pos: 1, scriptFlag: '-c' },
+  runuser: { value: ['-u', '-g', '-G'], scriptFlag: '-c' },
+};
+
+const MAX_UNITS = 64;
+
+/** 文字列で渡された命を解き直して降りる。 */
+function descendScript(w: Word, run: Runner, depth: number, out: ExecScan): void {
+  if (w.var || w.cmdsubst) {
+    out.unresolved = out.unresolved ?? '走らせる文字列が展開に依っておる';
+    return;
+  }
+  const inner = parseCommand(w.value, run);
+  if (!inner.ok) {
+    out.unresolved = out.unresolved ?? `走らせる文字列を解けぬ（${inner.reason}）`;
+    return;
+  }
+  for (const c of inner.commands) resolveArgv(c.argv, run, depth - 1, out);
+}
+
+/** 一つの argv を辿り、実際に走る命へ降りる。 */
+function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): void {
+  if (depth <= 0 || out.units.length >= MAX_UNITS) {
+    out.unresolved = out.unresolved ?? '入れ子が深すぎる、または命が多すぎる';
+    return;
+  }
+  if (argv.length === 0) return;
+
+  const head = argv[0]!;
+  // **命の名が判らぬなら拒む。** `$SHELL -c …` や `${CMD:-rm} …` は
+  // 走らせるまで何が起きるか判らぬ
+  if (head.var || head.cmdsubst) {
+    out.unresolved = out.unresolved ?? `命の名が展開に依っておる（${head.text}）`;
+    return;
+  }
+  const name = baseName(head.value);
+  // **名から道を落として出す。** `/bin/rm -rf /` を書かれたまま渡すと、
+  // 紋様の行頭アンカーが外れて素通りする（実測 2026-09-01）。
+  // 判ずるのは「何が走るか」であって、どう書かれたかではない。
+  const emit = () => out.units.push([name, ...argv.slice(1).map((w) => w.value)].join(' '));
+
+  // ── shell へ文字列で渡された命は、解き直す ──
+  if (SHELLS.has(name)) {
+    const ci = argv.findIndex((w, i) => i > 0 && !w.quoted && /^-[a-z]*c[a-z]*$/.test(w.value));
+    if (ci >= 0 && ci + 1 < argv.length) {
+      descendScript(argv[ci + 1]!, run, depth, out);
+      return;
+    }
+    emit();
+    return;
+  }
+
+  // ── find の -exec / -execdir ──
+  if (name === 'find') {
+    const ei = argv.findIndex((w) => w.value === '-exec' || w.value === '-execdir');
+    if (ei >= 0) {
+      const rest = argv.slice(ei + 1);
+      // 終端は `;` `\;` `+`。**書かれ方が幾通りもある**——shell に食われぬよう
+      // 逃がすのが常で、解析器は `\;` をそのまま値に持つ（実測 2026-09-01）
+      const end = rest.findIndex((w) => w.value === ';' || w.value === '\\;' || w.value === '+');
+      resolveArgv(end >= 0 ? rest.slice(0, end) : rest, run, depth - 1, out);
+      return;
+    }
+    emit();
+    return;
+  }
+
+  // ── 包み。旗を読んで、命の位置まで進む ──
+  const spec = WRAP[name];
+  if (!spec) {
+    emit();
+    return;
+  }
+  let i = 1;
+  let pos = spec.pos ?? 0;
+  while (i < argv.length) {
+    const v = argv[i]!.value;
+    if (spec.scriptFlag && v === spec.scriptFlag && i + 1 < argv.length) {
+      descendScript(argv[i + 1]!, run, depth, out);
+      return;
+    }
+    if (/^\w+=/.test(v)) { i++; continue; }
+    if (v === '--') { i++; break; }
+    if (v.startsWith('-')) {
+      i += spec.value?.includes(v) ? 2 : 1;
+      continue;
+    }
+    if (pos > 0) { pos--; i++; continue; }
+    break;
+  }
+  const rest = argv.slice(i);
+  if (rest.length === 0) {
+    // 包みだけで命が無い（`env` 単体など）。害は無い
+    emit();
+    return;
+  }
+  // 残りが「一つの文字列としての命」なら、解き直す（ssh の類）
+  if (spec.script === 'rest' && rest.length === 1) {
+    descendScript(rest[0]!, run, depth, out);
+    return;
+  }
+  resolveArgv(rest, run, depth - 1, out);
+}
+
+/** 実際に走る命を、包みと文字列越しの入れ子まで辿って集める。 */
+export function execUnits(p: Parsed, run: Runner, depth = 4): ExecScan {
+  const out: ExecScan = { units: [] };
+  if (!p.ok) return { units: [], unresolved: p.reason };
+  for (const c of p.commands) resolveArgv(c.argv, run, depth, out);
+  return out;
+}

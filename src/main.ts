@@ -989,6 +989,13 @@ export function runGuardSelftest(root: string | undefined): RunResult {
       const r = Bun.spawnSync(['bash', script], { stdin: Buffer.from(input) });
       return r.success ? r.stdout.toString() : null;
     },
+    read: (p) => {
+      try {
+        return readFileSync(p, 'utf8');
+      } catch {
+        return null;
+      }
+    },
     codexTrusted: (cfg) => {
       try {
         const toml = readFileSync(join(homedir(), '.codex/config.toml'), 'utf8');
