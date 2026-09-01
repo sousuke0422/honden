@@ -672,6 +672,13 @@ export function cmdDone(
   db: Database,
   selfId: string | undefined,
   input: Record<string, unknown>,
+  /**
+   * 外の review 台帳への伺い。塞ぐ理由を返し、無ければ null。
+   *
+   * **渡さねば働かぬ。** honden は task 無しで立つ物であり、
+   * 繋いだ時だけ効く（`src/reviewgate.ts` に理由を書いた）。
+   */
+  reviewGate?: (rawYaml: string) => string | null,
 ): ReportResult {
   const wantsBypass = input['bypass'] === 'true' || input['bypass'] === true;
   if (selfId !== CMD_CLOSER && !wantsBypass) {
@@ -689,8 +696,8 @@ export function cmdDone(
   const cmdId = typeof input['cmd_id'] === 'string' ? input['cmd_id'] : '';
   if (cmdId === '') return { ok: false, message: '--cmd_id を渡されよ。' };
 
-  const cmd = db.query('SELECT id, status FROM cmd WHERE id = ?').get(cmdId) as
-    | { id: string; status: string }
+  const cmd = db.query('SELECT id, status, raw FROM cmd WHERE id = ?').get(cmdId) as
+    | { id: string; status: string; raw: string }
     | null;
   if (!cmd) return { ok: false, message: `そのような司令は無い: ${cmdId}` };
   if (cmd.status === 'done' || cmd.status === 'cancelled') {
@@ -723,6 +730,11 @@ export function cmdDone(
           : '    検める対象の報告そのものが無い。'),
     );
   }
+
+  // 外の review 台帳へ伺う。**設定が無ければ何もしない**（ntfy と同じ流儀）。
+  // 司令が `pr:` を宣していなければ、見るべき PR が無いので働かぬ。
+  const gate = reviewGate?.(cmd.raw);
+  if (gate) blockers.push(gate);
 
   if (blockers.length > 0 && !wantsBypass) {
     return {

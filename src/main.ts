@@ -85,6 +85,13 @@ import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
 import { get as configGet, load as configLoad, dig as configDig, SETTINGS_PATH_KEY } from './config';
+import {
+  gateConfig,
+  prOf,
+  summaryVerdict,
+  realRunner as realReviewRunner,
+  type Runner as ReviewRunner,
+} from './reviewgate';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
 import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
@@ -622,10 +629,47 @@ export function runCmdDone(
   dbPath: string | undefined,
   selfId: string | undefined,
   input: Record<string, unknown>,
+  run: ReviewRunner = realReviewRunner,
 ): RunResult {
   const db = openStore({ path: dbPath });
-  const r = cmdDone(db, selfId, input);
+  const r = cmdDone(db, selfId, input, (raw) => reviewBlocker(db, raw, run));
   return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
+}
+
+/**
+ * 司令の原文から PR を拾い、外の review 台帳へ伺う。
+ *
+ * 塞ぐ理由を返す。**働かぬ場合は null**——設定が無い、PR を宣していない。
+ * 伺えなかった（道具が無い、応えが読めぬ）ときは **null を返さぬ**。
+ * 頼んだ門が働かなかったのを「通ってよし」と読ませぬためである。
+ */
+export function reviewBlocker(db: Database, rawYaml: string, run: ReviewRunner): string | null {
+  const cfg = gateConfig((k) => {
+    const r = configGet(db, k);
+    return r.ok ? r.value : undefined;
+  });
+  if (!cfg) return null; // 名乗り出ぬ
+
+  let doc: unknown;
+  try {
+    doc = Bun.YAML.parse(rawYaml);
+  } catch {
+    return null; // 原文が解けぬのは別の話。ここで塞ぐ筋ではない
+  }
+  const pr = prOf(doc);
+  if (pr === null) return null; // 見るべき PR が無い
+
+  const v = summaryVerdict(cfg, pr, run);
+  if (v.state === 'mergeable') return null;
+  if (v.state === 'blocked') {
+    return `PR #${pr} に指摘が残っておる: ${v.reason}
+    直して task 側で fixed → verified まで進めよ。`;
+  }
+  return (
+    `PR #${pr} の検めを引けなんだ: ${v.reason}
+` +
+    '    門を頼んでおきながら効かなんだゆえ、通さぬ。設定（review.gate.*）か道具を検められよ。'
+  );
 }
 
 /** `honden cmd show <id>` — 受け入れ条件と、いまどこまで覆っておるか。 */
