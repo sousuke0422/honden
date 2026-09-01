@@ -9,7 +9,7 @@
 #
 # ## 本番と混ざらぬための三つの壁
 #
-#   一、セッション名が違う（honden-test。本番は multiagent / shogun）
+#   一、セッション名が違う（honden-test。本番は honden / honden-agents）
 #   二、正本が違う（~/.honden-test/。9p を避け ext4 に置く）
 #   三、HONDEN_TMUX_SESSION で pane の世界を絞る。
 #       試験の karo と本番の karo は同名ゆえ、絞らねば
@@ -121,7 +121,7 @@ up() {
   tmux new-session -d -s "$SESSION_SHOGUN" -n main "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "$SHOGUN")"
   tmux set-option -p -t "$SESSION_SHOGUN:main" @agent_id "$SHOGUN"
 
-  # 働き手の陣（本番の `multiagent` に当たる）
+  # 働き手の陣（本番の `honden-agents` に当たる）
   tmux new-session -d -s "$SESSION" -n agents "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "${AGENTS[0]}")"
   for a in "${AGENTS[@]:1}"; do
     tmux split-window -t "$SESSION:agents" "${NO_HIST[@]}" "${PANE_ENV[@]}" "$(pane_cmd "$a")"

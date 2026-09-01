@@ -51,7 +51,7 @@ Output: `ashigaru3` → You are Ashigaru 3. The number is your ID.
 
 Why `@agent_id` not `pane_index`: pane_index shifts on pane reorganization.
 `@agent_id` は出陣の際に `scripts/shutsujin.sh` が付け、付けた後に読み返して確かめる。
-**番号（`multiagent:agents.N`）で人を呼ぶな。** 名乗りは pane の `@agent_id` である。
+**番号（`honden-agents:agents.N`）で人を呼ぶな。** 名乗りは pane の `@agent_id` である。
 
 honden も同じ順で名乗りを決める:
 

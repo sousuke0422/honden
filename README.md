@@ -296,7 +296,7 @@ honden say import --from <旧 tasks.yaml>    # 何度打っても同じ
 |---|---|
 | `config/settings.yaml` | 顔ぶれ、CLI、モデル、報せの宛先。追跡しない（topic を含むため） |
 | `~/.honden/honden.db` | 正本。`--db` か `HONDEN_DB` で移せる |
-| `HONDEN_SESSION_SHOGUN` / `HONDEN_SESSION_AGENTS` | セッション名（既定 `shogun` と `multiagent`） |
+| `HONDEN_SESSION_SHOGUN` / `HONDEN_SESSION_AGENTS` | セッション名（既定 `honden` と `honden-agents`） |
 | `HONDEN_TMUX_SESSION` | 芯の射程。将軍のセッションも含める |
 | `HONDEN_DASHBOARD_PORT` / `HONDEN_DASHBOARD_HOST` | 窓の口（既定 8788 と 127.0.0.1） |
 
@@ -501,7 +501,7 @@ GitHub の `/releases/latest` は prerelease を外して返すので、`honden 
 tmux server                  ▼
 ├─ session shogun      honden-watch（芯）── tmux send-keys ──┐
 │   └─ main    bash → CLI（将軍）  ←──────────────────────────┤
-└─ session multiagent                                        │
+└─ session honden-agents                                        │
     ├─ agents  bash → CLI（家老・足軽 N・軍師） ←─────────────┘
     ├─ core    bash（輪）→ honden-watch      ← 合図の芯 (Rust)
     └─ viewer  bash（輪）→ honden dashboard  ← 戦況の窓 (Bun)
@@ -511,7 +511,7 @@ tmux server                  ▼
 芯から出るので、親子とは向きも経路も違う。
 
 ペインの数だけ bash が立ち、その上に CLI が 1 体ずつ乗る。セッション名は
-既定で `shogun` / `multiagent`、`HONDEN_SESSION_SHOGUN` と
+既定で `honden` / `honden-agents`、`HONDEN_SESSION_SHOGUN` と
 `HONDEN_SESSION_AGENTS` で変えられる。
 
 エージェント同士は直接つながらない。やり取りは正本を経由し、変化を芯が拾って
@@ -558,7 +558,7 @@ D014 で塞いである。読む側（`capture-pane` / `list-panes`）は塞が�
 
 ### 素性の確かめ方
 
-名前で判断しない。`multiagent` という名のセッションが自分のものとは限らない。
+名前で判断しない。`honden-agents` という名のセッションが自分のものとは限らない。
 
 | 確かめたいもの | 見るもの |
 |---|---|

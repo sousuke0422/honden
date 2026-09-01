@@ -2,10 +2,15 @@
 # 出陣の儀 — 本陣を立てる。
 #
 # 旧 shutsujin_departure.sh（1095 行）の芯を移した。骨は変えぬ:
-#   shogun セッション（将軍 1 枚） + multiagent セッション（3×3 の 9 枚）
+#   将軍の陣（1 枚） + 働き手の陣（3×3 の 9 枚）
 #   pane に @agent_id / @model_name を付け、縁に名と模型を出す
 #   各 pane で CLI を起こす
-# 殿の手が覚えておる形ゆえ、名も配置もそのままにした。
+# 配置はそのままにした。殿の手が覚えておる形ゆえ。
+#
+# **名だけは変えた。** 旧環境（multi-agent-shogun）と同じ `shogun` /
+# `multiagent` を既定にしていたが、それでは並走できぬ——同じ名を取りに行き、
+# 同じ pane を撃つ。殿の下知は「独立させる」（2026-09-01）。
+# 手が覚えている名を捨てる代わりに、二つの陣が互いを掴まぬ。
 #
 # 変えたのは中身である:
 #
@@ -41,8 +46,8 @@ DB="${HONDEN_DB:-$HOME/.honden/honden.db}"
 # 出ておった（実測 2026-08-29）。正は src/status.ts の corePaths。
 CORE_SIGNAL=""
 CORE_LOCK=""
-SESSION_SHOGUN="${HONDEN_SESSION_SHOGUN:-shogun}"
-SESSION_AGENTS="${HONDEN_SESSION_AGENTS:-multiagent}"
+SESSION_SHOGUN="${HONDEN_SESSION_SHOGUN:-honden}"
+SESSION_AGENTS="${HONDEN_SESSION_AGENTS:-honden-agents}"
 VIEWER_PORT="${HONDEN_DASHBOARD_PORT:-8788}"
 VIEWER_HOST="${HONDEN_DASHBOARD_HOST:-127.0.0.1}"
 # 窓を立ててから叩くまでの落ち着きの間。試験では 0 にして待たぬ。

@@ -249,7 +249,7 @@ honden-bot issue create --repo koyori-app/task --title '題' --body-file 本文.
 1. 名乗りを確かめる。名乗りは pane の `@agent_id` から取る。
    **`$TMUX_PANE` が空のまま tmux へ問うな**——tmux は
    *いま活きておる pane* の名を返し、他人を名乗ることになる（2026-07-06 実例）。
-   honden は自ら pane から引く。番号（`multiagent:agents.N`）で己を呼ぶな。
+   honden は自ら pane から引く。番号（`honden-agents:agents.N`）で己を呼ぶな。
 2. `honden inbox read` — 未読の `task_assigned` に題・司令番号・仕事番号が載る
    - `task_assigned` が在る → 続きをやる
    - 無い → 次の差配を待つ

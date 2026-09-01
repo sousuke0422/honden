@@ -68,7 +68,7 @@ Delivery is handled by the resident watch, which calls `honden nudge`.
 - **家老 → 将軍は、殿が在席の間は開けておらぬ**（後述の Report Flow）。
 - **布陣の中では、`from` が pane の名乗りと一致しておらねばならぬ。**
   名乗りを引数に任せると、名乗りは検査にならぬ——足軽3号が karo を名乗れてしまう。
-  名乗りは pane の `@agent_id` から引く。pane 番号（`multiagent:agents.N`）で相手を呼ばぬこと。
+  名乗りは pane の `@agent_id` から引く。pane 番号（`honden-agents:agents.N`）で相手を呼ばぬこと。
 - **布陣の外（`TMUX_PANE` が無い）からは役職を騙れぬ。** `review_session` /
   `external_audit` のような、外だと分かる名を `from` に使え。
   外から `clear_command` は撃てぬ。

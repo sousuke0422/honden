@@ -14,7 +14,7 @@
   `honden guard appeal --cmd '<コマンド>' --reason '<理由>'` で将軍へ直訴し、
   下りた手形を `HONDEN_OTP=<札>` としてコマンドの頭に付けて使う。
   絶対域は手形でも通らぬ。叩く前に検めたければ `honden guard check --cmd '<コマンド>'`
-- 名乗りは pane の `@agent_id` から引く。pane 番号（`multiagent:agents.N`）で己を数えるな
+- 名乗りは pane の `@agent_id` から引く。pane 番号（`honden-agents:agents.N`）で己を数えるな
 - エージェント間通信は `honden inbox write` で行う。tmux を直接操作することは禁止
 
 ## セッションリセット
