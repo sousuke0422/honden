@@ -354,7 +354,13 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
 
   // ── shell へ文字列で渡された命は、解き直す ──
   if (SHELLS.has(name)) {
-    const ci = argv.findIndex((w, i) => i > 0 && !w.quoted && /^-[a-z]*c[a-z]*$/.test(w.value));
+    // **短旗の束は一字ずつ。** `-lc` は `-l -c` の束であり、`c` を含む。
+    // だが `-color` や `-check` は一字の束ではない——緩く見ると、その次の語を
+    // 命の文字列と誤読する（自分で気づいた・2026-09-01）。
+    // 長い旗（`--command`）は shell には無いので見ぬ。
+    const ci = argv.findIndex(
+      (w, i) => i > 0 && !w.quoted && /^-[a-z]{1,4}$/.test(w.value) && w.value.includes('c'),
+    );
     if (ci >= 0 && ci + 1 < argv.length) {
       descendScript(argv[ci + 1]!, run, depth, out);
       return;
