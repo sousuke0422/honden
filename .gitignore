@@ -15,6 +15,10 @@
 !.gitleaks.toml
 !CLAUDE.md
 !LICENSE
+# 上流（yohey-w/multi-agent-shogun・MIT）の告知。**許しを書き忘れて追跡から
+# 漏れ、謝辞を書いたのに世に出ていなかった**（CI が釣った・2026-09-01）。
+# 免許の紙と同じ扱いにする。
+!NOTICE
 !README.md
 !README_ja.md
 !CHANGELOG.md

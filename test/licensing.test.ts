@@ -20,6 +20,7 @@
  * 名乗ることになる」と書いてある。
  */
 import { describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname, relative } from 'node:path';
 
@@ -194,6 +195,18 @@ describe('定めが書いてあること', () => {
  */
 describe('上流の告知を落とさぬ', () => {
   const read = (p: string) => readFileSync(join(import.meta.dir, '..', p), 'utf8');
+
+  test('**告知の紙が追跡されている**（手元に在るだけでは世に出ぬ）', () => {
+    // `.gitignore` が whitelist 式（`*` で塞いでから一つずつ許す）なので、
+    // **許しを書き忘れた品は、手元に在るのに追跡から漏れる。**
+    // 実際に漏れた——謝辞を書いた `NOTICE` が clone に入らず、
+    // 直したはずの義務が世に出ていなかった（CI が釣った・2026-09-01）。
+    const tracked = execFileSync('git', ['ls-files', '-z'], {
+      cwd: join(import.meta.dir, '..'),
+      encoding: 'utf8',
+    }).split('\0');
+    for (const f of ['NOTICE', 'LICENSE', 'README.md']) expect(tracked).toContain(f);
+  });
 
   test('LICENSE に上流の権利者が並んでいる', () => {
     const l = read('LICENSE');

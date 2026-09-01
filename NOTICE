@@ -1,0 +1,35 @@
+# 出所
+
+honden は `yohey-w/multi-agent-shogun`（MIT）の流れを汲む。
+跡目を継いだのではない。あちらの考え方と作法を受けて別に起こしたもので、
+配管はほぼ書き直してある。**それでも上流の表現をそのまま引き継いだ品がある。**
+
+MIT は、実質的な部分を複製・改変して配るとき、著作権表示と許諾文を
+残すことを求めている。`LICENSE` に yohey-w の表示を並べたのはこれによる。
+
+## 引き継いだ品
+
+実測（2026-09-01・上流 `aff8dc8` との突き合わせ）。
+
+| 品 | 引き継いだ量 |
+|---|---|
+| `config/opencode-permissions.yaml` | 3,726 字すべて。一字も違わない |
+| `.gitignore` | 上流 4,981 字のうち 4,952 字。honden 側で足した分が上に載る |
+| `instructions/common/forbidden_actions.md` | 上流 2,459 字のうち 1,421 字。禁じ手の表が骨格 |
+
+これ以外は書き直しである。
+`core/`（Rust）、`src/`（TypeScript）、`docs/`、試験は honden で起こした。
+
+## さらに上流
+
+`yohey-w/multi-agent-shogun` は、その README で
+[Claude-Code-Communication](https://github.com/Akira-Papa/Claude-Code-Communication)
+（Akira-Papa）を出所として挙げている。
+honden がそこから直に引き継いだ品は確認していないが、
+系譜としてここに記す。
+
+## skills/ の由来物
+
+`skills/` に置いた借り物は、免許が本体（MIT）と異なるものがある。
+各 `NOTICE.md` に出所、版、免許、こちらが変えた箇所を書いてある。
+一覧は `skills/README.md` と `README.md` の免許の節にある。
