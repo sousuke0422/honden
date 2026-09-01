@@ -192,3 +192,49 @@ describe('所在の読み取り', () => {
     expect(list[1]!.coderWorkdir).toBe('/home/coder/task');
   });
 });
+
+/**
+ * 案件の覚書（context/<id>.md）の見え方。
+ *
+ * 旧環境の context/ は「足軽への引き継ぎの一枚」の意図で始まり、一つの書が
+ * 80KB・1,214 行の設計書に育った。雛形の「シンプルに保つ」は定めだけで、
+ * 誰も測っていなかった。ここでは大きさを見せ、育ちすぎたら警める。
+ */
+import { runProjectsShow } from '../src/main';
+import { mkdirSync } from 'node:fs';
+
+describe('honden projects — 覚書の見え方', () => {
+  function withProjects() {
+    const db = mkdtempSync(join(tmpdir(), 'honden-ctx-')) + '/h.db';
+    const root = mkdtempSync(join(tmpdir(), 'honden-ctxroot-'));
+    mkdirSync(join(root, 'context'));
+    const y = join(root, 'projects.yaml');
+    writeFileSync(y, 'projects:\n  - id: alpha\n    path: /w/alpha\n');
+    const d = openStore({ path: db });
+    tx(d, () => syncProjects(d, readProjectsFromFile(y)));
+    return { db, root };
+  }
+
+  test('覚書が無ければ、その行ごと出ない', () => {
+    const { db, root } = withProjects();
+    const r = runProjectsShow(db, root);
+    expect(r.out).toContain('alpha');
+    expect(r.out).not.toContain('覚書');
+  });
+
+  test('在れば名と大きさが出る', () => {
+    const { db, root } = withProjects();
+    writeFileSync(join(root, 'context', 'alpha.md'), '# alpha\n場所と罠。\n');
+    const r = runProjectsShow(db, root);
+    expect(r.out).toContain('覚書: context/alpha.md');
+    expect(r.out).not.toContain('育ちすぎ');
+  });
+
+  test('**育ちすぎたら警める**（80KB の教訓。定めだけでは止まらなかった）', () => {
+    const { db, root } = withProjects();
+    writeFileSync(join(root, 'context', 'alpha.md'), '設計書。\n'.repeat(2000)); // > 8KB
+    const r = runProjectsShow(db, root);
+    expect(r.out).toContain('育ちすぎ');
+    expect(r.out).toContain('案件の docs へ');
+  });
+});

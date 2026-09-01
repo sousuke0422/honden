@@ -256,6 +256,8 @@ honden-bot issue create --repo koyori-app/task --title '題' --body-file 本文.
 3. `honden lease` — いま何を握っておるか、期限はいつか
 4. `honden cmd show <cmd_id>` — 司令の目的と受け入れ条件、いま何が覆われておるか
 5. 案件の所在が要るなら `honden projects`
+6. 任に `project:` が書いてあり、`context/<project>.md` が在ればそれも読む
+   （案件の引き継ぎの一枚。場所、決めたこと、罠。`honden projects` に出る）
 7. **正本は `~/.honden/honden.db` ただ一つである。** honden の出力が正であり、
    他所の写しを信じてはならぬ。dashboard は honden に無い。様子は `honden status` で見る。
 

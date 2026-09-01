@@ -109,6 +109,10 @@
 # 追跡すると書いた者の道が commit に載る（実際に一度載せた・2026-09-01）。
 # 雛形だけを追う。config/settings.yaml と同じ流儀。
 !/.codex/hooks.json.example
+# 案件ごとの覚書。**中身は私事でありうる**ゆえ README（意図と雛形）だけを追う。
+# 旧環境で 80KB の設計書に育った教訓もそこに書いてある。
+!/context/
+!/context/README.md
 
 # Templates
 !templates/

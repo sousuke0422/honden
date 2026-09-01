@@ -376,6 +376,11 @@ merge commit を生んだ（2026-08-25）。honden では型が守る。
 
 誰がどこを握っておるかは `honden claim`。経緯は `honden history <場所>`。
 
+案件に決めごとや罠が溜まってきたら `context/<project>.md` に**引き継ぎの一枚**を
+書く（雛形は `context/README.md`）。任に `project:` を書けば足軽が自分で読む。
+設計書を書く場ではない——旧環境では 80KB に育ち、読むだけで足軽の文脈が尽きた。
+育ちすぎは `honden projects` が警める。
+
 足軽が `honden claim check` で塞がりに当たれば、**honden が家老へ自ずと報せる**
 （`report_received`。同じ重なりを繰り返しては報せぬ）。
 足軽に調整の手は無い——譲らせるのも振り直すのも家老の役目である。

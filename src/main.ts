@@ -54,7 +54,7 @@ const REPO_ROOT = (() => {
   if (existsSync(join(fromSrc, 'bin', 'honden-parse'))) return fromSrc;
   return fromBin; // 見つからねば realRunner が拒む
 })();
-import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
@@ -1666,8 +1666,8 @@ export function runProjectsSync(dbPath: string | undefined, file: string | undef
   }
 }
 
-/** `honden projects` — いまの所在。 */
-export function runProjectsShow(dbPath: string | undefined): RunResult {
+/** `honden projects` — いまの所在。`contextRoot` は試験で注ぎ替える。 */
+export function runProjectsShow(dbPath: string | undefined, contextRoot: string = REPO_ROOT): RunResult {
   const db = openStore({ path: dbPath });
   const list = projectList(db);
   if (list.length === 0) {
@@ -1675,7 +1675,17 @@ export function runProjectsShow(dbPath: string | undefined): RunResult {
   }
   const lines = list.map((e) => {
     const root = workRootOf(db, e.id);
-    return `  ${e.id}${e.status ? ` [${e.status}]` : ''}\n      働く場所: ${root ? root.value : '（補わぬ）'}`;
+    const head = `  ${e.id}${e.status ? ` [${e.status}]` : ''}\n      働く場所: ${root ? root.value : '（補わぬ）'}`;
+    // 案件の覚書（context/<id>.md）。**引き継ぎの一枚**であり、設計書ではない。
+    // 旧環境では同じ意図の書が 80KB に育ち、読むだけで足軽の文脈が尽きた。
+    // 大きさを見せ、育ちすぎたら警める——定めだけでは止まらなかったゆえ。
+    const note = join(contextRoot, 'context', `${e.id}.md`);
+    if (existsSync(note)) {
+      const kb = statSync(note).size / 1024;
+      const warn = kb > 8 ? '  ▲ 育ちすぎておる。引き継ぎに要る行だけ残し、設計は案件の docs へ' : '';
+      return `${head}\n      覚書: context/${e.id}.md（${kb.toFixed(1)} KB）${warn}`;
+    }
+    return head;
   });
   return { code: EXIT_OK, out: lines.join('\n') };
 }
