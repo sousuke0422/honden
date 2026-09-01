@@ -277,6 +277,7 @@ tests/specs/osato_lms_*
 # 一本ごとに許可を書く。skills/* を丸ごと開けると、白名簿にした意味が消える。
 !/skills/find-skills
 !/skills/japanese-tech-writing
+!/skills/skill-creator
 
 # 棚の作法
 !/skills/README.md

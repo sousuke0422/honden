@@ -16,6 +16,7 @@ MIT は、実質的な部分を複製・改変して配るとき、著作権表�
 | `config/opencode-permissions.yaml` | 3,726 字すべて。一字も違わない |
 | `.gitignore` | 上流 4,981 字のうち 4,952 字。honden 側で足した分が上に載る |
 | `instructions/common/forbidden_actions.md` | 上流 2,459 字のうち 1,421 字。禁じ手の表が骨格 |
+| `skills/vendor/skill-creator/SKILL.md` | 7,243 字すべて。棚の作法で `vendor/` に置き、隣の `NOTICE.md` に版を控えた |
 
 これ以外は書き直しである。
 `core/`（Rust）、`src/`（TypeScript）、`docs/`、試験は honden で起こした。

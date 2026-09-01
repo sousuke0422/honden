@@ -12,8 +12,10 @@ skills/
   vendor/                   借り物。追える上流がある
     find-skills/            MIT（vercel-labs/skills）
     japanese-tech-writing/  Unlicense（k16shikano の gist）
+    skill-creator/          MIT（yohey-w/multi-agent-shogun。上流の版を控えてある）
   find-skills -> vendor/find-skills                      近道
   japanese-tech-writing -> vendor/japanese-tech-writing  近道
+  skill-creator -> vendor/skill-creator                  近道
 ```
 
 ## 三つに分ける
