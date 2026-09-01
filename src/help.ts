@@ -345,6 +345,14 @@ EOF`,
     summary: '顔ぶれを settings.yaml から入れ替える。',
     usage: 'honden roster sync --settings <settings.yaml>',
   },
+  'roster set': {
+    summary: '顔ぶれの CLI と模型を差し替える。端末なら一人ずつ訊く。settings.yaml の注釈は残す。',
+    usage: 'honden roster set [--<役> <cli>[:<模型>]]… [--workers N] [--dry-run] [--yes]',
+    notes: [
+      'CLI を変えるなら模型も対で。模型だけ残ると黙って動かぬ（2026-08-04）',
+      '立っておる陣には効かぬ。次の出陣から',
+    ],
+  },
   mode: {
     summary: '殿が在席かどうか。将軍へ合図を撃つかがこれで決まる。',
     usage: 'honden mode [attended|autonomous] [--until <時刻>]',

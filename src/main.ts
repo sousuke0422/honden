@@ -85,6 +85,8 @@ import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
 import { get as configGet, load as configLoad, dig as configDig, SETTINGS_PATH_KEY } from './config';
+import { settingsPath as settingsPathOf } from './config';
+import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import { getMode, setMode, describe as describeMode } from './mode';
 import { peek, history, reportCollision } from './peer';
 import { readProjectsFromFile, syncProjects, projects as projectList, workRootOf, ProjectError } from './projects';
@@ -180,6 +182,141 @@ export function runRosterSync(dbPath: string | undefined, settingsPath: string |
       entries.map((e) => `    ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n') +
       `\n  能力制限 ${limits.filter((l) => l.maxBloom < 6).length} 件（表に無いモデルは制限なし）` +
       `\n  設定の在り処を覚えた: ${resolvePath(settingsPath)}`,
+  };
+}
+
+/** 対話の手。試験では注ぎ替える。 */
+export interface RosterIo {
+  isTTY: boolean;
+  /** 問いを出して一行受ける。閉じられたら null。 */
+  ask: (q: string) => string | null;
+  say: (line: string) => void;
+}
+
+export const realRosterIo: RosterIo = {
+  isTTY: Boolean(process.stdin.isTTY),
+  ask: (q) => prompt(q),
+  say: (l) => console.log(l),
+};
+
+/**
+ * `honden roster set` — 顔ぶれの CLI と模型を差し替え、settings.yaml へ書き戻し、名簿へ写す。
+ *
+ * 端末なら一人ずつ訊く。旗（`--karo cursor:auto` `--workers 3`）があれば訊かぬ。
+ * **CLI と模型は対で扱う。** CLI だけ差して模型が残ると黙って動かぬ
+ * （Cursor に claude-fable-5 を指したまま沈黙した・2026-08-04）。
+ *
+ * 書くのは settings.yaml の**値だけ**で、注釈は残す（`src/rosteredit.ts`）。
+ * 立っておる陣には効かぬ——次の出陣から。
+ */
+export function runRosterSet(
+  dbPath: string | undefined,
+  flags: Record<string, string>,
+  io: RosterIo = realRosterIo,
+): RunResult {
+  const db = openStore({ path: dbPath });
+  const path = flags['settings'] ?? settingsPathOf(db);
+  if (!path) {
+    return { code: EXIT_INVALID, err: '設定の在り処を知らぬ。先に honden roster sync --settings <settings.yaml> を一度。' };
+  }
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    return { code: EXIT_INVALID, err: `${path} を読めぬ: ${String(e).slice(0, 120)}` };
+  }
+  const cur = currentRoster(text);
+  if (cur.length === 0) return { code: EXIT_INVALID, err: `${path} に cli.agents が見当たらぬ。` };
+  let doc: unknown = null;
+  try { doc = Bun.YAML.parse(text); } catch { /* 勧めが出ぬだけ。書く前の読み返しは apply が行う */ }
+
+  const dryRun = flags['dry-run'] === 'true';
+  const yes = flags['yes'] === 'true';
+  const changes: Change[] = [];
+  let workers: number | undefined;
+
+  // ── 旗から ──
+  const known = new Set(cur.map((c) => c.id));
+  const flagged = Object.keys(flags).filter((k) => known.has(k) || /^ashigaru[1-7]$/.test(k));
+  if (flags['workers'] !== undefined) workers = Number(flags['workers']);
+  for (const id of flagged) {
+    const [cli, model] = flags[id]!.split(':', 2);
+    if (!cli || !isCli(cli)) {
+      return { code: EXIT_INVALID, err: `--${id} の CLI が起こせる物に無い: ${cli}（${LAUNCHABLE_CLIS.join(' / ')}）` };
+    }
+    const c: Change = { id, cli };
+    if (model) c.model = model;
+    else if (cur.find((x) => x.id === id)?.cli !== cli) {
+      return { code: EXIT_INVALID, err: `--${id} ${cli}: CLI を変えるなら模型も対で（例: --${id} ${cli}:<模型>）。模型だけ残すと黙って動かぬ。` };
+    }
+    changes.push(c);
+  }
+
+  // ── 訊く ──
+  if (flagged.length === 0 && workers === undefined) {
+    if (!io.isTTY) {
+      return {
+        code: EXIT_INVALID,
+        err:
+          '端末でないゆえ訊けぬ。旗で渡されよ:\n' +
+          '  honden roster set --karo cursor:auto --ashigaru3 codex:gpt-5.6-sol --workers 3 [--dry-run] [--yes]',
+      };
+    }
+    io.say(`  いまの顔ぶれ（${path}）。空で送れば据え置き。`);
+    const order = [...cur.filter((c) => !/^ashigaru/.test(c.id) && c.id !== 'gunshi'), ...cur.filter((c) => c.id === 'gunshi')];
+    const askOne = (c: { id: string; cli: string | null; model: string | null }): boolean => {
+      const a = io.ask(`  ${c.id.padEnd(10)} CLI [${LAUNCHABLE_CLIS.join('/')}] (${c.cli ?? '-'}): `);
+      if (a === null) return false;
+      const cli = a.trim() || c.cli || '';
+      if (!isCli(cli)) { io.say(`    ${cli} は起こせぬ。据え置く`); return true; }
+      const sug = suggestModels(doc, cli, cur);
+      const keep = cli === c.cli ? c.model : null;
+      const hint = keep ? keep : sug.length ? sug.join(' / ') : '自由に';
+      const b = io.ask(`  ${' '.repeat(10)} 模型 (${hint}): `);
+      if (b === null) return false;
+      const model = b.trim() || keep || '';
+      if (!model) { io.say('    模型が無い。CLI だけ差すと黙って動かぬゆえ据え置く'); return true; }
+      if (cli !== c.cli || model !== c.model) changes.push({ id: c.id, cli, model });
+      return true;
+    };
+    for (const c of order) if (!askOne(c)) return { code: EXIT_INVALID, err: '中断した。何も書いておらぬ。' };
+    const ws = cur.filter((c) => /^ashigaru/.test(c.id));
+    const n = io.ask(`  足軽の頭数 (${ws.length}): `);
+    if (n === null) return { code: EXIT_INVALID, err: '中断した。何も書いておらぬ。' };
+    const want = n.trim() ? Number(n.trim()) : ws.length;
+    if (!Number.isInteger(want) || want < 1 || want > 7) return { code: EXIT_INVALID, err: '足軽は 1〜7。何も書いておらぬ。' };
+    if (want !== ws.length) workers = want;
+    for (const c of ws.slice(0, want)) if (!askOne(c)) return { code: EXIT_INVALID, err: '中断した。何も書いておらぬ。' };
+    for (let k = ws.length + 1; k <= want; k++) {
+      const id = `ashigaru${k}`;
+      const a = io.ask(`  ${id.padEnd(10)} CLI [${LAUNCHABLE_CLIS.join('/')}]: `);
+      if (a === null || !isCli(a.trim())) return { code: EXIT_INVALID, err: `${id} の CLI が無い。何も書いておらぬ。` };
+      const sug = suggestModels(doc, a.trim(), cur);
+      const b = io.ask(`  ${' '.repeat(10)} 模型 (${sug.join(' / ') || '自由に'}): `);
+      if (b === null || !b.trim()) return { code: EXIT_INVALID, err: `${id} の模型が無い。何も書いておらぬ。` };
+      changes.push({ id, cli: a.trim(), model: b.trim() });
+    }
+  }
+
+  // ── 当てて、見せて、書く ──
+  const r = applyRoster(text, { changes, ...(workers !== undefined ? { workers } : {}) });
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  if (r.summary.length === 0) return { code: EXIT_OK, out: '  変わる所が無い。何も書いておらぬ。' };
+  const shown = r.summary.join('\n');
+  if (dryRun) return { code: EXIT_OK, out: `${shown}\n  （下見。書いておらぬ）` };
+  if (!yes) {
+    if (!io.isTTY) return { code: EXIT_INVALID, err: `${shown}\n  端末でないゆえ確かめられぬ。--yes で通されよ。` };
+    io.say(shown);
+    const a = io.ask('  書くか [y/N]: ');
+    if (a === null || !/^y(es)?$/i.test(a.trim())) return { code: EXIT_OK, out: '  やめた。何も書いておらぬ。' };
+  }
+  const tmp = `${path}.${process.pid}.new`;
+  writeFileSync(tmp, r.text, 'utf8');
+  renameSync(tmp, path);
+  const synced = runRosterSync(dbPath, path);
+  return {
+    code: synced.code,
+    out: `${shown}\n  ${path} へ書いた。\n${synced.out ?? synced.err ?? ''}\n  立っておる陣には効かぬ。次の出陣から。`,
   };
 }
 
@@ -466,6 +603,7 @@ export function runSearch(dbPath: string | undefined, query: string, limit: numb
 const USAGE = `honden — 多エージェント運用の差配層
 
   honden roster sync --settings <settings.yaml>        顔ぶれを入れ替える
+  honden roster set [--<役> <cli>:<模型>] [--workers N]  顔ぶれを差し替える（端末なら訊く）
   honden roster                                        いまの顔ぶれ
   honden config                                        設定の在り処と上の段
   honden config get <鍵>                               設定を一つ引く（値だけ返す）
@@ -2584,6 +2722,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
   }
 
   if (rest[0] === 'roster') {
+    if (rest[1] === 'set') return emit(runRosterSet(dbPath, dryRun ? { ...flags, 'dry-run': 'true' } : flags));
     if (rest[1] === 'sync') {
       const s = flags['settings'];
       delete flags['settings'];
