@@ -233,7 +233,7 @@ describe('全文検索', () => {
 
 describe('置き場所', () => {
   test('9p の上に正本を置こうとしたら止める', () => {
-    expect(() => openStore({ path: '/mnt/c/Users/aki/work/honden/x.db' })).toThrow(/9p/);
+    expect(() => openStore({ path: '/mnt/c/Users/example/work/honden/x.db' })).toThrow(/9p/);
   });
 
   test('試験用の抜け道は効く (この抜け道が効かないと上の試験が測れない)', () => {

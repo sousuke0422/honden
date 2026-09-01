@@ -467,8 +467,8 @@ describe('同じ場所が同じ文字列になること', () => {
     // この試験は WSL の /mnt/c が在る時だけ意味を持つ。
     const drv = '/mnt/c/Users';
     if (!existsSync(drv) || !caseInsensitiveAt(drv)) return;
-    const a = normalizeClaim('path', '/mnt/c/Users/AKI/work');
-    const b = normalizeClaim('path', '/mnt/c/users/aki/work');
+    const a = normalizeClaim('path', '/mnt/c/Users/EXAMPLE/work');
+    const b = normalizeClaim('path', '/mnt/c/users/example/work');
     expect(a).toBe(b);
   });
 

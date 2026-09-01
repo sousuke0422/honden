@@ -13,7 +13,7 @@ describe('cursor', () => {
       '  ⠰⠰ Running  214 tokens',
       '  → Add a follow-up                       ctrl+c to stop',
       '  Composer 2.5 · 19.4%                    Run Everything',
-      '  /mnt/c/Users/aki/work/honden · main',
+      '  /mnt/c/Users/example/work/honden · main',
     ].join('\n');
     expect(isBusyText(capture, 'cursor')).toBe(true);
   });
@@ -23,7 +23,7 @@ describe('cursor', () => {
       '  待機します。',
       '  → Add a follow-up',
       '  Composer 2.5 · 10.5%                    Run Everything',
-      '  /mnt/c/Users/aki/work/honden · main',
+      '  /mnt/c/Users/example/work/honden · main',
     ].join('\n');
     expect(isBusyText(capture, 'cursor')).toBe(false);
   });

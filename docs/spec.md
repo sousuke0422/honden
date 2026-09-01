@@ -397,7 +397,7 @@ honden projects
 (cmd_266, cmd_273 — WSL で作業して push 403)。
 
 ```
-multi-agent-shogun     →  /mnt/c/Users/aki/work/multi-agent-shogun
+multi-agent-shogun     →  <旧環境の置き場>
 teamblackcrystal-task  →  coder:yellow-louse-10:/home/coder/task
 task-local             →  （補わぬ: 休眠中）
 ```

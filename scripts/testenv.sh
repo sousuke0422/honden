@@ -216,7 +216,7 @@ smoke() {
 # 瞬間、**本番の queue へ黙って書く**。コピーなら構造的に起きぬ。
 # .venv だけは symlink でよい（読むだけで、書き込み先に効かぬ）。
 # ============================================================
-SHOGUN_SRC="${HONDEN_SHOGUN_SRC:-/mnt/c/Users/aki/work/multi-agent-shogun}"
+SHOGUN_SRC="${HONDEN_SHOGUN_SRC:-$HOME/work/multi-agent-shogun}"
 COMPAT="$TESTHOME/shogun-compat"
 
 up_shogun() {

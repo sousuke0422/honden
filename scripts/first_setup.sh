@@ -278,6 +278,11 @@ step "二の二、門の入口"
 #
 # **印のまま残せば門が黙る。** ここで実の道へ直し、直したことを告げる。
 CODEX_HOOKS="$ROOT/.codex/hooks.json"
+# **雛形だけを追い、実体は追わぬ。** 追跡すると、ここで書き換えた道が
+# そのまま commit に載る（実際に一度載せた・2026-09-01）。
+if [ ! -f "$CODEX_HOOKS" ] && [ -f "$CODEX_HOOKS.example" ]; then
+  cp "$CODEX_HOOKS.example" "$CODEX_HOOKS"
+fi
 if [ -f "$CODEX_HOOKS" ]; then
   if grep -q '__HONDEN_ROOT__' "$CODEX_HOOKS"; then
     tmp=$(mktemp) && sed "s|__HONDEN_ROOT__|$ROOT|g" "$CODEX_HOOKS" > "$tmp" && mv "$tmp" "$CODEX_HOOKS"

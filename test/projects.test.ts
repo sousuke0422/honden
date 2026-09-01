@@ -22,7 +22,7 @@ const PROJECTS = [
   { id: 'vrt', path: '/w/vrt', workLocation: null, coderWorkspace: null, coderWorkdir: null, status: 'active', raw: '{}' },
   {
     id: 'task',
-    path: '/mnt/c/Users/aki/work/task',
+    path: '/mnt/c/Users/example/work/task',
     workLocation: 'coder',
     coderWorkspace: 'yellow-louse-10',
     coderWorkdir: '/home/coder/task',
@@ -31,7 +31,7 @@ const PROJECTS = [
   },
   {
     id: 'task-local',
-    path: '/mnt/c/Users/aki/work/task',
+    path: '/mnt/c/Users/example/work/task',
     workLocation: null,
     coderWorkspace: null,
     coderWorkdir: null,
@@ -180,7 +180,7 @@ describe('所在の読み取り', () => {
         '    path: "/w/vrt"',
         '    status: active',
         '  - id: task',
-        '    path: "/mnt/c/Users/aki/work/task"',
+        '    path: "/mnt/c/Users/example/work/task"',
         '    work_location: coder',
         '    coder_workspace: yellow-louse-10',
         '    coder_workdir: /home/coder/task',

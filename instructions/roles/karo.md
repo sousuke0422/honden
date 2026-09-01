@@ -274,7 +274,7 @@ cmd_id: cmd_1
 bloom: L3
 title: |
   hello1.md を作り、中身を「おはよう1」とせよ
-  置き場: /mnt/c/Users/aki/work/honden/docs/hello1.md
+  置き場: <repo>/docs/hello1.md
 EOF
 ```
 

@@ -95,6 +95,10 @@
 !config/opencode-permissions.yaml
 # 顔ぶれの雛形。settings.yaml 自身は topic を含みうるゆえ追跡せぬ
 !/config/settings.yaml.example
+# codex の門の入口。**実体は追跡せぬ**——仕度が置き場に合わせて書き換えるので、
+# 追跡すると書いた者の道が commit に載る（実際に一度載せた・2026-09-01）。
+# 雛形だけを追う。config/settings.yaml と同じ流儀。
+!/.codex/hooks.json.example
 
 # Templates
 !templates/
@@ -324,7 +328,6 @@ core/**/target/
 # （権限表の突き合わせ 2026-08-28）。門は、外された時に気づけて初めて門である。
 !.cursor/hooks.json
 !.cursor/hooks/*.sh
-!.codex/hooks.json
 !.codex/hooks/*.sh
 !.claude/settings.json
 !.claude/hooks/*.sh
