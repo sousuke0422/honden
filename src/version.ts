@@ -9,7 +9,7 @@
  * 食い違えば出さぬ。**人が揃えるのではなく、機械が拒む形にする**——
  * 揃え忘れは必ず起きるが、拒まれれば気づく。
  */
-export const VERSION = '0.1.0-rc.1';
+export const VERSION = '0.1.0-rc.2';
 
 /** 出す先。更新はここからしか取らぬ。 */
 export const REPO = 'sousuke0422/honden';
