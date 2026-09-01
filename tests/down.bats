@@ -44,10 +44,13 @@ setup() {
   [[ "$output" == *"畳まぬ"* ]]
 }
 
-@test "立っておらぬ陣には何もせぬ" {
+@test "立っておらぬ陣には何もせぬ。**無い手を呼んで黙って流れもせぬ**" {
   stub_tmux 1
   run bash "$ROOT/shutsujin_departure.sh" down
   [ "$status" -eq 0 ]
+  # `step` は仕度の手で、出陣の書には無かった。終了 0 のまま流れ、
+  # 試験が拾えなんだ（実物で踏んだ・2026-09-02）
+  [[ "$output" != *"command not found"* ]]
   ! called "tmux kill-session"
   [[ "$output" == *"立っておらぬ"* ]]
 }

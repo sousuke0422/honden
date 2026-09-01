@@ -395,7 +395,7 @@ ours() {
 # 順は働き手の陣が先。将軍の陣を先に畳むと、働き手の報せが宛先を失って
 # 芯が空撃ちを重ねる。
 down() {
-  step "撤収"
+  info "撤収"
   local n
   for n in "$SESSION_AGENTS" "$SESSION_SHOGUN"; do
     if ! tmux has-session -t "=$n" 2>/dev/null; then
