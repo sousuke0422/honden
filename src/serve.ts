@@ -15,13 +15,44 @@ import { mdToHtml } from './render';
 /** 我らの口である印。見張りがよその listener と見分けるのに使う。 */
 export const MARK = { 'X-Honden': 'dashboard' } as const;
 
+/**
+ * 頁の script。**CSP は hash で許す。**
+ *
+ * `default-src 'none'` のまま `script-src` を書いておらず、browser が
+ * この script を黙って封じていた——poll() が一度も走らず、頁は
+ * 「読み込み中…」のまま止まる（殿が実際に開いて発覚・2026-09-03）。
+ * curl の検めは JS を走らせぬゆえ、試験も関所も釣れなんだ。
+ *
+ * 'unsafe-inline' で開けるのではなく、この文字列の hash だけを許す。
+ * 文字列を変えれば hash は組み立てで追随する——手で写す番号を持たぬ。
+ */
+const SCRIPT = `
+    // 頁は外へ繋がらぬ（CSP の default-src 'none'）。描画器も借りぬ。
+    // ここへ入る HTML は honden が組み、差し込む文字は全て escape 済みである。
+    let last = '';
+    async function poll() {
+      try {
+        const v = await (await fetch('/api/version')).text();
+        if (v !== last) {
+          last = v;
+          const html = await (await fetch('/api/html')).text();
+          document.getElementById('app').innerHTML = html;
+          document.getElementById('stamp').textContent = '取得: ' + new Date().toLocaleTimeString();
+        }
+      } catch (e) { /* 一時の失敗は次の周で拾う */ }
+    }
+    poll();
+    setInterval(poll, 1500);
+`;
+const SCRIPT_HASH = new Bun.CryptoHasher('sha256').update(SCRIPT).digest('base64');
+
 const PAGE = `<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'" />
+        content="default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'; script-src 'sha256-${SCRIPT_HASH}'" />
   <title>Dashboard</title>
   <style>
     :root {
@@ -48,24 +79,7 @@ const PAGE = `<!DOCTYPE html>
 <body>
   <div id="app">読み込み中…</div>
   <div id="stamp"></div>
-  <script>
-    // 頁は外へ繋がらぬ（CSP の default-src 'none'）。描画器も借りぬ。
-    // ここへ入る HTML は honden が組み、差し込む文字は全て escape 済みである。
-    let last = '';
-    async function poll() {
-      try {
-        const v = await (await fetch('/api/version')).text();
-        if (v !== last) {
-          last = v;
-          const html = await (await fetch('/api/html')).text();
-          document.getElementById('app').innerHTML = html;
-          document.getElementById('stamp').textContent = '取得: ' + new Date().toLocaleTimeString();
-        }
-      } catch (e) { /* 一時の失敗は次の周で拾う */ }
-    }
-    poll();
-    setInterval(poll, 1500);
-  </script>
+  <script>${SCRIPT}</script>
 </body>
 </html>`;
 

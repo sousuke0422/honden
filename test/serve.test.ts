@@ -165,3 +165,23 @@ describe('serve', () => {
     }
   });
 });
+
+test('**頁の script は CSP の hash で許されておる**（書き忘れると browser が黙って封じる）', async () => {
+  // `default-src 'none'` のまま script-src が無く、頁が「読み込み中…」で
+  // 止まった（殿が開いて発覚・2026-09-03）。curl は JS を走らせぬゆえ
+  // 誰も釣れなんだ。ここでは meta の hash と script の実体を突き合わせる
+  // ——どちらかだけ変えれば落ちる。
+  const db = seeded();
+  const s = serve({ port: 0, db: () => db, compose: () => 'x' });
+  try {
+    const home = await (await fetch(`http://localhost:${s.port}/`)).text();
+    const meta = /script-src 'sha256-([A-Za-z0-9+/=]+)'/.exec(home);
+    expect(meta).not.toBeNull();
+    const body = /<script>([\s\S]*?)<\/script>/.exec(home);
+    expect(body).not.toBeNull();
+    const real = new Bun.CryptoHasher('sha256').update(body![1]!).digest('base64');
+    expect(meta![1]).toBe(real);
+  } finally {
+    s.stop();
+  }
+});
