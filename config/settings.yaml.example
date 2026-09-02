@@ -108,4 +108,15 @@ capability_tiers:
 #   net:
 #     default: deny
 #     allow:
-#       - outbound          # 外は通す。母屋の口だけ塞がる
+#       - outbound          # 外は全開。母屋の口だけ塞がる
+#
+# fw 機器の流儀で口を絞るなら（outbound とは混ぜられぬ）:
+#
+#   net:
+#     default: deny
+#     allow:
+#       - tcp/443           # 許した TCP の口へしか connect できぬ（honden-cage / Landlock）
+#       - tcp/80
+#
+# udp/<口> は受けぬ——Landlock の網は TCP だけで、縛れぬ規則を受けると
+# 書いた者は守られたつもりになる。宛先も見ぬ（口だけ）。

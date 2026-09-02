@@ -1,0 +1,19 @@
+[package]
+name = "honden-cage"
+version = "0.1.0"
+edition = "2021"
+description = "口ごとの網の檻。許した TCP の口へしか connect できぬ枷をはめてから、命を exec する"
+
+# libc だけを借りる。honden-kill と同じ理由——数ミリ秒で終わる物ゆえ
+# 依存零の掟は及ばず、syscall の番号と prctl は土地で幅が変わるゆえ
+# 叩き上げた物を借りる。Landlock の構造体は libc に無いので、
+# kernel の UAPI をそのまま repr(C) で写す（main.rs に出所を書いた）。
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

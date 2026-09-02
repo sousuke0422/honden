@@ -1710,7 +1710,11 @@ export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefin
       return { code: EXIT_INVALID, err: `  隔離に ${t} が要るが、道に無い。入れるか、isolation を外されよ。` };
     }
   }
-  const w = wrapLaunch(r.cfg, cmd);
+  const cage = join(REPO_ROOT, 'bin', 'honden-cage');
+  if (r.cfg.tcpPorts.length > 0 && !existsSync(cage)) {
+    return { code: EXIT_INVALID, err: `  口の許し（tcp/<口>）には ${cage} が要る。bun run build:core で焼かれよ。` };
+  }
+  const w = wrapLaunch(r.cfg, cmd, cage);
   return w.ok ? { code: EXIT_OK, out: w.cmd } : { code: EXIT_INVALID, err: `  ${w.message}` };
 }
 
@@ -1748,19 +1752,34 @@ export async function runIsolateCheck(dbPath: string | undefined): Promise<RunRe
     if (runSh(probe('127.0.0.1', port)) !== 'reach') {
       return { code: EXIT_SYSTEM, err: '  計器が死んでおる。裸でも母屋の口へ届かぬ——この検めの結果は何も語らぬ。' };
     }
+    const cage = join(REPO_ROOT, 'bin', 'honden-cage');
+    if (r.cfg.tcpPorts.length > 0 && !existsSync(cage)) {
+      return { code: EXIT_INVALID, err: `  ${cage} が無い。bun run build:core で焼かれよ。` };
+    }
     const wrapped = (inner: string) => {
-      const w = wrapLaunch(r.cfg, inner);
+      const w = wrapLaunch(r.cfg, inner, cage);
       if (!w.ok) throw new Error(w.message);
       return runSh(w.cmd);
     };
+    const wantOut = r.cfg.outbound || r.cfg.tcpPorts.length > 0;
+    const outPort = r.cfg.tcpPorts.length > 0 ? r.cfg.tcpPorts[0]! : 443;
     const host = wrapped(probe('127.0.0.1', port));
-    const out = r.cfg.outbound ? wrapped(probe('1.1.1.1', 443)) : 'skip';
+    const out = wantOut ? wrapped(probe('1.1.1.1', outPort)) : 'skip';
     const lines = [
       `  母屋の口 ${port}: 中から${host === 'blocked' ? '届かぬ' : '**届く**'}   ${host === 'blocked' ? 'OK' : 'NG'}`,
     ];
-    if (r.cfg.outbound) lines.push(`  外 1.1.1.1:443: 中から${out === 'reach' ? '届く' : '**届かぬ**'}   ${out === 'reach' ? 'OK' : 'NG'}`);
+    let egressBad = false;
+    if (wantOut) lines.push(`  外 1.1.1.1:${outPort}: 中から${out === 'reach' ? '届く' : '**届かぬ**'}   ${out === 'reach' ? 'OK' : 'NG'}`);
     else lines.push('  外: 構えが「切る」ゆえ測らぬ');
-    const bad = host !== 'blocked' || (r.cfg.outbound && out !== 'reach');
+    if (r.cfg.tcpPorts.length > 0) {
+      // egress の陰性対照。許した口が通るだけでは檻の証にならぬ——外しても通る
+      let deny = 24;
+      while (r.cfg.tcpPorts.includes(deny)) deny++;
+      const shut = wrapped(probe('1.1.1.1', deny));
+      lines.push(`  外 1.1.1.1:${deny}（許しておらぬ口）: 中から${shut === 'blocked' ? '届かぬ' : '**届く**'}   ${shut === 'blocked' ? 'OK' : 'NG'}`);
+      egressBad = shut !== 'blocked';
+    }
+    const bad = host !== 'blocked' || (wantOut && out !== 'reach') || egressBad;
     lines.push(bad ? '  → 効いておらぬ。isolation の構えと道具を検められよ。' : '  → 構えどおりに効いておる。');
     return { code: bad ? EXIT_INVALID : EXIT_OK, out: lines.join('\n') };
   } finally {

@@ -8,7 +8,7 @@
     "honden": "bun run src/main.ts",
     "build": "bun build --compile --outfile=bin/honden src/main.ts && bun build --compile --outfile=bin/honden-bot src/botmain.ts",
     "typecheck": "bunx tsc --noEmit",
-    "build:core": "cargo build --release --manifest-path core/watch/Cargo.toml && cargo build --release --manifest-path core/guard/Cargo.toml && cargo build --release --manifest-path core/kill/Cargo.toml && cp core/watch/target/release/honden-watch bin/.honden-watch.new && mv -f bin/.honden-watch.new bin/honden-watch && cp core/guard/target/release/honden-parse bin/.honden-parse.new && mv -f bin/.honden-parse.new bin/honden-parse && cp core/kill/target/release/honden-kill bin/.honden-kill.new && mv -f bin/.honden-kill.new bin/honden-kill",
+    "build:core": "cargo build --release --manifest-path core/watch/Cargo.toml && cargo build --release --manifest-path core/guard/Cargo.toml && cargo build --release --manifest-path core/kill/Cargo.toml && cargo build --release --manifest-path core/cage/Cargo.toml && cp core/watch/target/release/honden-watch bin/.honden-watch.new && mv -f bin/.honden-watch.new bin/honden-watch && cp core/guard/target/release/honden-parse bin/.honden-parse.new && mv -f bin/.honden-parse.new bin/honden-parse && cp core/kill/target/release/honden-kill bin/.honden-kill.new && mv -f bin/.honden-kill.new bin/honden-kill && cp core/cage/target/release/honden-cage bin/.honden-cage.new && mv -f bin/.honden-cage.new bin/honden-cage",
     "build:all": "bun run build && bun run build:core"
   },
   "devDependencies": {

@@ -21,9 +21,9 @@
  *
  * 三箇所とも、頼んで得られなかったときは**起動を拒む**。
  *
- *   未実装の段（systemd-run / lxc）        予約語。受けるが起こさぬ
- *   機構が支えられぬ規則（tcp/443 の粒度）  Landlock の段の仕事。v1 は拒む
- *   道具（pasta / bwrap）が無い             出陣の関所で止まる
+ *   未実装の段（systemd-run / lxc）      予約語。受けるが起こさぬ
+ *   縛れぬ規則（udp/<口>）               Landlock の網は TCP のみ。拒む
+ *   道具（pasta / bwrap / 檻）が無い      包む所で止まる
  *
  * 「隔離したつもり」を作らない。層は放っておくと fail-open として生まれる
  * （#12 冒頭の表がその記録である）。
@@ -42,8 +42,14 @@ export const IMPLEMENTED: readonly Level[] = ['none', 'bwrap'];
 
 export interface IsolationCfg {
   level: Level;
-  /** `outbound` の許しが書かれておるか。v1 の net はこれ一語だけを受ける。 */
+  /** `outbound`（外へ全開）が書かれておるか。 */
   outbound: boolean;
+  /**
+   * `tcp/<口>` の許し。fw 機器の流儀の口指定（殿の求め・2026-09-02）。
+   * 空でなければ honden-cage（Landlock）が「この口へしか connect できぬ」枷をはめる。
+   * `outbound` とは混ぜられぬ——広い方が勝って口の意図が消える。
+   */
+  tcpPorts: number[];
 }
 
 export type ParseResult = { ok: true; cfg: IsolationCfg } | { ok: false; message: string };
@@ -65,7 +71,7 @@ export type ParseResult = { ok: true; cfg: IsolationCfg } | { ok: false; message
  * ```
  */
 export function parseIsolation(doc: unknown): ParseResult {
-  const none: IsolationCfg = { level: 'none', outbound: false };
+  const none: IsolationCfg = { level: 'none', outbound: false, tcpPorts: [] };
   if (typeof doc !== 'object' || doc === null) return { ok: true, cfg: none };
   const iso = (doc as Record<string, unknown>)['isolation'];
   if (iso === undefined || iso === null) return { ok: true, cfg: none }; // 書かねば今の状態
@@ -98,32 +104,43 @@ export function parseIsolation(doc: unknown): ParseResult {
   }
   const allow = Array.isArray(n['allow']) ? n['allow'] : [];
   let outbound = false;
+  const tcpPorts: number[] = [];
   for (const a of allow) {
     const s = String(a).trim();
     if (s === 'outbound') { outbound = true; continue; }
-    if (/^(tcp|udp)\/\d+$/.test(s)) {
-      // 口ごとの粒度は Landlock の段の仕事。pasta は egress を口では濾せぬ。
-      // 黙って outbound 全開で通すと、443 だけのつもりが全部開く
+    const m = /^tcp\/(\d+)$/.exec(s);
+    if (m) {
+      const port = Number(m[1]);
+      if (port < 1 || port > 65535) return { ok: false, message: `isolation.net.allow の ${s}: 口は 1〜65535。` };
+      tcpPorts.push(port);
+      continue;
+    }
+    if (/^udp\/\d+$/.test(s)) {
+      // Landlock の網は TCP だけ。縛れぬ規則を受けると、書いた者は守られたつもりになる
       return {
         ok: false,
         message:
-          `isolation.net.allow の ${s} は、この段（bwrap+pasta）では支えられぬ。\n` +
-          `  pasta は外向きを口では濾せぬ——書いたとおりに縛れぬ規則は受けぬ。\n` +
-          `  外を使うなら「- outbound」と書かれよ（外へは何処へでも。母屋の口だけ塞がる）。`,
+          `isolation.net.allow の ${s} は縛れぬ——Landlock の網は TCP の口だけを見る。\n` +
+          `  UDP を口で濾す段はまだ無い。tcp/<口> か outbound を使われよ。`,
       };
     }
-    return { ok: false, message: `isolation.net.allow に知らぬ形がある: ${JSON.stringify(a)}（受けるのは outbound のみ）。` };
+    return { ok: false, message: `isolation.net.allow に知らぬ形がある: ${JSON.stringify(a)}（受けるのは outbound / tcp/<口>）。` };
+  }
+  if (outbound && tcpPorts.length > 0) {
+    // 広い方（outbound）が勝ち、口の並びが飾りになる。書いた意図が判ぜぬゆえ拒む
+    return { ok: false, message: 'isolation.net.allow に outbound と tcp/<口> が混ざっておる。どちらか一方に。' };
   }
   if (n['deny'] !== undefined) {
     return { ok: false, message: 'isolation.net.deny は受けぬ。既定が deny であり、許す物だけを並べる。' };
   }
-  return { ok: true, cfg: { level: 'bwrap', outbound } };
+  return { ok: true, cfg: { level: 'bwrap', outbound, tcpPorts } };
 }
 
 /** この構えで要る道具。出陣の関所が在るかを確かめる。 */
 export function requiredTools(cfg: IsolationCfg): string[] {
   if (cfg.level !== 'bwrap') return [];
-  return cfg.outbound ? ['bwrap', 'pasta'] : ['bwrap'];
+  // 口の許しも外へ出る形ゆえ pasta が要る（母屋の隔てと NAT）。檻はその内側
+  return cfg.outbound || cfg.tcpPorts.length > 0 ? ['bwrap', 'pasta'] : ['bwrap'];
 }
 
 /**
@@ -135,15 +152,27 @@ export function requiredTools(cfg: IsolationCfg): string[] {
  * file は縛らぬ（`--dev-bind / /`）。v1 の床は網だけである。
  * `--die-with-parent` で、pane が消えれば中身も残らぬ。
  */
-export function wrapLaunch(cfg: IsolationCfg, inner: string): { ok: true; cmd: string } | { ok: false; message: string } {
+export function wrapLaunch(
+  cfg: IsolationCfg,
+  inner: string,
+  /** 口の許し（tcpPorts）を使う時の檻の在り処。無ければ呼び手が先に拒む。 */
+  cageBin?: string,
+): { ok: true; cmd: string } | { ok: false; message: string } {
   if (cfg.level === 'none') return { ok: true, cmd: inner };
   if (inner.includes("'")) {
     return { ok: false, message: `起こす命に単引用が含まれ、包めぬ: ${inner}` };
   }
-  const bw = `bwrap --dev-bind / / --die-with-parent -- bash -lc '${inner}'`;
-  if (!cfg.outbound) {
+  if (!cfg.outbound && cfg.tcpPorts.length === 0) {
     // 外も要らぬなら pasta ごと要らぬ。bwrap が網を切る（空の loopback だけ残る）
     return { ok: true, cmd: `bwrap --dev-bind / / --die-with-parent --unshare-net -- bash -lc '${inner}'` };
   }
+  let core = `bash -lc '${inner}'`;
+  if (cfg.tcpPorts.length > 0) {
+    if (!cageBin) return { ok: false, message: '口の許し（tcp/<口>）には honden-cage が要るが、在り処が渡されておらぬ。' };
+    // 檻が最も内側。pasta（母屋の隔て）→ bwrap（束ね）→ 檻（口の枷）→ CLI
+    const flags = cfg.tcpPorts.map((p) => `--tcp ${p}`).join(' ');
+    core = `${cageBin} ${flags} -- ${core}`;
+  }
+  const bw = `bwrap --dev-bind / / --die-with-parent -- ${core}`;
   return { ok: true, cmd: `pasta --config-net -T none -U none --quiet -- ${bw}` };
 }
