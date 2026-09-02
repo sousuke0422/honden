@@ -5,7 +5,7 @@
  * 未実装の段、支えられぬ規則、包めぬ命。いずれも拒んで止まる。
  */
 import { describe, expect, test } from 'bun:test';
-import { parseIsolation, wrapLaunch, requiredTools, LEVELS, IMPLEMENTED } from '../src/isolate';
+import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, LEVELS, IMPLEMENTED } from '../src/isolate';
 
 const y = (s: string) => Bun.YAML.parse(s);
 
@@ -135,5 +135,19 @@ describe('口の許し（fw 機器の流儀・v2）', () => {
 
   test('口の許しにも pasta が要る（母屋の隔てと NAT）', () => {
     expect(requiredTools({ level: 'bwrap', outbound: false, tcpPorts: [443] }).sort()).toEqual(['bwrap', 'pasta']);
+  });
+});
+
+describe('名前引きの罠（resolv.conf）', () => {
+  test('母屋の loopback だけを向いておれば警める', () => {
+    expect(dnsWarning('nameserver 127.0.0.53\n')).toContain('loopback');
+    expect(dnsWarning('nameserver ::1\n')).toContain('loopback');
+  });
+  test('外の宛先が一つでもあれば黙る（WSL の形）', () => {
+    expect(dnsWarning('nameserver 172.21.96.1\n')).toBeNull();
+    expect(dnsWarning('nameserver 127.0.0.53\nnameserver 8.8.8.8\n')).toBeNull();
+  });
+  test('nameserver が読めねば黙る（別系の resolver かもしれぬ）', () => {
+    expect(dnsWarning('# empty\n')).toBeNull();
   });
 });

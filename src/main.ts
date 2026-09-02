@@ -13,7 +13,7 @@ import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn } from './pane';
-import { parseIsolation, wrapLaunch, requiredTools, type IsolationCfg } from './isolate';
+import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
@@ -1778,6 +1778,14 @@ export async function runIsolateCheck(dbPath: string | undefined): Promise<RunRe
       const shut = wrapped(probe('1.1.1.1', deny));
       lines.push(`  外 1.1.1.1:${deny}（許しておらぬ口）: 中から${shut === 'blocked' ? '届かぬ' : '**届く**'}   ${shut === 'blocked' ? 'OK' : 'NG'}`);
       egressBad = shut !== 'blocked';
+    }
+    if (wantOut) {
+      // 名前引きの罠を先に言う。UDP/53 は檻の外だが、宛先が母屋の loopback だと
+      // pasta の中では引けぬ（WSL は外向きゆえ効かぬが、別の機で踏む）
+      try {
+        const w = dnsWarning(readFileSync('/etc/resolv.conf', 'utf8'));
+        if (w) lines.push(`  ▲ ${w}`);
+      } catch { /* resolv.conf が無い土地では黙る */ }
     }
     const bad = host !== 'blocked' || (wantOut && out !== 'reach') || egressBad;
     lines.push(bad ? '  → 効いておらぬ。isolation の構えと道具を検められよ。' : '  → 構えどおりに効いておる。');

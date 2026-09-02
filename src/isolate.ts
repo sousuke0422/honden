@@ -176,3 +176,28 @@ export function wrapLaunch(
   const bw = `bwrap --dev-bind / / --die-with-parent -- ${core}`;
   return { ok: true, cmd: `pasta --config-net -T none -U none --quiet -- ${bw}` };
 }
+
+/**
+ * 名前引きが pasta の中で死ぬ機かを、resolv.conf から先に見る。
+ *
+ * DNS は UDP/53 ゆえ檻（TCP のみ）は触れぬが、**宛先が母屋の loopback
+ * （systemd-resolved の 127.0.0.53 など）だと、pasta の中の loopback は
+ * 空ゆえ引けぬ**。しかも症状は「名前だけ引けぬ」で、原因が画面から遠い。
+ * WSL の resolv.conf は外の宛先を向くゆえ効かぬが、別の機では踏む。
+ */
+export function dnsWarning(resolvText: string): string | null {
+  const ns = resolvText
+    .split('\n')
+    .map((l) => /^\s*nameserver\s+(\S+)/.exec(l)?.[1])
+    .filter((x): x is string => Boolean(x));
+  if (ns.length === 0) return null; // 書式が読めぬ時は黙る（別系の resolver かもしれぬ）
+  const loop = (a: string) => a.startsWith('127.') || a === '::1';
+  if (ns.every(loop)) {
+    return (
+      `名前引きが母屋の loopback（${ns.join(', ')}）だけを向いておる。\n` +
+      '    pasta の中の loopback は空ゆえ、隔離の中では名前が引けぬ。\n' +
+      '    resolv.conf を外の宛先へ向けるか、pasta の --dns-forward の普請が要る。'
+    );
+  }
+  return null;
+}
