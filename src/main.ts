@@ -13,6 +13,7 @@ import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn } from './pane';
+import { parseIsolation, wrapLaunch, requiredTools, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
@@ -605,6 +606,7 @@ const USAGE = `honden — 多エージェント運用の差配層
 
   honden roster sync --settings <settings.yaml>        顔ぶれを入れ替える
   honden roster set [--<役> <cli>:<模型>] [--workers N]  顔ぶれを差し替える（端末なら訊く）
+  honden isolate [check]                               隔離の構えと効き目（既定 none）
   honden roster                                        いまの顔ぶれ
   honden config                                        設定の在り処と上の段
   honden config get <鍵>                               設定を一つ引く（値だけ返す）
@@ -1664,6 +1666,105 @@ export function runProjectsSync(dbPath: string | undefined, file: string | undef
   } catch (e) {
     if (e instanceof ProjectError) return { code: EXIT_INVALID, err: e.message };
     throw e;
+  }
+}
+
+/** settings.yaml から隔離の構えを解く。settings 未登録なら none（今の状態）。 */
+function isolationOf(db: Database): ReturnType<typeof parseIsolation> {
+  const loaded = configLoad(db);
+  if (!loaded.ok) return { ok: true, cfg: { level: 'none', outbound: false } };
+  return parseIsolation(loaded.doc);
+}
+
+/** `honden isolate` — いまの構え。 */
+export function runIsolateShow(dbPath: string | undefined): RunResult {
+  const db = openStore({ path: dbPath });
+  const r = isolationOf(db);
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  if (r.cfg.level === 'none') {
+    return { code: EXIT_OK, out: '  隔離は none — 今の状態。settings.yaml の isolation: で入れられる（例は config/settings.yaml.example）。' };
+  }
+  const tools = requiredTools(r.cfg).map((t) => `${t}: ${Bun.which(t) ? '在る' : '**無い**'}`);
+  return {
+    code: EXIT_OK,
+    out:
+      `  段: ${r.cfg.level}  外: ${r.cfg.outbound ? '通す（母屋の口だけ塞ぐ）' : '切る'}\n` +
+      `  道具: ${tools.join(' / ')}\n` +
+      '  効き目は honden isolate check で測られよ（旗ではなく、中から何に届くかを見る）。',
+  };
+}
+
+/**
+ * `honden isolate wrap --cmd '<命>'` — 一体を起こす命を、構えどおりに包んで返す。
+ *
+ * 出陣（scripts/shutsujin.sh）がここを通る。**設定が壊れておる・道具が無い・
+ * 包めぬ、のいずれも非 0 で止まる**——裸のまま起こして「隔離したつもり」を作らぬ。
+ */
+export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefined): RunResult {
+  if (!cmd) return { code: EXIT_INVALID, err: '--cmd に起こす命を渡されよ。' };
+  const db = openStore({ path: dbPath });
+  const r = isolationOf(db);
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  for (const t of requiredTools(r.cfg)) {
+    if (!Bun.which(t)) {
+      return { code: EXIT_INVALID, err: `  隔離に ${t} が要るが、道に無い。入れるか、isolation を外されよ。` };
+    }
+  }
+  const w = wrapLaunch(r.cfg, cmd);
+  return w.ok ? { code: EXIT_OK, out: w.cmd } : { code: EXIT_INVALID, err: `  ${w.message}` };
+}
+
+/**
+ * `honden isolate check` — 効き目を測る。
+ *
+ * 測るのは「どの旗を渡したか」ではなく**「中から何に届くか」**である。
+ * 母屋の口はこの検め自身が開き、閉じる。**陰性対照**（裸なら届く）を先に踏む
+ * ——裸でも届かぬなら計器が死んでおり、「塞がっておる」は何の証にもならぬ。
+ */
+export async function runIsolateCheck(dbPath: string | undefined): Promise<RunResult> {
+  const db = openStore({ path: dbPath });
+  const r = isolationOf(db);
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  if (r.cfg.level === 'none') {
+    return { code: EXIT_OK, out: '  隔離は none ゆえ、測る枷が無い。' };
+  }
+  for (const t of requiredTools(r.cfg)) {
+    if (!Bun.which(t)) return { code: EXIT_INVALID, err: `  ${t} が道に無い。測る前に入れられよ。` };
+  }
+
+  // 母屋の口。開けっぱなしの常駐には頼らぬ——この検めが自分で開く
+  const srv = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
+  const port = srv.port;
+  // 突き棒に単引用を使わぬ——包み（wrapLaunch）が単引用の命を拒むゆえ、
+  // 検めの道具が己の枷に掛かる（実測で掛かった・2026-09-02）
+  const probe = (host: string, p: number) =>
+    `timeout 3 bash -c "exec 3<>/dev/tcp/${host}/${p}" 2>/dev/null && echo reach || echo blocked`;
+  const runSh = (cmd: string): string => {
+    const p = Bun.spawnSync(['bash', '-c', cmd], { stdout: 'pipe', stderr: 'pipe' });
+    return new TextDecoder().decode(p.stdout).trim();
+  };
+  try {
+    // 陰性対照: 裸なら母屋の口へ届く
+    if (runSh(probe('127.0.0.1', port)) !== 'reach') {
+      return { code: EXIT_SYSTEM, err: '  計器が死んでおる。裸でも母屋の口へ届かぬ——この検めの結果は何も語らぬ。' };
+    }
+    const wrapped = (inner: string) => {
+      const w = wrapLaunch(r.cfg, inner);
+      if (!w.ok) throw new Error(w.message);
+      return runSh(w.cmd);
+    };
+    const host = wrapped(probe('127.0.0.1', port));
+    const out = r.cfg.outbound ? wrapped(probe('1.1.1.1', 443)) : 'skip';
+    const lines = [
+      `  母屋の口 ${port}: 中から${host === 'blocked' ? '届かぬ' : '**届く**'}   ${host === 'blocked' ? 'OK' : 'NG'}`,
+    ];
+    if (r.cfg.outbound) lines.push(`  外 1.1.1.1:443: 中から${out === 'reach' ? '届く' : '**届かぬ**'}   ${out === 'reach' ? 'OK' : 'NG'}`);
+    else lines.push('  外: 構えが「切る」ゆえ測らぬ');
+    const bad = host !== 'blocked' || (r.cfg.outbound && out !== 'reach');
+    lines.push(bad ? '  → 効いておらぬ。isolation の構えと道具を検められよ。' : '  → 構えどおりに効いておる。');
+    return { code: bad ? EXIT_INVALID : EXIT_OK, out: lines.join('\n') };
+  } finally {
+    srv.stop(true);
   }
 }
 
@@ -2737,6 +2838,12 @@ function notifyAfterNudge(dbPath: string | undefined): void {
       return emit(runLeaseRelease(dbPath, selfId(), rest[2], force, reason));
     }
     return emit(runLeaseShow(dbPath, selfId()));
+  }
+
+  if (rest[0] === 'isolate') {
+    if (rest[1] === 'wrap') { const c = flags['cmd']; delete flags['cmd']; return emit(runIsolateWrap(dbPath, c)); }
+    if (rest[1] === 'check') return emit(await runIsolateCheck(dbPath));
+    return emit(runIsolateShow(dbPath));
   }
 
   if (rest[0] === 'roster') {

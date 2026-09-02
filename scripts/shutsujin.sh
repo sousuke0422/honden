@@ -162,6 +162,15 @@ launch_cmd() {
   esac
 }
 
+# 起こす命を隔離の構えで包む。構えが壊れておる・道具が無いなら**ここで止まる**
+# ——裸のまま起こして「隔離したつもり」を作らぬ。既定（isolation 無し）は素通し。
+wrap_launch() {
+  local wrapped
+  wrapped=$(HONDEN_DB="$DB" "$HONDEN_BIN" isolate wrap --cmd "$1") || die "隔離の包みに失敗した: $wrapped"
+  # 贋の honden（試験）が空を返す時は包まず素通し。実物は none でも命を返す
+  [ -n "$wrapped" ] && echo "$wrapped" || echo "$1"
+}
+
 label_of() {
   case "$1" in
     shogun) echo "将軍" ;; karo) echo "家老" ;; gunshi) echo "軍師" ;;
@@ -277,6 +286,7 @@ up() {
     info "各々を召喚する"
   fi
   cmd=$(launch_cmd shogun)
+  [ -n "$cmd" ] && cmd=$(wrap_launch "$cmd")
   if [ "$made_shogun" = 1 ] && [ -n "$cmd" ]; then
     tmux send-keys -t "$SESSION_SHOGUN:main" "$cmd"; sleep 0.3
     tmux send-keys -t "$SESSION_SHOGUN:main" Enter
@@ -290,6 +300,7 @@ up() {
   for ((i = 0; made_agents == 1 && i < ${#order[@]} && i < ${#ids[@]}; i++)); do
     cmd=$(launch_cmd "${order[$i]}")
     [ -n "$cmd" ] || { warn "${order[$i]}: 知らぬ CLI ゆえ起こさぬ"; continue; }
+    cmd=$(wrap_launch "$cmd")
     tmux send-keys -t "${ids[$i]}" "$cmd"; sleep 0.3
     tmux send-keys -t "${ids[$i]}" Enter
     info "$(label_of "${order[$i]}") … $(cli_of "${order[$i]}") / $(model_of "${order[$i]}")"

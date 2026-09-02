@@ -353,6 +353,14 @@ EOF`,
       '立っておる陣には効かぬ。次の出陣から',
     ],
   },
+  isolate: {
+    summary: '隔離（床）の構え。既定は none（今の状態）。bwrap+pasta で網だけ縛る。',
+    usage: 'honden isolate [wrap --cmd <命> | check]',
+    notes: [
+      '効き目は check で測る——旗ではなく、中から何に届くかを見る（陰性対照つき）',
+      '未実装の段（systemd-run / lxc）は予約語。書けば起動を拒む——「隔離したつもり」を作らぬ',
+    ],
+  },
   mode: {
     summary: '殿が在席かどうか。将軍へ合図を撃つかがこれで決まる。',
     usage: 'honden mode [attended|autonomous] [--until <時刻>]',

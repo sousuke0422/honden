@@ -89,3 +89,26 @@ run_up() { run bash "$FAKE/shutsujin_departure.sh" up; }
   run bash -c "grep -c '^tmux send-keys' '$CALLS' || true"
   assert_output "0"
 }
+
+@test "**隔離の包みが失敗すれば、裸で起こさず止まる**（fail-closed）" {
+  fake_root
+  stub tmux 1 ""
+  # 贋の honden: isolate wrap だけ非 0 で拒む
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "honden" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'case "$1 $2" in'
+    echo '  "roster ") printf "shogun\nkaro\nashigaru1\ngunshi\n" ;;'
+    echo '  "config get") printf "claude\n" ;;'
+    echo '  "isolate wrap") echo "isolation.level: lxc は予約語" >&2; exit 2 ;;'
+    echo 'esac'
+    echo 'exit 0'
+  } > "$STUB/honden"
+  chmod +x "$STUB/honden"
+  cp "$STUB/honden" "$FAKE/bin/honden"
+  run_up
+  [ "$status" -ne 0 ]
+  assert_output --partial "隔離の包みに失敗した"
+  run bash -c "grep -c '^tmux send-keys' '$CALLS' || true"
+  assert_output "0"
+}

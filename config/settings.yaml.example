@@ -88,3 +88,24 @@ capability_tiers:
 #   ntfy:
 #     base: https://ntfy.example.org   # 省けば https://ntfy.sh
 #     topic: honden-9f3a2b7c1d5e
+
+# ── 隔離（床）─────────────────────────────────────────
+#
+# 足軽の CLI を、網を縛った名前空間の中で起こす。
+# **書かねば今の状態（隔離なし）。** 書き方は fw 機器の流儀——既定拒否・明示許可。
+#
+# v1 が縛るのは網だけ: 母屋の loopback（127.0.0.1 で待つ常駐の口)へ届かず、
+# 外（記事・git・API）へは届く。要る道具: bwrap と passt（pasta）。
+#
+# 未実装の段（systemd-run / lxc）は予約語で、書けば**出陣が止まる**。
+# 口ごとの粒度（tcp/443）も v1 では支えられぬゆえ受けぬ——
+# 書いたとおりに縛れぬ規則を黙って通すと、書いた者は守られたつもりになる。
+#
+# 効き目は `honden isolate check` で測る（中から何に届くかを見る・陰性対照つき）。
+#
+# isolation:
+#   level: bwrap            # none | bwrap | systemd-run(予約) | lxc(予約)
+#   net:
+#     default: deny
+#     allow:
+#       - outbound          # 外は通す。母屋の口だけ塞がる
