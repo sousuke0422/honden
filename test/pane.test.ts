@@ -162,3 +162,37 @@ describe('panes — 印（@honden）で我らの陣だけを見る', () => {
     expect(f.calls.find((c) => c[0] === 'list-panes')).toContain('-a');
   });
 });
+
+/**
+ * pane が我らの陣の物かの判じ。
+ *
+ * 並走中は旧環境の pane も TMUX_PANE と @agent_id を持つ。名乗りの層が
+ * これを我らの役職と取り違えた（旧陣の将軍 pane が honden の shogun として
+ * 通った・2026-09-02）。ここで陣の別を判じ、他陣は布陣の外と扱う。
+ */
+import { paneInOwn } from '../src/pane';
+
+describe('paneInOwn — 陣の別', () => {
+  const SESS = [sess('honden', '/w/honden'), sess('old-camp')]; // old-camp は印無し
+  const mk = (rows: Record<string, string[]>) => fake(rows, SESS);
+
+  test('我らの陣の pane は true', () => {
+    const f = mk({ honden: ['%1', '%2'] });
+    expect(withRoot(undefined, () => paneInOwn('%2', f.run))).toBe(true);
+  });
+
+  test('**他陣の pane は false**（印の無い陣に住む）', () => {
+    const f = mk({ honden: ['%1'], 'old-camp': ['%9'] });
+    expect(withRoot(undefined, () => paneInOwn('%9', f.run))).toBe(false);
+  });
+
+  test('印の付いた陣が一つも無ければ null（絞れぬ時は従前どおりへ倒す）', () => {
+    const f = fake({ x: ['%1'] }, [sess('x'), sess('y')]);
+    expect(withRoot(undefined, () => paneInOwn('%1', f.run))).toBeNull();
+  });
+
+  test('tmux が答えねば null', () => {
+    const f = fake({}, undefined as unknown as string[]);
+    expect(withRoot(undefined, () => paneInOwn('%1', f.run))).toBeNull();
+  });
+});

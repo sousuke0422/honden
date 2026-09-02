@@ -12,6 +12,7 @@ import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit 
 import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
+import { paneInOwn } from './pane';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
@@ -1912,8 +1913,15 @@ export async function main(argv: string[]): Promise<number> {
   let _who: Identity | null = null;
   const who = (): Identity => {
     if (_who) return _who;
+    // **他陣の pane は布陣の外と扱う。** 並走中は旧環境の pane も TMUX_PANE を
+    // 持ち、@agent_id も引けてしまう——旧陣の将軍 pane が honden の shogun として
+    // 通った（実測 2026-09-02）。印（@honden）の付いた陣に属さぬ pane からの
+    // 呼び出しは、外の session と同じ（外部名で送れる・役職は名乗れぬ）。
+    // 判ぜられぬ時（印の無い環境）は null が返り、従前どおり pane を信じる。
+    const rawPane = process.env.TMUX_PANE?.trim();
+    const foreign = rawPane ? paneInOwn(rawPane) === false : false;
     _who = resolveIdentity({
-      tmuxPane: process.env.TMUX_PANE,
+      tmuxPane: foreign ? undefined : process.env.TMUX_PANE,
       agentIdEnv: process.env.HONDEN_AGENT_ID,
       lookup: (pane) => {
         const p = Bun.spawnSync(['tmux', 'display-message', '-t', pane, '-p', '#{@agent_id}']);

@@ -31,6 +31,7 @@
  * ここが止めるのは「注入された足軽が honden-bot を呼ぶ」筋である。
  */
 
+import { ownSessions } from './pane';
 export interface PaneRow {
   pid: number;
   pane: string;
@@ -119,9 +120,22 @@ export function realProbe(): AncestryProbe {
       return chainFrom(process.pid, (p) => readFileSync(p, 'utf-8'));
     },
     panes: () => {
-      const p = Bun.spawnSync(['tmux', 'list-panes', '-a', '-F', '#{pane_pid} #{pane_id} #{@agent_id}']);
-      if (!p.success) return [];
-      return parsePanes(new TextDecoder().decode(p.stdout));
+      // **印（@honden）の付いた陣だけを見る。** `-a` は他人の陣まで拾い、
+      // 並走中の旧環境の pane が honden の役職として通った——旧陣の将軍
+      // pane から打つと、系譜が「honden の shogun」と判じた（実測 2026-09-02）。
+      // 印がどこにも無ければ従前どおり `-a`（手で立てた陣を締め出さぬ）。
+      const own = ownSessions();
+      const argsets =
+        own.length > 0
+          ? own.map((s) => ['list-panes', '-s', '-t', s, '-F', '#{pane_pid} #{pane_id} #{@agent_id}'])
+          : [['list-panes', '-a', '-F', '#{pane_pid} #{pane_id} #{@agent_id}']];
+      const rows: PaneRow[] = [];
+      for (const args of argsets) {
+        const p = Bun.spawnSync(['tmux', ...args]);
+        if (!p.success) continue;
+        rows.push(...parsePanes(new TextDecoder().decode(p.stdout)));
+      }
+      return rows;
     },
   };
 }

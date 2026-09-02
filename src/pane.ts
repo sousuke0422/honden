@@ -77,6 +77,27 @@ export function ownSessions(run: TmuxRunner = realTmux): string[] {
   return out;
 }
 
+/**
+ * その pane は我らの陣に住むか。
+ *
+ *   true    我らの陣（印が合う session）の中
+ *   false   **他陣**の pane（並走中の旧環境など）
+ *   null    判ぜられぬ（tmux が答えぬ、または印の付いた陣が一つも無い）
+ *
+ * null を false と読んではならぬ。印の無い環境（手で立てた陣）を
+ * 締め出すことになる——絞れぬ時は従前どおりに倒す。
+ */
+export function paneInOwn(paneId: string, run: TmuxRunner = realTmux): boolean | null {
+  const own = ownSessions(run);
+  if (own.length === 0) return null;
+  for (const t of own) {
+    const text = run(['list-panes', '-s', '-t', t, '-F', '#{pane_id}']);
+    if (text === null) continue;
+    for (const line of text.split('\n')) if (line.trim() === paneId) return true;
+  }
+  return false;
+}
+
 export function panes(session?: string, run: TmuxRunner = realTmux): Map<string, Pane> {
   const out = new Map<string, Pane>();
 
