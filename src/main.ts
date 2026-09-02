@@ -13,6 +13,7 @@ import type { Database } from 'bun:sqlite';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn } from './pane';
+import { applyBorders } from './border';
 import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
@@ -917,6 +918,17 @@ async function runNudgeInner(
     } else {
       lines.push(`${head} → 撃てぬ: ${r.err}`);
     }
+  }
+
+  // 縁の任表示（乙）。飾りゆえ、失敗しても合図の輪は落とさぬ
+  if (!dryRun) {
+    try {
+      const n = applyBorders(db, (args) => {
+        const p = Bun.spawnSync(['tmux', ...args]);
+        return p.success ? new TextDecoder().decode(p.stdout) : null;
+      });
+      if (n > 0) lines.push(`  縁を ${n} 枚書き直した`);
+    } catch { /* 縁は飾り */ }
   }
 
   // 芯への返事。人が読む行に混ざってよいが、必ず最後に置く。

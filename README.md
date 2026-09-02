@@ -311,6 +311,31 @@ honden say import --from <旧 tasks.yaml>    # 何度打っても同じ
 
 ---
 
+## 隔離（床）
+
+足軽の CLI を、網と file を縛った名前空間の中で起こせる。
+**書かなければ何も起きない**（既定は今の状態）。
+
+```yaml
+isolation:
+  level: bwrap                 # none | bwrap | systemd-run(予約) | lxc(予約)
+  net:
+    default: deny
+    allow: [tcp/443]           # 許した TCP の口だけ。outbound なら外へ全開
+  fs:
+    default: deny
+    write: [/path/to/repo, "~/.honden"]
+```
+
+母屋の loopback（127.0.0.1 で待つ常駐の口）へは届かず、外へは届く。
+口の粒度は Landlock（honden-cage）、母屋の隔ては pasta、束ねは bwrap。
+CLI の起動に要る道（~/.claude など）は出陣が自動で足し、
+rw の道に .git があれば hooks と config だけ ro で重なる（commit はできる）。
+
+効き目は `honden isolate check` で測る——旗ではなく、**中から何に届くか**を、
+陰性対照つきで見る。頼んで得られない構え（予約語の段、縛れない規則、道具の不在）は
+黙って弱い方へ倒れず、起動を拒む。詳細は Issue #12 に実測ごと記してある。
+
 ## 設定
 
 | | |
