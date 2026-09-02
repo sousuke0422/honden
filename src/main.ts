@@ -1672,7 +1672,7 @@ export function runProjectsSync(dbPath: string | undefined, file: string | undef
 /** settings.yaml から隔離の構えを解く。settings 未登録なら none（今の状態）。 */
 function isolationOf(db: Database): ReturnType<typeof parseIsolation> {
   const loaded = configLoad(db);
-  if (!loaded.ok) return { ok: true, cfg: { level: 'none', outbound: false } };
+  if (!loaded.ok) return { ok: true, cfg: { level: 'none', outbound: false, tcpPorts: [] } };
   return parseIsolation(loaded.doc);
 }
 
