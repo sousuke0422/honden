@@ -223,7 +223,9 @@ export function fsArgs(
     rw.push(...need.rw.map(expand));
     ro.push(...need.ro.map(expand));
   }
-  const args = ['--ro-bind', '/', '/'];
+  // tmpfs は ro の直後・rw の**前**。後に置くと /tmp 配下の rw 許しが
+  // tmpfs の影に覆われて消える（実機 E2E が釣った・2026-09-03）
+  const args = ['--ro-bind', '/', '/', '--tmpfs', '/tmp'];
   for (const p of [...new Set(rw)]) {
     if (!exists(p)) continue; // 無い道は bind できぬ。CLI 初回起動前などは黙って飛ばす
     args.push('--bind', p, p);
@@ -235,7 +237,7 @@ export function fsArgs(
   for (const p of [...new Set(ro)]) {
     if (exists(p)) args.push('--ro-bind', p, p);
   }
-  args.push('--tmpfs', '/tmp', '--dev', '/dev', '--proc', '/proc', '--unshare-pid');
+  args.push('--dev', '/dev', '--proc', '/proc', '--unshare-pid');
   return args;
 }
 

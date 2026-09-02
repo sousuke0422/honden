@@ -160,7 +160,7 @@ describe('file の縛り（v3・cmd_2 の実測に基づく）', () => {
     '/home/x/.codex', '/home/x/.codex/packages',
   ]);
   const ex = (p: string) => world.has(p);
-  const CFG = { level: 'bwrap', outbound: true, tcpPorts: [] as number[], fs: { write: ['/w/repo', '~/.honden'] } } as const;
+  const CFG: import('../src/isolate').IsolationCfg = { level: 'bwrap', outbound: true, tcpPorts: [], fs: { write: ['/w/repo', '~/.honden'] } };
 
   test('fs 節を解く。default: deny 以外は拒む・知らぬ鍵も拒む・相対の道も拒む', () => {
     const ok = parseIsolation(y('isolation:\n  level: bwrap\n  net: {default: deny, allow: [outbound]}\n  fs:\n    default: deny\n    write: [/w/repo, "~/.honden"]\n'));
@@ -176,7 +176,10 @@ describe('file の縛り（v3・cmd_2 の実測に基づく）', () => {
     expect(a.slice(0, 3)).toEqual(['--ro-bind', '/', '/']);
     expect(a.join(' ')).toContain('--bind /w/repo /w/repo');
     expect(a.join(' ')).toContain('--bind /home/x/.honden /home/x/.honden');
-    expect(a.join(' ')).toContain('--tmpfs /tmp');
+    // tmpfs は rw の前。後だと /tmp 配下の rw 許しが影に覆われる（実機で釣った）
+    const j = a.join(' ');
+    expect(j).toContain('--tmpfs /tmp');
+    expect(j.indexOf('--tmpfs /tmp')).toBeLessThan(j.indexOf('--bind /w/repo'));
     expect(a.join(' ')).toContain('--dev /dev --proc /proc --unshare-pid');
   });
 
