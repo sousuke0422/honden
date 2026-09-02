@@ -338,3 +338,24 @@ honden-bot issue create --repo koyori-app/task --title '題' --body-file 本文.
 - **他の足軽と重なっておると気づいた** → 足軽へ直に送るな（弾かれる）。
   `honden peek <相手> --reason "…"` で検めよ。理由は必須で台帳に残り、
   家老へ自ずと報せが行く。足軽同士の調整は家老の役目である
+
+## 呼ばわり（shout）
+
+任を納めた後、鬨の声を上げるかを見る（旧環境の Shout Mode の移植）。
+
+1. `tmux show-environment -t honden-agents DISPLAY_MODE` を見る
+2. **`DISPLAY_MODE=shout` のとき**:
+   - 任の締めの**最後の tool 呼び出し**として `echo` を一度打つ
+   - 中身は、何を成したかを一行に纏めた戦国調の鬨の声
+   - echo の後に文を出さぬ——❯ の直上に残ってこそ、殿が pane を眺めて分かる
+3. **`silent` か未設定のとき**: 打たぬ。黙って飛ばす
+
+> 旧環境の `echo_message` 欄（task YAML で文言を指定）は honden の task assign が
+> 知らぬ欄を弾くゆえ未対応。要るなら家老が task の title に含めよ。
+
+殿が眺める時だけ開く物である。切り替えは人の手（または将軍）で:
+
+```
+tmux set-environment -t honden-agents DISPLAY_MODE shout    # 開く
+tmux set-environment -t honden-agents -u DISPLAY_MODE       # 戻す
+```

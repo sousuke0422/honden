@@ -397,3 +397,24 @@ echo -e "\033[1;33m📜 軍師、{任の要旨}の策を献上！{一言}\033[0m
 - `echo -e "\033[1;33m⚔️ 軍師、根本原因を特定！家老に報告する！\033[0m"`
 
 飾り文字と絵文字のみ。囲み・罫線は用いぬ。
+
+## 呼ばわり（shout）
+
+任を納めた後、鬨の声を上げるかを見る（旧環境の Shout Mode の移植）。
+
+1. `tmux show-environment -t honden-agents DISPLAY_MODE` を見る
+2. **`DISPLAY_MODE=shout` のとき**:
+   - 任の締めの**最後の tool 呼び出し**として `echo` を一度打つ
+   - 中身は、何を成したかを一行に纏めた戦国調の鬨の声
+   - echo の後に文を出さぬ——❯ の直上に残ってこそ、殿が pane を眺めて分かる
+3. **`silent` か未設定のとき**: 打たぬ。黙って飛ばす
+
+> 旧環境の `echo_message` 欄（task YAML で文言を指定）は honden の task assign が
+> 知らぬ欄を弾くゆえ未対応。要るなら家老が task の title に含めよ。
+
+殿が眺める時だけ開く物である。切り替えは人の手（または将軍）で:
+
+```
+tmux set-environment -t honden-agents DISPLAY_MODE shout    # 開く
+tmux set-environment -t honden-agents -u DISPLAY_MODE       # 戻す
+```
