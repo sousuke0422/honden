@@ -775,9 +775,12 @@ export function search(db: Database, query: string, limit = 50): Hit[] {
 /** 台帳へ 1 行落とす。取引の中から呼ぶこと。 */
 export function journal(
   db: Database,
-  entry: { actor: string; action: string; target?: string; detail?: string },
+  // `at` は時を注げる呼び手（reportCollision など）のためにある。
+  // **注がれた時で判じ、実時計で書く**と、読む側と書く側が別の時計を見る
+  // ——七日後に赤くなる試験を作った（実日付が起点＋7日に入った日に発覚・2026-09-02）。
+  entry: { actor: string; action: string; target?: string; detail?: string; at?: Date },
 ): void {
   db.prepare(
     'INSERT INTO ledger(at, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)',
-  ).run(new Date().toISOString(), entry.actor, entry.action, entry.target ?? null, entry.detail ?? null);
+  ).run((entry.at ?? new Date()).toISOString(), entry.actor, entry.action, entry.target ?? null, entry.detail ?? null);
 }

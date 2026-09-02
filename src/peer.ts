@@ -306,7 +306,7 @@ export function reportCollision(
       `${opts.detail}\n` +
       `honden history で経緯を辿れる。譲らせるなら honden claim release <番号> --force --reason "…"。`,
   });
-    journal(db, { actor: opts.from, action: 'collision.report', target: opts.with, detail: `key=${key}` });
+    journal(db, { actor: opts.from, action: 'collision.report', target: opts.with, detail: `key=${key}`, at: now });
   });
   signal(db);
   return true;
