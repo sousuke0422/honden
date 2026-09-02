@@ -50,6 +50,11 @@ export interface IsolationCfg {
    * `outbound` とは混ぜられぬ——広い方が勝って口の意図が消える。
    */
   tcpPorts: number[];
+  /**
+   * file の縛り（cmd_2 の実測調査に基づく・2026-09-03）。
+   * 無ければ v1 のまま（--dev-bind / / = file 素通し）——今の状態が既定。
+   */
+  fs?: { write: string[] };
 }
 
 export type ParseResult = { ok: true; cfg: IsolationCfg } | { ok: false; message: string };
@@ -133,8 +138,41 @@ export function parseIsolation(doc: unknown): ParseResult {
   if (n['deny'] !== undefined) {
     return { ok: false, message: 'isolation.net.deny は受けぬ。既定が deny であり、許す物だけを並べる。' };
   }
-  return { ok: true, cfg: { level: 'bwrap', outbound, tcpPorts } };
+  const fsNode = o['fs'];
+  let fs: { write: string[] } | undefined;
+  if (fsNode !== undefined && fsNode !== null) {
+    if (typeof fsNode !== 'object') return { ok: false, message: 'isolation.fs は枝であるべきだが、値が書いてある。' };
+    const f = fsNode as Record<string, unknown>;
+    if (f['default'] !== 'deny') {
+      return { ok: false, message: `isolation.fs.default は deny だけを受ける（受け取った値: ${JSON.stringify(f['default'])}）。` };
+    }
+    const write = Array.isArray(f['write']) ? f['write'].map((x) => String(x).trim()) : [];
+    for (const w of write) {
+      if (!w.startsWith('/') && !w.startsWith('~/')) {
+        return { ok: false, message: `isolation.fs.write の ${JSON.stringify(w)}: 絶対の道か ~/ で書かれよ。` };
+      }
+    }
+    for (const k of Object.keys(f)) {
+      if (k !== 'default' && k !== 'write') return { ok: false, message: `isolation.fs に知らぬ鍵がある: ${k}（受けるのは default / write）。` };
+    }
+    fs = { write };
+  }
+  return { ok: true, cfg: { level: 'bwrap', outbound, tcpPorts, ...(fs ? { fs } : {}) } };
 }
+
+/**
+ * CLI が働くのに要る書き道（cmd_2 の実測・報告 #464）。
+ *
+ * `fs.default: deny` の時、`--cli` で名乗られた CLI のぶんを write へ自動で足す。
+ * codex は `~/.codex` を rw にした上で **packages を ro で重ねる**——
+ * 自己更新の道（#13 の事故）だけを封じ、auth や帳は書ける。
+ */
+export const CLI_WRITES: Record<string, { rw: string[]; ro: string[] }> = {
+  claude: { rw: ['~/.claude', '~/.claude.json'], ro: [] },
+  codex: { rw: ['~/.codex'], ro: ['~/.codex/packages'] },
+  cursor: { rw: ['~/.cache/cursor-compile-cache', '~/.cursor', '~/.config/cursor'], ro: [] },
+  opencode: { rw: ['~/.local/share/opencode', '~/.cache/opencode', '~/.config/opencode'], ro: [] },
+};
 
 /** この構えで要る道具。出陣の関所が在るかを確かめる。 */
 export function requiredTools(cfg: IsolationCfg): string[] {
@@ -152,19 +190,72 @@ export function requiredTools(cfg: IsolationCfg): string[] {
  * file は縛らぬ（`--dev-bind / /`）。v1 の床は網だけである。
  * `--die-with-parent` で、pane が消えれば中身も残らぬ。
  */
+export interface WrapOpts {
+  /** 起こす CLI の名。fs の縛りで、その CLI の書き道を自動で足すのに使う。 */
+  cli?: string;
+  /** 道が在るかの検め。試験で注ぎ替える。 */
+  exists?: (p: string) => boolean;
+  /** ~ の展開先。試験で注ぎ替える。 */
+  home?: string;
+}
+
+/**
+ * fs の縛りの bwrap 引数を組む（cmd_2 の実測どおり）。
+ *
+ *   --ro-bind / / を**先に**（後の rw が勝つ。順序を誤ると /tmp まで ro・実測 D）
+ *   --dev /dev と --proc /proc --unshare-pid は**必須**（抜くと /dev/null が
+ *     EACCES で道具が悉く壊れ、母屋の process が見える・実測 C）
+ *   /tmp は --tmpfs で専有（母屋と共有すると socket 置換の道・実測 罠2）
+ *   rw の道に .git が在れば hooks と config を ro で重ねる（檻の中から
+ *     pre-commit を仕込ませぬ・実測 罠1。commit そのものはできる）
+ */
+export function fsArgs(
+  fs: { write: string[] },
+  cli: string | undefined,
+  exists: (p: string) => boolean,
+  home: string,
+): string[] {
+  const expand = (p: string) => (p.startsWith('~/') ? home + p.slice(1) : p);
+  const rw: string[] = fs.write.map(expand);
+  const ro: string[] = [];
+  const need = cli ? CLI_WRITES[cli] : undefined;
+  if (need) {
+    rw.push(...need.rw.map(expand));
+    ro.push(...need.ro.map(expand));
+  }
+  const args = ['--ro-bind', '/', '/'];
+  for (const p of [...new Set(rw)]) {
+    if (!exists(p)) continue; // 無い道は bind できぬ。CLI 初回起動前などは黙って飛ばす
+    args.push('--bind', p, p);
+    // .git の守り
+    for (const g of [`${p}/.git/hooks`, `${p}/.git/config`]) {
+      if (exists(g)) args.push('--ro-bind', g, g);
+    }
+  }
+  for (const p of [...new Set(ro)]) {
+    if (exists(p)) args.push('--ro-bind', p, p);
+  }
+  args.push('--tmpfs', '/tmp', '--dev', '/dev', '--proc', '/proc', '--unshare-pid');
+  return args;
+}
+
 export function wrapLaunch(
   cfg: IsolationCfg,
   inner: string,
   /** 口の許し（tcpPorts）を使う時の檻の在り処。無ければ呼び手が先に拒む。 */
   cageBin?: string,
+  opts: WrapOpts = {},
 ): { ok: true; cmd: string } | { ok: false; message: string } {
   if (cfg.level === 'none') return { ok: true, cmd: inner };
   if (inner.includes("'")) {
     return { ok: false, message: `起こす命に単引用が含まれ、包めぬ: ${inner}` };
   }
+  const exists = opts.exists ?? ((p: string) => require('node:fs').existsSync(p));
+  const home = opts.home ?? require('node:os').homedir();
+  const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home).join(' ') : '--dev-bind / /';
   if (!cfg.outbound && cfg.tcpPorts.length === 0) {
     // 外も要らぬなら pasta ごと要らぬ。bwrap が網を切る（空の loopback だけ残る）
-    return { ok: true, cmd: `bwrap --dev-bind / / --die-with-parent --unshare-net -- bash -lc '${inner}'` };
+    return { ok: true, cmd: `bwrap ${binds} --die-with-parent --unshare-net -- bash -lc '${inner}'` };
   }
   let core = `bash -lc '${inner}'`;
   if (cfg.tcpPorts.length > 0) {
@@ -173,7 +264,7 @@ export function wrapLaunch(
     const flags = cfg.tcpPorts.map((p) => `--tcp ${p}`).join(' ');
     core = `${cageBin} ${flags} -- ${core}`;
   }
-  const bw = `bwrap --dev-bind / / --die-with-parent -- ${core}`;
+  const bw = `bwrap ${binds} --die-with-parent -- ${core}`;
   return { ok: true, cmd: `pasta --config-net -T none -U none --quiet -- ${bw}` };
 }
 

@@ -1700,7 +1700,7 @@ export function runIsolateShow(dbPath: string | undefined): RunResult {
  * 出陣（scripts/shutsujin.sh）がここを通る。**設定が壊れておる・道具が無い・
  * 包めぬ、のいずれも非 0 で止まる**——裸のまま起こして「隔離したつもり」を作らぬ。
  */
-export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefined): RunResult {
+export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefined, cli?: string): RunResult {
   if (!cmd) return { code: EXIT_INVALID, err: '--cmd に起こす命を渡されよ。' };
   const db = openStore({ path: dbPath });
   const r = isolationOf(db);
@@ -1714,7 +1714,7 @@ export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefin
   if (r.cfg.tcpPorts.length > 0 && !existsSync(cage)) {
     return { code: EXIT_INVALID, err: `  口の許し（tcp/<口>）には ${cage} が要る。bun run build:core で焼かれよ。` };
   }
-  const w = wrapLaunch(r.cfg, cmd, cage);
+  const w = wrapLaunch(r.cfg, cmd, cage, { ...(cli ? { cli } : {}) });
   return w.ok ? { code: EXIT_OK, out: w.cmd } : { code: EXIT_INVALID, err: `  ${w.message}` };
 }
 
@@ -2868,7 +2868,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
   }
 
   if (rest[0] === 'isolate') {
-    if (rest[1] === 'wrap') { const c = flags['cmd']; delete flags['cmd']; return emit(runIsolateWrap(dbPath, c)); }
+    if (rest[1] === 'wrap') { const c = flags['cmd']; const cl = flags['cli']; delete flags['cmd']; delete flags['cli']; return emit(runIsolateWrap(dbPath, c, cl)); }
     if (rest[1] === 'check') return emit(await runIsolateCheck(dbPath));
     return emit(runIsolateShow(dbPath));
   }

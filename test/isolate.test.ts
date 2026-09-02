@@ -5,7 +5,7 @@
  * 未実装の段、支えられぬ規則、包めぬ命。いずれも拒んで止まる。
  */
 import { describe, expect, test } from 'bun:test';
-import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, LEVELS, IMPLEMENTED } from '../src/isolate';
+import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, fsArgs, LEVELS, IMPLEMENTED } from '../src/isolate';
 
 const y = (s: string) => Bun.YAML.parse(s);
 
@@ -149,5 +149,66 @@ describe('名前引きの罠（resolv.conf）', () => {
   });
   test('nameserver が読めねば黙る（別系の resolver かもしれぬ）', () => {
     expect(dnsWarning('# empty\n')).toBeNull();
+  });
+});
+
+describe('file の縛り（v3・cmd_2 の実測に基づく）', () => {
+  const HOME = '/home/x';
+  const world = new Set([
+    '/w/repo', '/w/repo/.git/hooks', '/w/repo/.git/config',
+    '/home/x/.honden', '/home/x/.claude', '/home/x/.claude.json',
+    '/home/x/.codex', '/home/x/.codex/packages',
+  ]);
+  const ex = (p: string) => world.has(p);
+  const CFG = { level: 'bwrap', outbound: true, tcpPorts: [] as number[], fs: { write: ['/w/repo', '~/.honden'] } } as const;
+
+  test('fs 節を解く。default: deny 以外は拒む・知らぬ鍵も拒む・相対の道も拒む', () => {
+    const ok = parseIsolation(y('isolation:\n  level: bwrap\n  net: {default: deny, allow: [outbound]}\n  fs:\n    default: deny\n    write: [/w/repo, "~/.honden"]\n'));
+    if (!ok.ok) throw new Error(ok.message);
+    expect(ok.cfg.fs).toEqual({ write: ['/w/repo', '~/.honden'] });
+    expect(parseIsolation(y('isolation:\n  level: bwrap\n  net: {default: deny}\n  fs: {default: allow}\n')).ok).toBe(false);
+    expect(parseIsolation(y('isolation:\n  level: bwrap\n  net: {default: deny}\n  fs: {default: deny, tmp: x}\n')).ok).toBe(false);
+    expect(parseIsolation(y('isolation:\n  level: bwrap\n  net: {default: deny}\n  fs: {default: deny, write: [repo]}\n')).ok).toBe(false);
+  });
+
+  test('組む順: ro が先、rw が後、tmpfs /tmp と dev/proc/unshare-pid は必ず付く', () => {
+    const a = fsArgs({ write: ['/w/repo', '~/.honden'] }, undefined, ex, HOME);
+    expect(a.slice(0, 3)).toEqual(['--ro-bind', '/', '/']);
+    expect(a.join(' ')).toContain('--bind /w/repo /w/repo');
+    expect(a.join(' ')).toContain('--bind /home/x/.honden /home/x/.honden');
+    expect(a.join(' ')).toContain('--tmpfs /tmp');
+    expect(a.join(' ')).toContain('--dev /dev --proc /proc --unshare-pid');
+  });
+
+  test('**.git の hooks と config は ro で重なる**（檻の中から pre-commit を仕込ませぬ・実測 罠1）', () => {
+    const a = fsArgs({ write: ['/w/repo'] }, undefined, ex, HOME).join(' ');
+    expect(a).toContain('--ro-bind /w/repo/.git/hooks /w/repo/.git/hooks');
+    expect(a).toContain('--ro-bind /w/repo/.git/config /w/repo/.git/config');
+    // rw の bind が先、.git の ro が後（後勝ちで ro が効く）
+    expect(a.indexOf('--bind /w/repo /w/repo')).toBeLessThan(a.indexOf('--ro-bind /w/repo/.git/hooks'));
+  });
+
+  test('**codex は packages だけ ro**（自己更新の道 #13 を封じ、auth は書ける）', () => {
+    const a = fsArgs({ write: [] }, 'codex', ex, HOME).join(' ');
+    expect(a).toContain('--bind /home/x/.codex /home/x/.codex');
+    expect(a).toContain('--ro-bind /home/x/.codex/packages /home/x/.codex/packages');
+  });
+
+  test('claude の書き道が自動で足される。無い道は黙って飛ぶ', () => {
+    const a = fsArgs({ write: [] }, 'claude', ex, HOME).join(' ');
+    expect(a).toContain('--bind /home/x/.claude ');
+    expect(a).toContain('--bind /home/x/.claude.json ');
+    const b = fsArgs({ write: ['/no/such'] }, undefined, ex, HOME).join(' ');
+    expect(b).not.toContain('/no/such');
+  });
+
+  test('包みに fs が乗る。fs 無しは従前どおり --dev-bind / /', () => {
+    const r = wrapLaunch(CFG, 'claude', undefined, { cli: 'claude', exists: ex, home: HOME });
+    if (!r.ok) throw new Error(r.message);
+    expect(r.cmd).toContain('--ro-bind / /');
+    expect(r.cmd).not.toContain('--dev-bind / /');
+    const v1 = wrapLaunch({ level: 'bwrap', outbound: true, tcpPorts: [] }, 'claude');
+    if (!v1.ok) throw new Error(v1.message);
+    expect(v1.cmd).toContain('--dev-bind / /');
   });
 });

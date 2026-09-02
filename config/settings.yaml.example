@@ -120,3 +120,14 @@ capability_tiers:
 #
 # udp/<口> は受けぬ——Landlock の網は TCP だけで、縛れぬ規則を受けると
 # 書いた者は守られたつもりになる。宛先も見ぬ（口だけ）。
+
+# file の縛り（cmd_2 の実測調査に基づく）。書かねば file は素通し（今の状態）。
+# 書けば「書けるのは write の道と /tmp（専有）だけ、他は全部 ro」になる。
+# CLI の起動に要る道（~/.claude 等）は出陣が CLI 名から自動で足す。
+# rw の道に .git が在れば hooks と config だけ ro で重なる（commit はできる）。
+#
+#   fs:
+#     default: deny
+#     write:
+#       - /path/to/repo
+#       - ~/.honden

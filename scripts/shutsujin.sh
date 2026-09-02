@@ -169,7 +169,7 @@ launch_cmd() {
 # 続いた（bats が釣った・2026-09-02）。失敗は戻り値で返し、呼び手が die する。
 wrap_launch() {
   local wrapped rc
-  wrapped=$(HONDEN_DB="$DB" "$HONDEN_BIN" isolate wrap --cmd "$1"); rc=$?
+  wrapped=$(HONDEN_DB="$DB" "$HONDEN_BIN" isolate wrap --cmd "$1" ${2:+--cli "$2"}); rc=$?
   [ "$rc" -ne 0 ] && return 1
   # 贋の honden（試験）が空を返す時は包まず素通し。実物は none でも命を返す
   [ -n "$wrapped" ] && echo "$wrapped" || echo "$1"
@@ -291,7 +291,7 @@ up() {
   fi
   cmd=$(launch_cmd shogun)
   if [ -n "$cmd" ]; then
-    cmd=$(wrap_launch "$cmd") || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
+    cmd=$(wrap_launch "$cmd" "$(cli_of shogun)") || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
   fi
   if [ "$made_shogun" = 1 ] && [ -n "$cmd" ]; then
     tmux send-keys -t "$SESSION_SHOGUN:main" "$cmd"; sleep 0.3
@@ -306,7 +306,7 @@ up() {
   for ((i = 0; made_agents == 1 && i < ${#order[@]} && i < ${#ids[@]}; i++)); do
     cmd=$(launch_cmd "${order[$i]}")
     [ -n "$cmd" ] || { warn "${order[$i]}: 知らぬ CLI ゆえ起こさぬ"; continue; }
-    cmd=$(wrap_launch "$cmd") || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
+    cmd=$(wrap_launch "$cmd" "$(cli_of "${order[$i]}")") || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
     tmux send-keys -t "${ids[$i]}" "$cmd"; sleep 0.3
     tmux send-keys -t "${ids[$i]}" Enter
     info "$(label_of "${order[$i]}") … $(cli_of "${order[$i]}") / $(model_of "${order[$i]}")"
