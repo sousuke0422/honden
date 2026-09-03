@@ -11,7 +11,7 @@
  */
 
 import { expect, test, describe, beforeEach, afterEach } from 'bun:test';
-import { parseFlags, pickInput, inboxWrite, inboxUnread, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
+import { clockLine, parseFlags, pickInput, inboxWrite, inboxUnread, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -345,5 +345,15 @@ describe('文面の組み立て', () => {
     expect(text).toContain('"karou"');
     expect(text).toContain('karo / gunshi');
     expect(text).toContain('書き込みは行っておらぬ');
+  });
+});
+
+describe('刻の一行', () => {
+  test('形: 刻 YYYY-MM-DD（曜）HH:MM', () => {
+    const s = clockLine(new Date('2026-09-03T13:05:00'));
+    expect(s).toBe('  刻 2026-09-03（木）13:05');
+  });
+  test('一桁の月日と時分は零で埋める', () => {
+    expect(clockLine(new Date('2026-01-05T04:07:00'))).toBe('  刻 2026-01-05（月）04:07');
   });
 });

@@ -65,6 +65,9 @@ honden config get language
 date "+%Y-%m-%dT%H:%M:%S"
 ```
 
+honden の人向けの出力の尻には `刻 …` の一行が載る。**今がいつかはそれで知れる**
+（/clear の後でも）。ただし報せへ写す時は据え置き `date` を使え——刻は分までしか出ぬ。
+
 ## Report Format
 
 ```bash

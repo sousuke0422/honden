@@ -10,6 +10,7 @@
 
 import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
 import type { Database } from 'bun:sqlite';
+import { clockLine } from './cli';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn } from './pane';
@@ -2160,12 +2161,21 @@ export async function main(argv: string[]): Promise<number> {
     return EXIT_OK;
   }
 
+  // 刻を載せる命の白名簿。人が（またはモデルが人として）読む口だけ。
+  // script が $( ) で受ける口（config / paths / isolate / roster / export /
+  // guard hook…）と、末尾が約束になっておる口（nudge の JSON・inbox unread の
+  // 合図行）には載せぬ。
+  const CLOCK_COMMANDS = new Set([
+    'brief', 'status', 'cmd', 'task', 'lease', 'claim', 'projects',
+    'decisions', 'decision', 'say', 'mode', 'history', 'report', 'search', 'log',
+  ]);
   const emit = (r: RunResult): number => {
     // 出す直前に飾りを落とす。書く側は `**…**` で書いてよい——
     // 端末なら太字、パイプなら素の字になる（src/term.ts）。
     if (r.out) console.log(emphasize(r.out));
     if (r.err) console.error(emphasize(r.err));
     ridealong();
+    if (rest[0] !== undefined && CLOCK_COMMANDS.has(rest[0])) console.log(clockLine());
     return r.code;
   };
 

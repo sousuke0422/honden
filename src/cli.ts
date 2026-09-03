@@ -454,3 +454,21 @@ export function checkRoute(
 
   return null;
 }
+
+/**
+ * 出力の尻に添える「今」の一行。
+ *
+ * 足軽は時を憶測で書くなと縛られておる（Timestamp Rule）が、/clear の後は
+ * 時の感覚そのものを失う。honden を叩くたびに刻が目に入れば、date を打つ前に
+ * 「もう朝か」「期限を過ぎたか」に気づける（殿の発案・2026-09-03）。
+ *
+ * 載せるのは**人向けの命だけ**（main.ts の CLOCK_COMMANDS・白名簿）。
+ * `config get` や `isolate wrap` のように script が `$( )` で受ける口へ載せると
+ * 出陣が壊れる——黒名簿で除くと、新しい口を足した者が載せ忘れではなく
+ * **除き忘れ**で壊す（fail-open の型）ゆえ、白名簿にした。
+ */
+export function clockLine(now: Date = new Date()): string {
+  const w = ['日', '月', '火', '水', '木', '金', '土'][now.getDay()];
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `  刻 ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}（${w}）${p(now.getHours())}:${p(now.getMinutes())}`;
+}
