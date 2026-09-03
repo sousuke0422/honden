@@ -10,7 +10,7 @@
 
 import { openStore, search, tx, journal, SearchError, DEFAULT_DB_PATH, type Hit } from './store';
 import type { Database } from 'bun:sqlite';
-import { clockLine } from './cli';
+import { clockLine, ago } from './cli';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn } from './pane';
@@ -787,18 +787,23 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
   const rows = db
     .query(
       all
-        ? 'SELECT id, status, priority, assigned_to, purpose FROM cmd ORDER BY created_at DESC LIMIT 50'
-        : `SELECT id, status, priority, assigned_to, purpose FROM cmd
+        ? 'SELECT id, status, priority, assigned_to, purpose, created_at, completed_at FROM cmd ORDER BY created_at DESC LIMIT 50'
+        : `SELECT id, status, priority, assigned_to, purpose, created_at, completed_at FROM cmd
            WHERE status IN ('pending','in_progress') ORDER BY created_at DESC LIMIT 50`,
     )
-    .all() as { id: string; status: string; priority: string; assigned_to: string | null; purpose: string | null }[];
+    .all() as { id: string; status: string; priority: string; assigned_to: string | null; purpose: string | null; created_at: string; completed_at: string | null }[];
   if (rows.length === 0) {
     return { code: EXIT_OK, out: all ? '  司令が一つも無い。' : '  動いておる司令は無い（済んだものも見るなら --all）。' };
   }
   const lines = rows.map((r) => {
     const who = r.assigned_to ? ` → ${r.assigned_to}` : '';
-    const p = r.purpose ? ` ${r.purpose.split('\n')[0]!.slice(0, 46)}` : '';
-    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}`;
+    const p = r.purpose ? ` ${r.purpose.split('\n')[0]!.slice(0, 42)}` : '';
+    // 「いつからか」を必ず添える。三日寝ておる pending が一覧で一目で判るように
+    const t =
+      r.completed_at && (r.status === 'done' || r.status === 'cancelled')
+        ? `閉じて${ago(r.completed_at)}`
+        : `起草から${ago(r.created_at)}`;
+    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}`;
   });
   return { code: EXIT_OK, out: lines.join('\n') + `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` };
 }
@@ -806,12 +811,15 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
 export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined): RunResult {
   if (!cmdId) return { code: EXIT_INVALID, err: '司令の番号を渡されよ。例: honden cmd show cmd_1' };
   const db = openStore({ path: dbPath });
-  const cmd = db.query('SELECT id, status, purpose FROM cmd WHERE id = ?').get(cmdId) as
-    | { id: string; status: string; purpose: string | null }
+  const cmd = db.query('SELECT id, status, purpose, created_at, completed_at FROM cmd WHERE id = ?').get(cmdId) as
+    | { id: string; status: string; purpose: string | null; created_at: string; completed_at: string | null }
     | null;
   if (!cmd) return { code: EXIT_INVALID, err: `そのような司令は無い: ${cmdId}` };
   const cov = coverageOf(db, cmdId);
-  const lines = [`  ${cmd.id}  [${cmd.status}]  ${cmd.purpose ?? ''}`, '  受け入れ条件:'];
+  const when =
+    `起草から${ago(cmd.created_at)}` +
+    (cmd.completed_at ? `・閉じて${ago(cmd.completed_at)}` : '');
+  const lines = [`  ${cmd.id}  [${cmd.status}]  ${cmd.purpose ?? ''}（${when}）`, '  受け入れ条件:'];
   if (cov.criteria.length === 0) lines.push('    （無し）');
   for (const c of cov.criteria) {
     const got = cov.covered.get(c.idx);

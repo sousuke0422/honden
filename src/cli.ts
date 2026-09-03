@@ -472,3 +472,21 @@ export function clockLine(now: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `  刻 ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}（${w}）${p(now.getHours())}:${p(now.getMinutes())}`;
 }
+
+/**
+ * 「どれだけ経ったか」の粗い言い方。
+ *
+ * 刻（clockLine）は今がいつかを教えるが、**いつからか**は教えぬ——
+ * 将軍が司令の発行からの経過を見失うことが多々あった（殿の指摘・2026-09-03）。
+ * 粗く丸める：分・時間・日。精密が要る所は台帳の at が正である。
+ */
+export function ago(fromIso: string, now: Date = new Date()): string {
+  const ms = now.getTime() - new Date(fromIso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '？';
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return 'たった今';
+  if (m < 60) return `${m}分`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}時間`;
+  return `${Math.floor(h / 24)}日`;
+}

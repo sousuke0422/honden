@@ -11,7 +11,7 @@
  */
 
 import { expect, test, describe, beforeEach, afterEach } from 'bun:test';
-import { clockLine, parseFlags, pickInput, inboxWrite, inboxUnread, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
+import { ago, clockLine, parseFlags, pickInput, inboxWrite, inboxUnread, fromPositional, EXIT_OK, EXIT_INVALID } from '../src/cli';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -355,5 +355,19 @@ describe('刻の一行', () => {
   });
   test('一桁の月日と時分は零で埋める', () => {
     expect(clockLine(new Date('2026-01-05T04:07:00'))).toBe('  刻 2026-01-05（月）04:07');
+  });
+});
+
+describe('経過の言い方（ago）', () => {
+  const now = new Date('2026-09-03T12:00:00Z');
+  test('分・時間・日で粗く丸める', () => {
+    expect(ago('2026-09-03T11:59:40Z', now)).toBe('たった今');
+    expect(ago('2026-09-03T11:15:00Z', now)).toBe('45分');
+    expect(ago('2026-09-03T04:00:00Z', now)).toBe('8時間');
+    expect(ago('2026-08-31T12:00:00Z', now)).toBe('3日');
+  });
+  test('未来や壊れた時刻は ？（誤った断言をせぬ）', () => {
+    expect(ago('2026-09-04T00:00:00Z', now)).toBe('？');
+    expect(ago('ではない', now)).toBe('？');
   });
 });
