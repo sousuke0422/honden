@@ -237,10 +237,13 @@ describe('案件ごとの宛先（別の task を立てる筋）', () => {
     expect(v).toHaveProperty('reason', expect.stringContaining('TASK_TOKEN_MYPROJ'));
   });
 
-  test('宛先の指定が無ければ env を渡さぬ（親のまま）', () => {
-    let got: Record<string, string> | undefined = { dirty: 'x' };
+  test('**api_url を書かねば暗黙で task.koyori.app**（宛先だけが暗黙を持つ）', () => {
+    let got: Record<string, string> | undefined;
     const run: Runner = (_a, env) => { got = env; return { code: 0, stdout: ok, stderr: '' }; };
     summaryVerdict(gateConfig(read)!, 7, run);
-    expect(got).toBeUndefined();
+    expect(got).toEqual({ TASK_API_URL: 'https://task.koyori.app' });
+    // tenant / token に暗黙は無い——取り違えたまま成功するのが一番怖い
+    expect(got).not.toHaveProperty('TASK_TENANT');
+    expect(got).not.toHaveProperty('TASK_TOKEN');
   });
 });

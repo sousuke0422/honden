@@ -75,6 +75,13 @@ export type Verdict =
  * `read` は `honden config get` と同じ引き方をする手。
  * **project が無ければ null**——それが「名乗り出ない」の形である。
  */
+/**
+ * api_url を書かなんだ時の暗黙の宛先（殿の定め・2026-09-03）。
+ * 本番の task はここに居る。暗黙を持つのは宛先だけ——tenant と token は
+ * 暗黙にすると**取り違えたまま成功**しうるゆえ、書かねば CLI 側の設定に任せる。
+ */
+export const DEFAULT_API_URL = 'https://task.koyori.app';
+
 export function gateConfig(
   read: (key: string) => string | undefined,
   /** honden の案件 id（司令の project:）。在れば `review.gates.<id>.*` が勝つ。 */
@@ -92,14 +99,14 @@ export function gateConfig(
   if (!project) return null;
   const bin = pick('bin');
   const repo = pick('repo');
-  const apiUrl = pick('api_url');
+  const apiUrl = pick('api_url') ?? DEFAULT_API_URL;
   const tenant = pick('tenant');
   const tokenEnv = pick('token_env');
   return {
     project,
     bin: bin ? bin.split(/\s+/) : ['task'],
     ...(repo ? { repo } : {}),
-    ...(apiUrl ? { apiUrl } : {}),
+    apiUrl,
     ...(tenant ? { tenant } : {}),
     ...(tokenEnv ? { tokenEnv } : {}),
   };

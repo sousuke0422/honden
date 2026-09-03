@@ -161,7 +161,7 @@ capability_tiers:
 #   gates:
 #     myproj:                          # honden の案件 id（司令の project:）
 #       project: local-task
-#       api_url: http://127.0.0.1:3400
+#       api_url: http://127.0.0.1:3400   # 書かねば暗黙で https://task.koyori.app
 #       tenant: t_xxx
 #       token_env: TASK_TOKEN_MYPROJ
 >>>>>>> feat/review-gate
