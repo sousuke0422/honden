@@ -28,11 +28,19 @@
  */
 
 /** 外の命を呼ぶ手。試験では注ぎ替える。 */
-export type Runner = (argv: string[]) => { code: number; stdout: string; stderr: string } | null;
+export type Runner = (
+  argv: string[],
+  env?: Record<string, string>,
+) => { code: number; stdout: string; stderr: string } | null;
 
-export const realRunner: Runner = (argv) => {
+export const realRunner: Runner = (argv, env) => {
   try {
-    const p = Bun.spawnSync(argv, { stdout: 'pipe', stderr: 'pipe' });
+    const p = Bun.spawnSync(argv, {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      // 案件ごとに別の task へ向ける口（TASK_API_URL 等）。無ければ親のまま
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    });
     const d = new TextDecoder();
     return { code: p.exitCode ?? 0, stdout: d.decode(p.stdout), stderr: d.decode(p.stderr) };
   } catch {
@@ -47,6 +55,13 @@ export interface GateConfig {
   bin: string[];
   /** 見に行く repo（`owner/name`）。省けば task 側の既定に従う。 */
   repo?: string;
+  /**
+   * 別の task を立てておる案件のための宛先（殿の先読み・2026-09-03）。
+   * token は値でなく **env の名**で間接に指す——settings は秘密の置き場ではない。
+   */
+  apiUrl?: string;
+  tenant?: string;
+  tokenEnv?: string;
 }
 
 export type Verdict =
@@ -60,15 +75,33 @@ export type Verdict =
  * `read` は `honden config get` と同じ引き方をする手。
  * **project が無ければ null**——それが「名乗り出ない」の形である。
  */
-export function gateConfig(read: (key: string) => string | undefined): GateConfig | null {
-  const project = read('review.gate.project')?.trim();
+export function gateConfig(
+  read: (key: string) => string | undefined,
+  /** honden の案件 id（司令の project:）。在れば `review.gates.<id>.*` が勝つ。 */
+  hondenProject?: string,
+): GateConfig | null {
+  // 鍵ごとに落ちる。gates.<id>.bin が無ければ gate.bin へ——半端な上書きでも壊れぬ
+  const pick = (k: string): string | undefined => {
+    if (hondenProject) {
+      const o = read(`review.gates.${hondenProject}.${k}`)?.trim();
+      if (o) return o;
+    }
+    return read(`review.gate.${k}`)?.trim();
+  };
+  const project = pick('project');
   if (!project) return null;
-  const bin = read('review.gate.bin')?.trim();
-  const repo = read('review.gate.repo')?.trim();
+  const bin = pick('bin');
+  const repo = pick('repo');
+  const apiUrl = pick('api_url');
+  const tenant = pick('tenant');
+  const tokenEnv = pick('token_env');
   return {
     project,
     bin: bin ? bin.split(/\s+/) : ['task'],
     ...(repo ? { repo } : {}),
+    ...(apiUrl ? { apiUrl } : {}),
+    ...(tenant ? { tenant } : {}),
+    ...(tokenEnv ? { tokenEnv } : {}),
   };
 }
 
@@ -102,7 +135,22 @@ export function summaryVerdict(cfg: GateConfig, pr: number, run: Runner): Verdic
   ];
   if (cfg.repo) argv.push('--repo', cfg.repo);
 
-  const r = run(argv);
+  let env: Record<string, string> | undefined;
+  if (cfg.apiUrl || cfg.tenant || cfg.tokenEnv) {
+    env = {};
+    if (cfg.apiUrl) env['TASK_API_URL'] = cfg.apiUrl;
+    if (cfg.tenant) env['TASK_TENANT'] = cfg.tenant;
+    if (cfg.tokenEnv) {
+      const tok = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env[cfg.tokenEnv];
+      if (!tok) {
+        // 鍵の名を指したのに env が空。**黙って鍵なしで叩かぬ**——
+        // 別の口の鍵で別の backend を叩く取り違えが一番怖い
+        return { state: 'unknown', reason: `token_env に ${cfg.tokenEnv} を指したが、その env が空である` };
+      }
+      env['TASK_TOKEN'] = tok;
+    }
+  }
+  const r = run(argv, env);
   if (r === null) {
     return { state: 'unknown', reason: `${cfg.bin[0]} を起こせなんだ（入っておらぬか、道に無い）` };
   }

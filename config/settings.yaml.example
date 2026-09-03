@@ -152,4 +152,16 @@ capability_tiers:
 #     project: <task の project 鍵>   # これが無ければ名乗り出ぬ
 #     bin: task                       # 呼ぶ命。道を通したい時に差せる
 #     repo: owner/name                # 省けば task 側の既定に従う
+#
+# 案件ごとに**別の task** を立てておるなら、司令の project: ごとに宛先を差せる。
+# 鍵ごとに落ちる（gates.<id>.bin が無ければ gate.bin へ）。
+# token は値でなく env の名で指す——settings は秘密の置き場ではない。
+# 名を指したのに env が空なら、門は通さぬ（鍵なしで叩いて取り違えぬ）。
+#
+#   gates:
+#     myproj:                          # honden の案件 id（司令の project:）
+#       project: local-task
+#       api_url: http://127.0.0.1:3400
+#       tenant: t_xxx
+#       token_env: TASK_TOKEN_MYPROJ
 >>>>>>> feat/review-gate

@@ -787,18 +787,23 @@ export function runCmdDone(
  * 頼んだ門が働かなかったのを「通ってよし」と読ませぬためである。
  */
 export function reviewBlocker(db: Database, rawYaml: string, run: ReviewRunner): string | null {
-  const cfg = gateConfig((k) => {
-    const r = configGet(db, k);
-    return r.ok ? r.value : undefined;
-  });
-  if (!cfg) return null; // 名乗り出ぬ
-
   let doc: unknown;
   try {
     doc = Bun.YAML.parse(rawYaml);
   } catch {
     return null; // 原文が解けぬのは別の話。ここで塞ぐ筋ではない
   }
+  // 案件ごとに別の task を立てる筋がある（殿の先読み）。司令の project: で
+  // 宛先の上書き（review.gates.<id>.*）を引き、無ければ既定（review.gate.*）
+  const proj =
+    typeof doc === 'object' && doc !== null && typeof (doc as Record<string, unknown>)['project'] === 'string'
+      ? ((doc as Record<string, unknown>)['project'] as string)
+      : undefined;
+  const cfg = gateConfig((k) => {
+    const r = configGet(db, k);
+    return r.ok ? r.value : undefined;
+  }, proj);
+  if (!cfg) return null; // 名乗り出ぬ
   const pr = prOf(doc);
   if (pr === null) return null; // 見るべき PR が無い
 

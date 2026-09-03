@@ -195,3 +195,52 @@ describe('cmd done への繋ぎ', () => {
     expect(reviewBlocker(db, '::: これは yaml ではない', fake(null).run)).toBeNull();
   });
 });
+
+describe('案件ごとの宛先（別の task を立てる筋）', () => {
+  const M: Record<string, string> = {
+    'review.gate.project': 'koyori',
+    'review.gate.bin': 'task',
+    'review.gates.myproj.project': 'local-task',
+    'review.gates.myproj.api_url': 'http://127.0.0.1:3400',
+    'review.gates.myproj.tenant': 't_xxx',
+    'review.gates.myproj.token_env': 'TASK_TOKEN_MYPROJ',
+  };
+  const read = (k: string) => M[k];
+
+  test('司令の project に上書きが在ればそれが勝つ。鍵ごとに落ちる', () => {
+    const c = gateConfig(read, 'myproj')!;
+    expect(c.project).toBe('local-task');
+    expect(c.apiUrl).toBe('http://127.0.0.1:3400');
+    expect(c.bin).toEqual(['task']); // gates に無い鍵は既定へ落ちる
+    expect(gateConfig(read, 'other')!.project).toBe('koyori');
+    expect(gateConfig(read)!.project).toBe('koyori');
+  });
+
+  test('宛先の env が runner へ渡る（token は env の名から引く）', () => {
+    process.env['TASK_TOKEN_MYPROJ'] = 'tok-xyz';
+    try {
+      let got: Record<string, string> | undefined;
+      const run: Runner = (_argv, env) => { got = env; return { code: 0, stdout: ok, stderr: '' }; };
+      const v = summaryVerdict(gateConfig(read, 'myproj')!, 7, run);
+      expect(v.state).toBe('mergeable');
+      expect(got).toEqual({ TASK_API_URL: 'http://127.0.0.1:3400', TASK_TENANT: 't_xxx', TASK_TOKEN: 'tok-xyz' });
+    } finally {
+      delete process.env['TASK_TOKEN_MYPROJ'];
+    }
+  });
+
+  test('**token_env を指したのに env が空なら通さぬ**（鍵なしで叩いて取り違えぬ）', () => {
+    delete process.env['TASK_TOKEN_MYPROJ'];
+    const run: Runner = () => { throw new Error('叩いてはならぬ'); };
+    const v = summaryVerdict(gateConfig(read, 'myproj')!, 7, run as unknown as Runner);
+    expect(v.state).toBe('unknown');
+    expect(v).toHaveProperty('reason', expect.stringContaining('TASK_TOKEN_MYPROJ'));
+  });
+
+  test('宛先の指定が無ければ env を渡さぬ（親のまま）', () => {
+    let got: Record<string, string> | undefined = { dirty: 'x' };
+    const run: Runner = (_a, env) => { got = env; return { code: 0, stdout: ok, stderr: '' }; };
+    summaryVerdict(gateConfig(read)!, 7, run);
+    expect(got).toBeUndefined();
+  });
+});
