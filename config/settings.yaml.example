@@ -89,6 +89,7 @@ capability_tiers:
 #     base: https://ntfy.example.org   # 省けば https://ntfy.sh
 #     topic: honden-9f3a2b7c1d5e
 
+<<<<<<< HEAD
 # ── 隔離（床）─────────────────────────────────────────
 #
 # 足軽の CLI を、網を縛った名前空間の中で起こす。
@@ -131,3 +132,24 @@ capability_tiers:
 #     write:
 #       - /path/to/repo
 #       - ~/.honden
+=======
+# ── 司令を閉じる前に、外の review 台帳へ伺う門 ────────────────────
+#
+# `honden cmd done` は、受け入れ条件が覆われ軍師の是が在るかを見る。
+# **どちらも honden の中の話で、PR に残った指摘は見ていない。**
+#
+# ここを書くと、司令が `pr:` を宣している時だけ
+# `task review summary` を引き、high / medium が残っていれば閉じさせぬ。
+#
+# **書かねば何もしない。** honden は MIT の単体で立つ物であり、
+# task を要る物にしてはならぬ。繋いだ時だけ効く（ntfy と同じ流儀）。
+#
+# 伺えなかった時（道具が無い、応えが読めぬ）は**通さぬ**。
+# 頼んだ門が働かなかったのを「通ってよし」と読ませぬためである。
+#
+# review:
+#   gate:
+#     project: <task の project 鍵>   # これが無ければ名乗り出ぬ
+#     bin: task                       # 呼ぶ命。道を通したい時に差せる
+#     repo: owner/name                # 省けば task 側の既定に従う
+>>>>>>> feat/review-gate
