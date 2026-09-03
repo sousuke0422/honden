@@ -22,7 +22,7 @@
 # ## 遠くから取った物を、確かめずに走らせぬ
 #
 # 出し物を降ろす道は `curl | bash` の形を取らぬ。数（SHA256）を照らし、
-# 五本すべて揃って初めて置く。honden 自身の禁じ手（D008・D011-AT）が
+# 六本すべて揃って初めて置く。honden 自身の禁じ手（D008・D011-AT）が
 # 戒めておるのと同じ形を、仕度の書も守る。
 
 set -uo pipefail
@@ -300,7 +300,7 @@ fi
 # ── 三、本体をどう手に入れるか ────────────────────────────────────
 step "三、本体"
 
-BINS=(honden honden-bot honden-watch honden-parse honden-kill)
+BINS=(honden honden-bot honden-watch honden-parse honden-kill honden-cage)
 
 all_present() {
   local b
@@ -309,7 +309,7 @@ all_present() {
 }
 
 if all_present && [ -z "$MODE" ]; then
-  ok "bin/ に五本とも揃うておる（$("$ROOT/bin/honden" version 2>/dev/null || echo '版は不明')）"
+  ok "bin/ に六本とも揃うておる（$("$ROOT/bin/honden" version 2>/dev/null || echo '版は不明')）"
   info "新しくするなら honden update --check"
   note "本体: あり"
 else
@@ -333,10 +333,10 @@ else
     have cargo || die "cargo が無い。https://rustup.rs から入れられよ（我は入れぬ）"
     info "建てておる（少し掛かる）…"
     (cd "$ROOT" && bun install && bun run build:all) || die "建てられなんだ"
-    ok "五本とも建った"
+    ok "六本とも建った"
     note "本体: 建てた"
   else
-    # ── 降ろす。**数を照らし、五本揃って初めて置く** ──
+    # ── 降ろす。**数を照らし、六本揃って初めて置く** ──
     have curl || die "curl が無い。降ろせぬ"
     # **macOS は配っておらぬ。** 芯は inotify 一本ゆえ Linux でしか建たぬ。
     case "$(uname -s)" in
@@ -431,7 +431,7 @@ else
       || die "降ろした物が検めを通らなんだ（数の紙に ${#BINS[@]} 本のはずが $n 本）。**一つも置いておらぬ**"
     ( cd "$TMPD" && sha256sum -c --quiet want.txt ) \
       || die "降ろした物が検めを通らなんだ。**一つも置いておらぬ**"
-    ok "五本とも数が合うた"
+    ok "六本とも数が合うた"
 
     mkdir -p "$ROOT/bin"
     for b in "${BINS[@]}"; do

@@ -128,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          for b in honden honden-bot honden-watch honden-parse honden-kill; do
+          for b in honden honden-bot honden-watch honden-parse honden-kill honden-cage; do
             cp "bin/$b" "out/$b-${{ matrix.os }}-${{ matrix.arch }}"
           done
           ls -la out
@@ -166,11 +166,11 @@ jobs:
           echo "── 出す物 ──"
           cat SHA256SUMS
 
-      - name: 揃うておるか（二つの土地 × 五本）
+      - name: 揃うておるか（二つの土地 × 六本）
         run: |
           set -euo pipefail
           n=$(grep -c . all/SHA256SUMS)
-          [ "$n" -eq 10 ] || { echo "::error::10 本のはずが $n 本しか無い"; exit 1; }
+          [ "$n" -eq 12 ] || { echo "::error::12 本のはずが $n 本しか無い"; exit 1; }
 
       # ── 署名する。**鍵は作らぬ（Sigstore keyless）** ──
       #

@@ -22,7 +22,7 @@ setup() {
   # 配る物の中身と、その正しい数
   SERVE="$BATS_TEST_TMPDIR/serve"
   mkdir -p "$SERVE"
-  for b in honden honden-bot honden-watch honden-parse honden-kill; do
+  for b in honden honden-bot honden-watch honden-parse honden-kill honden-cage; do
     printf 'これは %s の中身' "$b" > "$SERVE/$b-linux-x64"
   done
   ( cd "$SERVE" && sha256sum -- *-linux-x64 > SHA256SUMS )
@@ -115,11 +115,11 @@ stub_curl_release() {
 
 run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
 
-@test "五本とも数が合えば置く" {
+@test "六本とも数が合えば置く" {
   run_fetch
-  assert_output --partial "五本とも数が合うた"
+  assert_output --partial "六本とも数が合うた"
   assert_output --partial "v9.9.9 を置いた"
-  for b in honden honden-bot honden-watch honden-parse honden-kill; do
+  for b in honden honden-bot honden-watch honden-parse honden-kill honden-cage; do
     [ -x "$FAKE/bin/$b" ]
     run cat "$FAKE/bin/$b"
     assert_output --partial "$b の中身"
@@ -134,7 +134,7 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
   assert_output --partial "検めを通らなんだ"
   assert_output --partial "一つも置いておらぬ"
   # **一本も置かれておらぬこと。** 先に降ろした三本が座ってはならぬ
-  for b in honden honden-bot honden-watch honden-parse honden-kill; do
+  for b in honden honden-bot honden-watch honden-parse honden-kill honden-cage; do
     [ ! -e "$FAKE/bin/$b" ]
   done
 }
@@ -218,7 +218,7 @@ run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
   run_fetch
   assert_failure
   assert_output --partial "署名が我らの物と認められなんだ"
-  for b in honden honden-bot honden-watch honden-parse honden-kill; do
+  for b in honden honden-bot honden-watch honden-parse honden-kill honden-cage; do
     [ ! -e "$FAKE/bin/$b" ]
   done
 }
