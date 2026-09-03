@@ -29,7 +29,7 @@ import { findCharter, useCharter } from './charter';
 import {
   guardBot, parseAppConfig, mintJwt, tokenFresh, mintInstallationToken, appInfo,
   validRepo, dupMatch, searchIssues, filterLabels, listLabels, createIssue, commentIssue,
-  normalizeRepoUrl, resolveRepo,
+  normalizeRepoUrl, resolveRepo, resolveDest,
   installationRepos, explainRepoAccess, pemPermWarning,
   type InstallationToken, type BotRank,
 } from './bot';
@@ -48,7 +48,8 @@ const USAGE = `honden-bot — GitHub App（shogun-bot 名義・Issues:write の�
       App が入っておる repo を並べる（書ける先の一覧）。司令層のみ
   honden-bot issue create --repo OWNER/REPO --title 題 --body-file 道 [旗]
       --project <id> で所在の repo:（無ければ remote）から宛先を引ける。食い違いは拒む
-      --to task で GitHub でなく task へ起こす（司令層のみ・宛先は review.gate(s) の設定）
+      --to github|gh|task で起票先を選ぶ。省けば project の issue_to（projects.yaml）→ github の順
+      --to task は司令層のみ（宛先は review.gate(s) の設定）
       --body-file -      本文を標準入力から
       --labels a,b       既存ラベルのみ付く。無い名は付けずに報せる
       --search-key 鍵    重複探しの鍵（省くと題）
@@ -230,6 +231,20 @@ function spendCharterIfNeeded(
   return { ok: true };
 }
 
+/** project の raw（projects.yaml の写し）から issue_to（起票先の既定）を引く。 */
+function projectIssueToOf(dbPath: string | undefined, project: string | undefined): string | undefined {
+  if (!project) return undefined;
+  try {
+    const db = openStore({ path: dbPath });
+    const row = db.query('SELECT raw FROM project WHERE id = ?').get(project) as { raw: string } | null;
+    if (!row) return undefined;
+    const raw = JSON.parse(row.raw) as Record<string, unknown>;
+    return typeof raw['issue_to'] === 'string' ? raw['issue_to'] : undefined;
+  } catch {
+    return undefined; // 読めぬなら既定は無いのと同じ。拒みは resolveDest の役
+  }
+}
+
 /**
  * --repo / --project から宛先を決める。決まらねば便りを出して null。
  *
@@ -334,7 +349,22 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
-  if (rest[0] === 'issue' && rest[1] === 'create' && flags['to'] === 'task') {
+  let issueDest: 'github' | 'task' = 'github';
+  if (rest[0] === 'issue' && rest[1] === 'create') {
+    const d = resolveDest({
+      flag: flags['to'],
+      projectDefault: projectIssueToOf(dbPath, flags['project']?.trim() || undefined),
+    });
+    if (!d.ok) {
+      console.error(`  ${d.message}`);
+      audit({ action: 'issue_create', actor, status: 'BAD_DEST' });
+      return EXIT_INVALID;
+    }
+    issueDest = d.dest;
+    if (d.source === 'project') console.error(`  起票先: ${d.dest}（project の issue_to）`);
+  }
+
+  if (rest[0] === 'issue' && rest[1] === 'create' && issueDest === 'task') {
     // 起票先に task を選ぶ（殿の求め・2026-09-03）。宛先の器は review gate の
     // 設定を使い回す——起票と門で宛先が割れると、閉じる基準と書き込む先が
     // 別の backend になる。

@@ -359,3 +359,33 @@ export function resolveRepo(opts: {
       : '--repo は OWNER/REPO の形で（--project からも引ける）',
   };
 }
+
+/**
+ * 起票先を決める。手打ち > project の既定 > github。
+ *
+ * **知らぬ宛先は拒む。** --to は task だけを見て、他は黙って GitHub へ
+ * 落ちていた——書き損じが既定に化ける fail-open の型（塞いだ・2026-09-03）。
+ * `gh` は `github` の別名（殿の指の癖に合わせる）。
+ */
+export function resolveDest(opts: {
+  flag?: string;
+  projectDefault?: string;
+}): { ok: true; dest: 'github' | 'task'; source: 'flag' | 'project' | 'default' } | { ok: false; message: string } {
+  const norm = (v: string): 'github' | 'task' | null => {
+    const t = v.trim().toLowerCase();
+    if (t === 'github' || t === 'gh') return 'github';
+    if (t === 'task') return 'task';
+    return null;
+  };
+  if (opts.flag?.trim()) {
+    const d = norm(opts.flag);
+    if (!d) return { ok: false, message: `--to ${opts.flag} は知らぬ宛先である（受けるのは github / gh / task）。` };
+    return { ok: true, dest: d, source: 'flag' };
+  }
+  if (opts.projectDefault?.trim()) {
+    const d = norm(opts.projectDefault);
+    if (!d) return { ok: false, message: `project の issue_to（${opts.projectDefault}）が知らぬ宛先である（github / gh / task）。` };
+    return { ok: true, dest: d, source: 'project' };
+  }
+  return { ok: true, dest: 'github', source: 'default' };
+}

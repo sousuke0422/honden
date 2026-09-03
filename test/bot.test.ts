@@ -12,7 +12,7 @@ import { generateKeyPairSync, createVerify } from 'node:crypto';
 import {
   guardBot, parseAppConfig, mintJwt, tokenFresh, mintInstallationToken,
   validRepo, dupMatch, filterLabels, createIssue, searchIssues, listLabels, trimKey, SEARCH_KEY_MAX,
-  pemPermWarning, normalizeRepoUrl, resolveRepo,
+  pemPermWarning, normalizeRepoUrl, resolveRepo, resolveDest,
 } from '../src/bot';
 
 describe('guardBot', () => {
@@ -259,5 +259,21 @@ describe('宛先の解決（resolveRepo）— 取り違えを拒む', () => {
     expect(resolveRepo({ project: 'p', remoteRepo: 'o/r' })).toMatchObject({ ok: true, repo: 'o/r' });
     expect(resolveRepo({ project: 'p' }).ok).toBe(false);
     expect(resolveRepo({}).ok).toBe(false);
+  });
+});
+
+describe('起票先の解決（resolveDest）', () => {
+  test('gh は github の別名。手打ちが project の既定に勝つ', () => {
+    expect(resolveDest({ flag: 'gh' })).toEqual({ ok: true, dest: 'github', source: 'flag' });
+    expect(resolveDest({ flag: 'github', projectDefault: 'task' })).toMatchObject({ dest: 'github', source: 'flag' });
+    expect(resolveDest({ flag: 'task' })).toMatchObject({ dest: 'task' });
+  });
+  test('project の issue_to が既定になる。無ければ github', () => {
+    expect(resolveDest({ projectDefault: 'task' })).toEqual({ ok: true, dest: 'task', source: 'project' });
+    expect(resolveDest({})).toEqual({ ok: true, dest: 'github', source: 'default' });
+  });
+  test('**知らぬ宛先は拒む**（--to slack が黙って GitHub へ行かぬ）', () => {
+    expect(resolveDest({ flag: 'slack' }).ok).toBe(false);
+    expect(resolveDest({ projectDefault: 'jira' }).ok).toBe(false);
   });
 });
