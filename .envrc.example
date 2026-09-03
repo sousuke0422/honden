@@ -1,0 +1,13 @@
+# honden の場の環境（direnv）。雛形である。
+# cp .envrc.example .envrc して値を埋め、direnv allow する。実体は git に載らぬ。
+
+# ── task CLI の口 ──────────────────────────────────────
+# 門（cmd done の伺い）と honden-bot --to task が使う。
+# api_url は書かねば honden 側が暗黙で https://task.koyori.app を渡すゆえ、
+# 手元に別の task を立てる時だけ開ける。
+#export TASK_API_URL=http://127.0.0.1:3400
+export TASK_TENANT=
+export TASK_TOKEN=
+
+# 案件別の鍵（settings.yaml の review.gates.<id>.token_env で名指しする分）
+#export TASK_TOKEN_MYPROJ=
