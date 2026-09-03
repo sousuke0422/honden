@@ -141,6 +141,7 @@
 !scripts/seo_qc.sh
 !scripts/stop_hook_inbox.sh
 !scripts/session_start_hook.sh
+!scripts/setup_task_cli.sh
 !scripts/agent_status.sh
 !scripts/ratelimit_check.sh
 !scripts/switch_cli.sh

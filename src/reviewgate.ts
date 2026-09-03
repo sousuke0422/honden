@@ -166,7 +166,7 @@ export function summaryVerdict(cfg: GateConfig, pr: number, run: Runner): Verdic
   if (!ge.ok) return { state: 'unknown', reason: ge.message };
   const r = run(argv, ge.env);
   if (r === null) {
-    return { state: 'unknown', reason: `${cfg.bin[0]} を起こせなんだ（入っておらぬか、道に無い）` };
+    return { state: 'unknown', reason: `${cfg.bin[0]} を起こせなんだ（入っておらぬか、道に無い）。bash scripts/setup_task_cli.sh で入れられる` };
   }
 
   let doc: unknown;

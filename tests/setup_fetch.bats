@@ -46,21 +46,6 @@ setup() {
   printf 'にせの束' > "$SERVE/SHA256SUMS.cosign.bundle"
 }
 
-# cosign の贋物。版と、検めの通り不通りを操る。
-#   fake_cosign <名乗る版> <verify-blob の終了コード>
-fake_cosign() {
-  local ver="$1" rc="${2:-0}"
-  {
-    echo '#!/usr/bin/env bash'
-    echo 'printf "cosign" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
-    echo 'case "$1" in'
-    echo "  version) printf '{\"gitVersion\":\"$ver\"}\\n'; exit 0 ;;"
-    echo "  verify-blob) exit $rc ;;"
-    echo 'esac'
-    echo 'exit 0'
-  } > "$STUB/cosign"
-  chmod +x "$STUB/cosign"
-}
 
 # 「入れる手」の贋物。走ると $LATE/cosign を書き、指定の版を名乗らせる。
 #   fake_installer <手の名> <入れる版>
@@ -93,25 +78,6 @@ fake_uname() {
 }
 
 # curl の贋物。出し物の応えと、配り物を返す。
-#   stub_curl_release [札]
-stub_curl_release() {
-  local tag="${1:-v9.9.9}"
-  {
-    echo '#!/usr/bin/env bash'
-    echo 'printf "curl" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
-    echo 'url=""; out=""'
-    echo 'while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac; done'
-    echo "case \"\$url\" in"
-    echo "  *api.github.com*) printf '{\"tag_name\": \"$tag\"}\\n'; exit 0 ;;"
-    echo '  *releases/download/*)'
-    echo '     name="${url##*/}"'
-    echo '     [ -f "$SERVE/$name" ] || exit 22'
-    echo '     if [ -n "$out" ]; then cp "$SERVE/$name" "$out"; else cat "$SERVE/$name"; fi; exit 0 ;;'
-    echo 'esac'
-    echo 'exit 22'
-  } > "$STUB/curl"
-  chmod +x "$STUB/curl"
-}
 
 run_fetch() { run bash "$FAKE/scripts/first_setup.sh" --fetch --yes; }
 
