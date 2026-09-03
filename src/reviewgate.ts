@@ -128,6 +128,26 @@ export function prOf(raw: unknown): number | null {
  * 居るのが普通で、そこで揃えを求めると常に塞がる。
  * 見たいのは「指摘が残っておらぬか」だけなので、頭の照合は task 側へ譲る。
  */
+/**
+ * 宛先の env を組む。門（summary）と起票（--to task）の両方がここを通る
+ * ——別の道で組むと、閉じる基準と書き込む先が別の backend になりうる。
+ *
+ * token は env の名で間接に指す。**名を指したのに空なら拒む**——
+ * 鍵なしで叩けば CLI 側の既定の鍵で別の backend を取り違えて叩く。
+ */
+export function gateEnv(cfg: GateConfig): { ok: true; env?: Record<string, string> } | { ok: false; message: string } {
+  if (!cfg.apiUrl && !cfg.tenant && !cfg.tokenEnv) return { ok: true };
+  const env: Record<string, string> = {};
+  if (cfg.apiUrl) env['TASK_API_URL'] = cfg.apiUrl;
+  if (cfg.tenant) env['TASK_TENANT'] = cfg.tenant;
+  if (cfg.tokenEnv) {
+    const tok = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env[cfg.tokenEnv];
+    if (!tok) return { ok: false, message: `token_env に ${cfg.tokenEnv} を指したが、その env が空である` };
+    env['TASK_TOKEN'] = tok;
+  }
+  return { ok: true, env };
+}
+
 export function summaryVerdict(cfg: GateConfig, pr: number, run: Runner): Verdict {
   const argv = [
     ...cfg.bin,
@@ -142,22 +162,9 @@ export function summaryVerdict(cfg: GateConfig, pr: number, run: Runner): Verdic
   ];
   if (cfg.repo) argv.push('--repo', cfg.repo);
 
-  let env: Record<string, string> | undefined;
-  if (cfg.apiUrl || cfg.tenant || cfg.tokenEnv) {
-    env = {};
-    if (cfg.apiUrl) env['TASK_API_URL'] = cfg.apiUrl;
-    if (cfg.tenant) env['TASK_TENANT'] = cfg.tenant;
-    if (cfg.tokenEnv) {
-      const tok = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env[cfg.tokenEnv];
-      if (!tok) {
-        // 鍵の名を指したのに env が空。**黙って鍵なしで叩かぬ**——
-        // 別の口の鍵で別の backend を叩く取り違えが一番怖い
-        return { state: 'unknown', reason: `token_env に ${cfg.tokenEnv} を指したが、その env が空である` };
-      }
-      env['TASK_TOKEN'] = tok;
-    }
-  }
-  const r = run(argv, env);
+  const ge = gateEnv(cfg);
+  if (!ge.ok) return { state: 'unknown', reason: ge.message };
+  const r = run(argv, ge.env);
   if (r === null) {
     return { state: 'unknown', reason: `${cfg.bin[0]} を起こせなんだ（入っておらぬか、道に無い）` };
   }

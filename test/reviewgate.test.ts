@@ -6,7 +6,7 @@
  * 見ると区別できない。
  */
 import { describe, expect, test } from 'bun:test';
-import { gateConfig, prOf, summaryVerdict, type Runner, type GateConfig } from '../src/reviewgate';
+import { gateEnv, gateConfig, prOf, summaryVerdict, type Runner, type GateConfig } from '../src/reviewgate';
 
 const CFG: GateConfig = { project: 'koyori', bin: ['task'] };
 
@@ -245,5 +245,16 @@ describe('案件ごとの宛先（別の task を立てる筋）', () => {
     // tenant / token に暗黙は無い——取り違えたまま成功するのが一番怖い
     expect(got).not.toHaveProperty('TASK_TENANT');
     expect(got).not.toHaveProperty('TASK_TOKEN');
+  });
+});
+
+describe('gateEnv — 門と起票が同じ宛先を通る', () => {
+  test('指定なしは env 無し', () => {
+    expect(gateEnv({ project: 'x', bin: ['task'] })).toEqual({ ok: true });
+  });
+  test('token_env が空なら拒む（起票側も同じ守りを得る）', () => {
+    delete process.env['NO_SUCH_TOKEN_ENV'];
+    const r = gateEnv({ project: 'x', bin: ['task'], tokenEnv: 'NO_SUCH_TOKEN_ENV' });
+    expect(r.ok).toBe(false);
   });
 });
