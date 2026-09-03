@@ -33,6 +33,8 @@ import {
   installationRepos, explainRepoAccess, pemPermWarning,
   type InstallationToken, type BotRank,
 } from './bot';
+import { gateConfig, gateEnv } from './reviewgate';
+import { get as configGet } from './config';
 
 const APP_DIR = process.env['SHOGUN_GH_APP_DIR'] ?? join(homedir(), '.shogun', 'github-app');
 const AUDIT_DIR = process.env['SHOGUN_GITHUB_APP_AUDIT_DIR'] ?? join(APP_DIR, 'audit');
@@ -46,6 +48,7 @@ const USAGE = `honden-bot — GitHub App（shogun-bot 名義・Issues:write の�
       App が入っておる repo を並べる（書ける先の一覧）。司令層のみ
   honden-bot issue create --repo OWNER/REPO --title 題 --body-file 道 [旗]
       --project <id> で所在の repo:（無ければ remote）から宛先を引ける。食い違いは拒む
+      --to task で GitHub でなく task へ起こす（司令層のみ・宛先は review.gate(s) の設定）
       --body-file -      本文を標準入力から
       --labels a,b       既存ラベルのみ付く。無い名は付けずに報せる
       --search-key 鍵    重複探しの鍵（省くと題）
@@ -329,6 +332,47 @@ async function main(argv: string[]): Promise<number> {
       for (const r of repos) console.log(`   - ${r}`);
       return EXIT_OK;
     });
+  }
+
+  if (rest[0] === 'issue' && rest[1] === 'create' && flags['to'] === 'task') {
+    // 起票先に task を選ぶ（殿の求め・2026-09-03）。宛先の器は review gate の
+    // 設定を使い回す——起票と門で宛先が割れると、閉じる基準と書き込む先が
+    // 別の backend になる。
+    if (rank !== 'commander') {
+      console.error('  --to task は司令層のみ。GitHub の許状は App の repo 権限の物で、task の書き込みには写せぬ。将軍に願われよ。');
+      audit({ action: 'task_create', actor, status: 'RANK_DENIED' });
+      return EXIT_INVALID;
+    }
+    const title = flags['title'] ?? '';
+    const bodyFile = flags['body-file'] ?? '';
+    if (!title) { console.error('  --title が要る'); return EXIT_INVALID; }
+    if (!bodyFile) { console.error('  --body-file が要る（- で標準入力）'); return EXIT_INVALID; }
+    const db = openStore({ path: dbPath });
+    const cfg = gateConfig((k) => {
+      const rr = configGet(db, k);
+      return rr.ok ? rr.value : undefined;
+    }, flags['project']?.trim() || undefined);
+    if (!cfg) {
+      console.error('  task の宛先が設定に無い。settings.yaml の review.gate.project（か gates.<案件>.project）を書かれよ。');
+      return EXIT_INVALID;
+    }
+    const ge = gateEnv(cfg);
+    if (!ge.ok) { console.error(`  ${ge.message}`); return EXIT_INVALID; }
+    const argv = [...cfg.bin, 'tasks', 'create', '--project', cfg.project, '--title', title, '--description-file', bodyFile];
+    if (flags['priority']) argv.push('--priority', flags['priority']!);
+    if (dryRun) {
+      console.log(`  [dry-run] ${argv.join(' ')}`);
+      if (ge.env) console.log(`  env: ${Object.keys(ge.env).join(' ')}（値は出さぬ）`);
+      audit({ action: 'task_create_dry_run', actor, title, status: 'DRY_RUN_OK' });
+      return EXIT_OK;
+    }
+    const p = Bun.spawnSync(argv, {
+      stdout: 'inherit',
+      stderr: 'inherit',
+      ...(ge.env ? { env: { ...process.env, ...ge.env } } : {}),
+    });
+    audit({ action: 'task_create', actor, title, status: p.exitCode === 0 ? 'SUCCESS' : `EXIT_${p.exitCode}` });
+    return p.exitCode ?? EXIT_SYSTEM;
   }
 
   if (rest[0] === 'issue' && rest[1] === 'create') {
