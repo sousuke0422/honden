@@ -12,7 +12,7 @@ import { generateKeyPairSync, createVerify } from 'node:crypto';
 import {
   guardBot, parseAppConfig, mintJwt, tokenFresh, mintInstallationToken,
   validRepo, dupMatch, filterLabels, createIssue, searchIssues, listLabels, trimKey, SEARCH_KEY_MAX,
-  pemPermWarning,
+  pemPermWarning, normalizeRepoUrl, resolveRepo,
 } from '../src/bot';
 
 describe('guardBot', () => {
@@ -222,5 +222,42 @@ describe('API まわり（偽 fetch）', () => {
     expect(names.length).toBe(101);
     expect(names).toContain('最後のラベル'); // 二頁目まで届いた
     expect(seen).toBe(2); // 一頁が満たねば止まる（無駄打ちせぬ）
+  });
+});
+
+describe('repo の均し（normalizeRepoUrl）', () => {
+  test('URL・ssh・素の形を OWNER/REPO へ', () => {
+    for (const s of [
+      'https://github.com/koyori-app/task',
+      'https://github.com/koyori-app/task.git',
+      'https://github.com/koyori-app/task/',
+      'git@github.com:koyori-app/task.git',
+      ' koyori-app/task ',
+    ]) expect(normalizeRepoUrl(s)).toBe('koyori-app/task');
+  });
+  test('読めぬ形は null（黙って当てずっぽうにせぬ）', () => {
+    for (const s of ['', 'https://gitlab.com/a/b', 'ftp://x', 'a b/c']) expect(normalizeRepoUrl(s)).toBeNull();
+  });
+});
+
+describe('宛先の解決（resolveRepo）— 取り違えを拒む', () => {
+  test('**手打ちと設定が食い違えば拒む**（設定が正）', () => {
+    const r = resolveRepo({ flag: 'old-org/task', project: 'task', projectRepo: 'koyori-app/task' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toContain('koyori-app/task');
+  });
+  test('一致すれば通る。設定だけなら設定から', () => {
+    expect(resolveRepo({ flag: 'koyori-app/task', projectRepo: 'koyori-app/task' })).toMatchObject({ ok: true, repo: 'koyori-app/task' });
+    expect(resolveRepo({ project: 'task', projectRepo: 'koyori-app/task' })).toMatchObject({ ok: true, repo: 'koyori-app/task' });
+  });
+  test('remote との食い違いは**警めに留める**（旧名の redirect が実在する）', () => {
+    const r = resolveRepo({ flag: 'koyori-app/task', project: 'task', remoteRepo: 'TeamBlackCrystal/task' });
+    expect(r).toMatchObject({ ok: true, repo: 'koyori-app/task' });
+    if (r.ok) expect(r.warn).toContain('TeamBlackCrystal/task');
+  });
+  test('設定に無ければ remote から。どこにも無ければ拒む', () => {
+    expect(resolveRepo({ project: 'p', remoteRepo: 'o/r' })).toMatchObject({ ok: true, repo: 'o/r' });
+    expect(resolveRepo({ project: 'p' }).ok).toBe(false);
+    expect(resolveRepo({}).ok).toBe(false);
   });
 });

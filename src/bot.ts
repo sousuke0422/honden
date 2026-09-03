@@ -303,3 +303,59 @@ export async function commentIssue(
   const j = (await r.json()) as { html_url: string };
   return { url: j.html_url };
 }
+
+/**
+ * repo の書かれ方を OWNER/REPO へ均す。
+ *
+ * projects.yaml の repo: は URL 形（https://github.com/o/r）で書かれておる。
+ * git remote は ssh 形（git@github.com:o/r.git）もある。均せぬ形は null。
+ */
+export function normalizeRepoUrl(s: string): string | null {
+  const t = s.trim().replace(/\.git$/, '').replace(/\/+$/, '');
+  const m =
+    /^https?:\/\/github\.com\/([A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+)$/.exec(t) ??
+    /^git@github\.com:([A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+)$/.exec(t);
+  if (m) return m[1]!;
+  return validRepo(t) ? t : null;
+}
+
+/**
+ * 宛先 repo を決める（殿の案・2026-09-03）。**取り違えを拒むのが本務。**
+ *
+ *   設定（project の repo:）が正。手打ち --repo と食い違えば**拒む**——
+ *     古い名や写し損じが黙って通るのが一番の事故ゆえ。
+ *   remote は参考。食い違いは**警めに留める**——旧名のまま GitHub の
+ *     リダイレクトで生きておる案件が実在する（repo_note の教え）。
+ */
+export function resolveRepo(opts: {
+  flag?: string;
+  project?: string;
+  projectRepo?: string | null;
+  remoteRepo?: string | null;
+}): { ok: true; repo: string; source: string; warn?: string } | { ok: false; message: string } {
+  const flag = opts.flag?.trim() || undefined;
+  const cfg = opts.projectRepo ?? undefined;
+  const remote = opts.remoteRepo ?? undefined;
+
+  if (flag && cfg && flag !== cfg) {
+    return {
+      ok: false,
+      message:
+        `--repo ${flag} は、案件 ${opts.project} の設定（${cfg}）と食い違うておる。\n` +
+        '  設定が正である。手打ちを直すか、設定を直してから来られよ。',
+    };
+  }
+  const warn =
+    flag && !cfg && remote && flag !== remote
+      ? `--repo ${flag} は remote（${remote}）と違う。旧名の redirect なら良いが、確かめられよ`
+      : undefined;
+  if (flag) return { ok: true, repo: flag, source: 'flag', ...(warn ? { warn } : {}) };
+  if (cfg) return { ok: true, repo: cfg, source: `project:${opts.project} の設定` };
+  if (remote) return { ok: true, repo: remote, source: `project:${opts.project} の remote` };
+  return {
+    ok: false,
+    message: opts.project
+      ? `案件 ${opts.project} に repo が無い（設定にも remote にも）。--repo で示されよ。`
+      : '--repo は OWNER/REPO の形で（--project からも引ける）',
+  };
+}

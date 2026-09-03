@@ -29,6 +29,7 @@ import { findCharter, useCharter } from './charter';
 import {
   guardBot, parseAppConfig, mintJwt, tokenFresh, mintInstallationToken, appInfo,
   validRepo, dupMatch, searchIssues, filterLabels, listLabels, createIssue, commentIssue,
+  normalizeRepoUrl, resolveRepo,
   installationRepos, explainRepoAccess, pemPermWarning,
   type InstallationToken, type BotRank,
 } from './bot';
@@ -44,6 +45,7 @@ const USAGE = `honden-bot — GitHub App（shogun-bot 名義・Issues:write の�
   honden-bot repos
       App が入っておる repo を並べる（書ける先の一覧）。司令層のみ
   honden-bot issue create --repo OWNER/REPO --title 題 --body-file 道 [旗]
+      --project <id> で所在の repo:（無ければ remote）から宛先を引ける。食い違いは拒む
       --body-file -      本文を標準入力から
       --labels a,b       既存ラベルのみ付く。無い名は付けずに報せる
       --search-key 鍵    重複探しの鍵（省くと題）
@@ -225,6 +227,50 @@ function spendCharterIfNeeded(
   return { ok: true };
 }
 
+/**
+ * --repo / --project から宛先を決める。決まらねば便りを出して null。
+ *
+ * project の repo は正本の raw（projects.yaml の写し）から引く。
+ * 設定に無ければ path の git remote origin を読む（読むだけ・書かぬ）。
+ */
+function resolveRepoFlag(flags: Record<string, string>, dbPath: string | undefined): string | null {
+  const project = flags['project']?.trim() || undefined;
+  let projectRepo: string | null = null;
+  let remoteRepo: string | null = null;
+  if (project) {
+    const db = openStore({ path: dbPath });
+    const row = db.query('SELECT path, raw FROM project WHERE id = ?').get(project) as
+      | { path: string | null; raw: string }
+      | null;
+    if (!row) {
+      console.error(`  案件 ${project} は所在に無い（honden projects で確かめられよ）`);
+      return null;
+    }
+    try {
+      const raw = JSON.parse(row.raw) as Record<string, unknown>;
+      if (typeof raw['repo'] === 'string' && raw['repo'].trim() !== '') {
+        projectRepo = normalizeRepoUrl(raw['repo']);
+        if (!projectRepo) {
+          console.error(`  案件 ${project} の repo（${raw['repo']}）が読めぬ形である`);
+          return null;
+        }
+      }
+    } catch { /* raw が読めぬなら設定は無いのと同じ */ }
+    if (!projectRepo && row.path) {
+      const p = Bun.spawnSync(['git', '-C', row.path, 'remote', 'get-url', 'origin']);
+      if (p.success) remoteRepo = normalizeRepoUrl(new TextDecoder().decode(p.stdout));
+    }
+  }
+  const r = resolveRepo({ flag: flags['repo'], project, projectRepo, remoteRepo });
+  if (!r.ok) {
+    console.error(`  ${r.message}`);
+    return null;
+  }
+  if (r.warn) console.error(`  ※ ${r.warn}`);
+  if (r.source !== 'flag') console.error(`  宛先: ${r.repo}（${r.source}）`);
+  return r.repo;
+}
+
 async function main(argv: string[]): Promise<number> {
   const { flags, rest } = parseFlags(argv);
   if (rest.length === 0 || flags['help'] === 'true' || rest[0] === 'help') {
@@ -286,7 +332,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (rest[0] === 'issue' && rest[1] === 'create') {
-    const repo = flags['repo'] ?? '';
+    const repo = resolveRepoFlag(flags, dbPath) ?? '';
     const title = flags['title'] ?? '';
     const bodyFile = flags['body-file'] ?? '';
     if (!validRepo(repo)) { console.error('  --repo は OWNER/REPO の形で'); return EXIT_INVALID; }
@@ -347,7 +393,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (rest[0] === 'issue' && rest[1] === 'comment') {
-    const repo = flags['repo'] ?? '';
+    const repo = resolveRepoFlag(flags, dbPath) ?? '';
     const num = Number(flags['number'] ?? '');
     const bodyFile = flags['body-file'] ?? '';
     if (!validRepo(repo)) { console.error('  --repo は OWNER/REPO の形で'); return EXIT_INVALID; }
