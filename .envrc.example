@@ -5,8 +5,9 @@
 # 門（cmd done の伺い）と honden-bot --to task が使う。
 # api_url は書かねば honden 側が暗黙で https://task.koyori.app を渡すゆえ、
 # 手元に別の task を立てる時だけ開ける。
+# tenant は env でなく settings.yaml の review.gate.tenant（案件別は
+# review.gates.<id>.tenant）に書く——秘密でなく案件の属性ゆえ（殿の指摘・2026-09-04）。
 #export TASK_API_URL=http://127.0.0.1:3400
-export TASK_TENANT=
 export TASK_TOKEN=
 
 # 案件別の鍵（settings.yaml の review.gates.<id>.token_env で名指しする分）
