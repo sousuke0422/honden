@@ -241,7 +241,7 @@ describe('案件ごとの宛先（別の task を立てる筋）', () => {
     let got: Record<string, string> | undefined;
     const run: Runner = (_a, env) => { got = env; return { code: 0, stdout: ok, stderr: '' }; };
     summaryVerdict(gateConfig(read)!, 7, run);
-    expect(got).toEqual({ TASK_API_URL: 'https://task.koyori.app' });
+    expect(got).toEqual({ TASK_API_URL: 'https://task.koyori.app/api' });
     // tenant / token に暗黙は無い——取り違えたまま成功するのが一番怖い
     expect(got).not.toHaveProperty('TASK_TENANT');
     expect(got).not.toHaveProperty('TASK_TOKEN');

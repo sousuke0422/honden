@@ -77,10 +77,11 @@ export type Verdict =
  */
 /**
  * api_url を書かなんだ時の暗黙の宛先（殿の定め・2026-09-03）。
- * 本番の task はここに居る。暗黙を持つのは宛先だけ——tenant と token は
+ * 本番の task の API はここに居る（頁は / 、API は /api の下——実測 2026-09-04。
+ * /api を欠くと暗黙の宛先が頁の 404 へ向く）。暗黙を持つのは宛先だけ——tenant と token は
  * 暗黙にすると**取り違えたまま成功**しうるゆえ、書かねば CLI 側の設定に任せる。
  */
-export const DEFAULT_API_URL = 'https://task.koyori.app';
+export const DEFAULT_API_URL = 'https://task.koyori.app/api';
 
 export function gateConfig(
   read: (key: string) => string | undefined,
