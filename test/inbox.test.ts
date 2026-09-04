@@ -14,7 +14,7 @@ import { inboxWrite } from '../src/cli';
 import { existsSync, statSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong } from '../src/inbox';
+import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSuppressed } from '../src/inbox';
 
 const seeded = () => {
   const db = openStore({ path: ':memory:' });
@@ -242,5 +242,32 @@ describe('urgentRideAlong — 出力への横乗せ', () => {
     const db = empty();
     put(db, 'm3', 'cmd_update', 1);
     expect(urgentRideAlong(db, 'ashigaru1')).toBeNull();
+  });
+});
+
+describe('rideAlongSuppressed — 横乗せを載せてはならぬ口', () => {
+  test('guard hook は CLI が JSON として読むゆえ載せぬ（cursor / codex / claude いずれも）', () => {
+    for (const cli of ['cursor', 'codex', 'claude']) {
+      expect(rideAlongSuppressed(['guard', 'hook', cli])).toBe(true);
+    }
+  });
+
+  test('guard の他の口（check / denials / selftest）は人が読むゆえ載せる', () => {
+    expect(rideAlongSuppressed(['guard', 'check'])).toBe(false);
+    expect(rideAlongSuppressed(['guard', 'denials'])).toBe(false);
+    expect(rideAlongSuppressed(['guard', 'selftest'])).toBe(false);
+  });
+
+  test('inbox 系・nudge・空は従前どおり載せぬ', () => {
+    expect(rideAlongSuppressed(['inbox', 'read'])).toBe(true);
+    expect(rideAlongSuppressed(['inbox', 'ack', '--all'])).toBe(true);
+    expect(rideAlongSuppressed(['nudge'])).toBe(true);
+    expect(rideAlongSuppressed([])).toBe(true);
+  });
+
+  test('人が読む口（brief / status / cmd）には載せる——第一経路を殺さぬ', () => {
+    expect(rideAlongSuppressed(['brief'])).toBe(false);
+    expect(rideAlongSuppressed(['status'])).toBe(false);
+    expect(rideAlongSuppressed(['cmd', 'list'])).toBe(false);
   });
 });

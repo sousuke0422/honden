@@ -93,6 +93,27 @@ export function urgentRideAlong(db: Database, agent: string): string | null {
   return `  ⚠ ${agent} に急ぎの未読（${types}）— honden inbox read で確かめよ`;
 }
 
+/**
+ * 横乗せを**載せてはならぬ**口。
+ *
+ * - `inbox`: 見に行く行為そのものに重ねるのは二重
+ * - `nudge`: 末尾の JSON 行が芯への返事
+ * - `guard hook`: 出力は CLI（cursor / codex / claude）が **JSON として読む**。
+ *   一行でも混ざれば「invalid JSON」となり、fail-closed の CLI は
+ *   **以後の全 Shell を拒む**。拒まれた者は `inbox read` も `inbox ack` も
+ *   叩けぬゆえ急ぎが消えず、横乗せが止まらず、永久に閉じる
+ *   （実害 2026-09-04・家老 cursor: cmd_8 の急報が届いた瞬間に全命が止まり、
+ *   nudge が三度 /new-chat を撃つに至った）
+ *
+ * 引数は副命令の語の列（`rest`）。旗は含まぬ。
+ */
+export function rideAlongSuppressed(rest: readonly string[]): boolean {
+  if (rest.length === 0) return true;
+  if (rest[0] === 'inbox' || rest[0] === 'nudge') return true;
+  if (rest[0] === 'guard' && rest[1] === 'hook') return true;
+  return false;
+}
+
 export function summarize(db: Database, agent: string): Summary {
   const rows = db
     .query('SELECT msg_type, count(*) c FROM inbox WHERE agent = ? AND read = 0 GROUP BY msg_type ORDER BY c DESC, msg_type')

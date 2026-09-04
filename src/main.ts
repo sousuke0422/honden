@@ -63,7 +63,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
-import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong } from './inbox';
+import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSuppressed } from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock } from './nudge';
@@ -2182,11 +2182,12 @@ export async function main(argv: string[]): Promise<number> {
    * どのコマンドの出力にも、呼び出し主の急ぎ未読を一行だけ横乗せする。
    * 急報（cmd_update = 範囲の増減など）の**全 CLI 共通の第一経路**。
    * reset で仕掛かりを捨てず、作業中の者へ届く（詳細は inbox.ts）。
-   * inbox 系（見に行く行為そのもの）と nudge（末尾の JSON 行が芯への返事）には
-   * 載せぬ。横乗せの失敗で本務を落とさぬ。
+   * 載せぬ口は src/inbox.ts の rideAlongSuppressed に書いてある（inbox 系・
+   * nudge・**guard hook**——最後のは CLI が JSON として読む口で、一行混ざると
+   * fail-closed の cursor が以後の全 Shell を拒む）。横乗せの失敗で本務を落とさぬ。
    */
   const ridealong = (): void => {
-    if (rest[0] === 'inbox' || rest[0] === 'nudge' || rest.length === 0) return;
+    if (rideAlongSuppressed(rest)) return;
     try {
       const id = selfId();
       if (!id) return;
