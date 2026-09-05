@@ -81,8 +81,11 @@ export function captureBusy(pane: Pane, cli: string | null): boolean {
  * 誤検知は合図が数分遅れるだけ、見逃しは従前どおりの梯子。
  * 尻の数行だけを見る（scroll-back の古い文で false を作らぬ・busy と同じ作法）。
  */
+// 実物の旗（殿採取・2026-09-05）: You've hit your session limit · resets 6:20pm (Asia/Tokyo)
+// —— 初版の紋様は「session limit」も「resets 6:20pm」（at 無し）も取りこぼした。
+// 実文をそのまま試験に釘打ちしてある（test/busy.test.ts）。
 const LIMITED =
-  /(usage limit|limit reached|5-?h(our)? limit|rate limit(ed)?|resets? at|try again (at|in)|out of (free )?(usage|credits)|quota (exceeded|reached)|上限に達し|利用制限)/i;
+  /(hit your \w+ limit|(usage|session) limit|limit reached|5-?h(our)? limit|rate limit(ed)?|resets?( at)? \d{1,2}(:\d{2})?\s*(am|pm)?|try again (at|in)|out of (free )?(usage|credits)|quota (exceeded|reached)|上限に達し|利用制限)/i;
 
 export function isLimitedText(capture: string): boolean {
   const visible = capture
