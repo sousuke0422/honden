@@ -19,6 +19,21 @@ skills/
   skill-creator -> vendor/skill-creator                  近道
 ```
 
+## 拾わせる（.claude/skills へ繋ぐ）
+
+この棚はただの置き場で、Claude Code が拾うのは `.claude/skills/` である。
+**繋ぎ先の既定は honden 自身**——陣の session はみな honden の根を cwd に
+起きるので、task や vrt など案件側の repo に置いても誰の目にも入らない。
+
+```
+bash scripts/setup_skills.sh --all                      # 棚の全部を honden へ
+bash scripts/setup_skills.sh honden-coder skill-creator # 選んで
+bash scripts/setup_skills.sh --unlink honden-coder      # 外す
+bash scripts/setup_skills.sh --project <道> --all       # その repo で直に claude を開く時だけ
+```
+
+繋ぎ先に実体（link でない物）があれば触らない。繋ぎは machine-local で git には載らない。
+
 ## 三つに分ける
 
 はじめは「自作」と「借り物」の二つしか無かった。
