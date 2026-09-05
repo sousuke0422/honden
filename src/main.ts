@@ -67,7 +67,7 @@ import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSupp
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock } from './nudge';
-import { captureBusy } from './busy';
+import { captureBusy, captureLimited } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
 import { emphasize } from './term';
@@ -948,6 +948,16 @@ async function runNudgeInner(
     if (p.send && p.level === 3 && p.pane && captureBusy(p.pane, p.cli)) busy.add(p.agent);
   }
   if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy });
+  // **枠切れの pane には何も撃たぬ。** 5h 枠の枯渇で止まった相手に段梯子を
+  // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。
+  // 段も reset の刻印も進めぬ——枠が明けた最初の周から通常の梯子が再開する。
+  for (const p of plans) {
+    if (p.send && p.pane && captureLimited(p.pane)) {
+      p.send = false;
+      p.reason = '使用枠が尽きておる（pane に案内あり）。回復まで撃たぬ——/clear で仕掛かりを焼かぬ';
+      p.nextInMs = 5 * 60_000;
+    }
+  }
   const lines: string[] = [];
 
   if (plans.length === 0) {

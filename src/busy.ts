@@ -69,3 +69,32 @@ export function captureBusy(pane: Pane, cli: string | null): boolean {
   if (!r.success) return false; // 写せぬなら idle 扱い — 撃てぬ理由は send が別途返す
   return isBusyText(r.stdout.toString(), cli);
 }
+
+/**
+ * 使用枠が尽きておるか — pane の画面から見立てる。
+ *
+ * 5h 枠の枯渇で CLI が止まると、段梯子が /clear まで上がって
+ * **仕掛かりを焼いた上で空の prompt で固まる**（殿の実戦報せ・2026-09-05）。
+ * 枠切れの相手には何を撃っても無駄で、clear だけが実害を残す。
+ *
+ * busy と同じく画面の文字列に頼る。誤りの向きは安全側——
+ * 誤検知は合図が数分遅れるだけ、見逃しは従前どおりの梯子。
+ * 尻の数行だけを見る（scroll-back の古い文で false を作らぬ・busy と同じ作法）。
+ */
+const LIMITED =
+  /(usage limit|limit reached|5-?h(our)? limit|rate limit(ed)?|resets? at|try again (at|in)|out of (free )?(usage|credits)|quota (exceeded|reached)|上限に達し|利用制限)/i;
+
+export function isLimitedText(capture: string): boolean {
+  const visible = capture
+    .replace(/\s+$/, '')
+    .split('\n')
+    .filter((l) => l.trim() !== '');
+  return LIMITED.test(visible.slice(-8).join('\n'));
+}
+
+/** 実際に pane を写して見立てる。写せぬなら「切れておらぬ」扱い（撃つ側の判断へ譲る）。 */
+export function captureLimited(pane: Pane): boolean {
+  const r = Bun.spawnSync(['tmux', 'capture-pane', '-t', pane.id, '-p']);
+  if (!r.success) return false;
+  return isLimitedText(r.stdout.toString());
+}

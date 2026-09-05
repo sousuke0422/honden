@@ -5,7 +5,7 @@
  * （sleep 300 実行中の pane）から採った。
  */
 import { describe, expect, test } from 'bun:test';
-import { isBusyText } from '../src/busy';
+import { isBusyText , isLimitedText } from '../src/busy';
 
 describe('cursor', () => {
   test('処理中は ctrl+c to stop が出る → busy', () => {
@@ -71,5 +71,26 @@ describe('opencode', () => {
 
   test('空白画面（描画前）→ idle 扱いで回復を塞がぬ', () => {
     expect(isBusyText('   \n  \n', 'opencode')).toBe(false);
+  });
+});
+
+describe('枠切れの見立て（isLimitedText）', () => {
+  test('各 CLI の定型文で立つ', () => {
+    for (const s of [
+      "❯\nYou've reached your usage limit. Your limit resets at 8am",
+      '5-hour limit reached ∙ resets 2pm',
+      "You've hit your usage limit. Try again at 14:00.",
+      'Rate limited. Please wait.',
+      '利用制限に達しました。しばらくお待ちください',
+    ]) expect(isLimitedText(`something\n${s}`)).toBe(true);
+  });
+  test('尻の 8 行だけを見る——scroll-back の古い旗では立たぬ', () => {
+    const old = 'usage limit reached\n' + Array.from({ length: 10 }, (_, i) => `行${i}`).join('\n') + '\n❯ ';
+    expect(isLimitedText(old)).toBe(false);
+  });
+  test('素の prompt・普通の仕事の文では立たぬ', () => {
+    expect(isLimitedText('❯ ')).toBe(false);
+    expect(isLimitedText('テストを 3 本足した。limit という語は本文に無い')).toBe(false);
+    expect(isLimitedText('Working (12s · esc to interrupt)')).toBe(false);
   });
 });
