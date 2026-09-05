@@ -78,6 +78,7 @@ describe('枠切れの見立て（isLimitedText）', () => {
   test('各 CLI の定型文で立つ', () => {
     for (const s of [
       "❯\nYou've reached your usage limit. Your limit resets at 8am",
+      "You've hit your session limit · resets 6:20pm (Asia/Tokyo)", // 殿採取の実文
       '5-hour limit reached ∙ resets 2pm',
       "You've hit your usage limit. Try again at 14:00.",
       'Rate limited. Please wait.',
