@@ -175,7 +175,7 @@ Step 1: 名乗り is injected from the pane's @agent_id (never guessed, never ta
 Step 2: honden inbox read  → 己に届いておる報せを読む。task_assigned が任である
 Step 3: honden lease       → 持ち場と期限を確かめる。任が無ければ待て
 Step 4: 他人の持ち場に触れる前に honden claim check <場所> で空きを問え
-Step 5: 処理し終えたら honden inbox ack --all で既読にせよ
+Step 5: 読んだらすぐ honden inbox ack --all で既読にせよ（着手の印。処理は ack の後。ack は「読んだ」であって「済んだ」ではない）
 ```
 
 **名乗りが済むまで inbox を処理するな。** A nudge may land first; ignore it until Step 1 is settled.

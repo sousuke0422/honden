@@ -100,6 +100,6 @@ All agents: Follow the Session Start / Recovery procedure. Key steps:
 1. Identify self: `tmux display-message -t "$TMUX_PANE" -p '#{@agent_id}'`
    （`honden` も同じ pane の `@agent_id` から名乗りを取る。**pane の番号で自分を数えるな。**食い違えば `honden` が「名乗りが食い違っておる」と言う。黙って片方を採ってはならぬ）
 2. `honden brief` — 指示書はこれで出る。**生成物は無い**（役は名乗りから、CLI は名簿から引く。`--role X` で明示もできる）
-3. Rebuild state from the 正本: `honden inbox read` → `honden lease`（自分の持ち場と期限）→ `honden cmd show <cmd_id>`（受け入れ条件と覆い具合）。読んだ報せは `honden inbox ack --all` で既読にする
+3. Rebuild state from the 正本: `honden inbox read` → `honden lease`（自分の持ち場と期限）→ `honden cmd show <cmd_id>`（受け入れ条件と覆い具合）。読んだ報せはすぐ `honden inbox ack --all` で既読にする（着手の印。処理は ack の後。ack は「読んだ」であって「済んだ」ではない）
 5. Review forbidden actions, then start work
    （禁じ手は `honden brief` の common/forbidden_actions.md に載る。撃つ前に迷えば `honden guard check --cmd '<命令>'`。門に弾かれたなら `honden guard appeal --cmd '<命令>' --reason "…"` で直訴せよ。自分で迂回するな）

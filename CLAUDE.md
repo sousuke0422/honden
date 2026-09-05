@@ -22,7 +22,7 @@ honden brief
 
 ```
 honden inbox read          # 己に届いておる報せを読む
-honden inbox ack --all     # 処理したものを既読にする
+honden inbox ack --all     # 読んだらすぐ既読にする（着手の印。処理は ack の後）
 ```
 
 既読にできるのは己の分だけである。他人の分を既読にすれば、相手は永久に気づけぬ。
