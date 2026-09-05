@@ -42,7 +42,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { tx, journal } from './store';
-import { checkReason } from './validate';
+import { checkReason, validate, explain } from './validate';
 import { deliver, signal } from './inbox';
 import { CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { parseUnified, applyHunks } from './patch';
@@ -189,6 +189,10 @@ export function amendCmd(
     if (!Array.isArray(list) || list.length === 0) {
       return { ok: false, message: '受け入れ条件は空にできぬ。一覧で並べられよ。' };
     }
+    // 中身が文かは起草と同じ物差しで見る。ここだけ素通しにすると、
+    // 直すための amend が "[object Object]" を書き込みかねぬ。
+    const bad = validate({ acceptance_criteria: { required: true, list: true } }, { acceptance_criteria: list });
+    if (bad.length > 0) return { ok: false, message: explain(bad) };
     const old = db
       .query('SELECT idx, text FROM cmd_acceptance WHERE cmd_id = ? ORDER BY idx')
       .all(cmdId) as { idx: number; text: string }[];

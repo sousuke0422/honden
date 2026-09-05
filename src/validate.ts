@@ -125,6 +125,21 @@ export function validate(schema: Schema, input: Record<string, unknown>): Proble
         });
       } else if (v.length === 0 && !spec.allowEmpty) {
         problems.push({ field: key, message: '一覧が空', hint: spec.about });
+      } else {
+        // 一覧の中身は文であること。YAML は `- 報告に載せる: HEAD の sha` を
+        // 写像 {報告に載せる: "…"} と読む。素通しすると正本に "[object Object]" が
+        // 入り、足軽が「読めぬ」と報告して一巡が無駄になる（実害 2026-09-05）。
+        v.forEach((item, i) => {
+          if (typeof item !== 'string' || item.trim() === '') {
+            problems.push({
+              field: `${key}[${i + 1}]`,
+              got: item,
+              message: '一覧の中身が文ではない',
+              hint:
+                '「語: 続き」の形は YAML が写像と読む。折り畳み（>-）で包むか、コロンの後の空白を外されよ',
+            });
+          }
+        });
       }
       continue;
     }

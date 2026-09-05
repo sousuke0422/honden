@@ -125,6 +125,28 @@ describe('追い返し方', () => {
     expect(p.find((x) => x.field === 'bdy')?.hint).toContain('body');
   });
 
+  test('一覧の中身が写像なら弾く (`- 語: 続き` は YAML が写像と読む)', () => {
+    const r = pickInput({
+      flags: {},
+      stdin: 'acceptance_criteria:\n  - 一つ目\n  - 報告に載せる: HEAD の sha\n',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const p = validate({ acceptance_criteria: { required: true, list: true } }, r.value);
+    expect(p).toHaveLength(1);
+    expect(p[0]?.field).toBe('acceptance_criteria[2]');
+    expect(p[0]?.message).toBe('一覧の中身が文ではない');
+    expect(p[0]?.hint).toContain('>-');
+    // 折り畳みで包めば通る
+    const ok = pickInput({
+      flags: {},
+      stdin: 'acceptance_criteria:\n  - 一つ目\n  - >-\n    報告に載せる: HEAD の sha\n',
+    });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(validate({ acceptance_criteria: { required: true, list: true } }, ok.value)).toHaveLength(0);
+  });
+
   test('書き込んでいないと明言する', () => {
     const r = run({ to: 'karou' });
     expect(r.err).toContain('書き込みは行っておらぬ');
