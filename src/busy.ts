@@ -20,6 +20,7 @@
  *   T1 実測済み = claude / cursor / codex。T2 = opencode（移植・未実測）。
  *   T3 = copilot / kimi（純 port・この環境では使えぬ。使う時は再校正）。
  */
+import type { Database } from 'bun:sqlite';
 import type { Pane } from './pane';
 
 const SPINNER =
@@ -100,4 +101,36 @@ export function captureLimited(pane: Pane): boolean {
   const r = Bun.spawnSync(['tmux', 'capture-pane', '-t', pane.id, '-p']);
   if (!r.success) return false;
   return isLimitedText(r.stdout.toString());
+}
+
+/**
+ * 働いておる印 — 画面ではなく正本（台帳と lease）から見立てる。
+ *
+ * 画面の見立て（isBusyText）は CLI の描き方に依る。cursor は 'ctrl+c to stop' を
+ * 出さぬ形で長い命（coder ssh …）を回すことがあり、その間は idle と見えて
+ * 段 3 の文脈消しが刺さる。ashigaru6 は cmd_15 で配られてから 19 分の間に
+ * claim と guard.deny を台帳へ刻みながら三度 /new-chat を撃たれ、仕掛かりを
+ * 失った（台帳実測・2026-09-06 01:03〜01:22 JST）。
+ *
+ * 台帳に己の名で刻めるのは生きて動いておる者だけである。直近に刻みがあるか、
+ * 生きた lease を握っておるなら「手が塞がっておる」と見て文脈消しを延期する。
+ * 死んでおる者は刻まぬし、lease も切れるゆえ、いずれ梯子は届く。
+ * 誤りの向きは busy と同じく安全側（延期）に倒れる。
+ */
+export const WORKING_WINDOW_MS = 10 * 60_000;
+
+export function isWorking(db: Database, agent: string, now: Date = new Date()): string | null {
+  const sinceIso = new Date(now.getTime() - WORKING_WINDOW_MS).toISOString();
+  const row = db
+    .query('SELECT action, at FROM ledger WHERE actor = ? AND at > ? ORDER BY at DESC LIMIT 1')
+    .get(agent, sinceIso) as { action: string; at: string } | null;
+  if (row) {
+    const ago = Math.round((now.getTime() - new Date(row.at).getTime()) / 60_000);
+    return `台帳に ${ago} 分前の刻み（${row.action}）`;
+  }
+  const lease = db
+    .query('SELECT lease_until FROM task WHERE agent = ? AND holder IS NOT NULL AND lease_until > ?')
+    .get(agent, now.toISOString()) as { lease_until: string } | null;
+  if (lease) return `lease を ${lease.lease_until} まで握っておる`;
+  return null;
 }

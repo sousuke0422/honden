@@ -181,6 +181,8 @@ export function plan(
     panes?: Map<string, Pane>;
     /** 手が塞がっておる者。段 3（文脈消し）を素の合図へ降ろして延期する。 */
     busy?: Set<string>;
+    /** 塞がっておると見た根拠（画面か、台帳か、lease か）。台帳へ残すため。 */
+    busyReason?: Map<string, string>;
   } = {},
 ): Plan[] {
   const p = opts.panes ?? panes();
@@ -255,8 +257,11 @@ export function plan(
         // 拒む（殿実測 2026-08-27）。旧 watcher と同じく次の周へ延期し、
         // その間は素の合図で叩き続ける。reset の刻印を残さぬゆえ、
         // 手すきになった最初の周で文脈消しが届く。
+        const why = opts.busyReason?.get(entry.id);
         out.push(
-          mark(build(entry.id, entry.cli, pane, s, 2, true, '手が塞がっておるゆえ文脈消しを延期', now, st, 3)),
+          mark(
+            build(entry.id, entry.cli, pane, s, 2, true, `手が塞がっておるゆえ文脈消しを延期${why ? `（${why}）` : ''}`, now, st, 3),
+          ),
         );
         continue;
       }
@@ -326,7 +331,10 @@ export function record(db: Database, p: Plan, now: Date, reason?: string, by?: s
     target: p.agent,
     detail:
       `unread=${p.unread} pane=${p.pane?.label ?? 'なし'} ${JSON.stringify(p.text)}` +
-      (p.byExplicitWake && reason ? ` reason=${JSON.stringify(reason)}` : ''),
+      (p.byExplicitWake && reason ? ` reason=${JSON.stringify(reason)}` : '') +
+      // 段 3 を降ろして撃った跡は、なぜ降ろしたかまで残す。後から
+      // 「働いておる者に撃ったか」を台帳だけで辿れるように。
+      (p.escalationLevel === 3 && p.level === 2 && p.reason ? ` deferred=${JSON.stringify(p.reason)}` : ''),
   });
 }
 

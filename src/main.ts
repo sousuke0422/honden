@@ -67,7 +67,7 @@ import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSupp
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock } from './nudge';
-import { captureBusy, captureLimited } from './busy';
+import { captureBusy, captureLimited, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
 import { emphasize } from './term';
@@ -943,11 +943,22 @@ async function runNudgeInner(
   let plans = plan(db, now, { wakeShogun });
   // 段 3 の的が手すきかを見る。busy の相手に文脈消しを撃っても拒まれる
   // （codex 実測）ゆえ、塞がっておる者は素の合図へ降ろして延期する。
+  // 画面だけでは見逃す（cursor は長い命の間 'ctrl+c to stop' を出さぬ）ゆえ、
+  // 台帳の刻みと lease も見る。働いておる者の文脈を消せば仕掛かりが消える。
   const busy = new Set<string>();
+  const busyReason = new Map<string, string>();
   for (const p of plans) {
-    if (p.send && p.level === 3 && p.pane && captureBusy(p.pane, p.cli)) busy.add(p.agent);
+    if (!(p.send && p.level === 3)) continue;
+    const working = isWorking(db, p.agent, now);
+    if (working) {
+      busy.add(p.agent);
+      busyReason.set(p.agent, working);
+    } else if (p.pane && captureBusy(p.pane, p.cli)) {
+      busy.add(p.agent);
+      busyReason.set(p.agent, '画面が処理中');
+    }
   }
-  if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy });
+  if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy, busyReason });
   // **枠切れの pane には何も撃たぬ。** 5h 枠の枯渇で止まった相手に段梯子を
   // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。
   // 段も reset の刻印も進めぬ——枠が明けた最初の周から通常の梯子が再開する。

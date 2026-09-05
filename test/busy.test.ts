@@ -5,7 +5,8 @@
  * （sleep 300 実行中の pane）から採った。
  */
 import { describe, expect, test } from 'bun:test';
-import { isBusyText , isLimitedText } from '../src/busy';
+import { isBusyText, isLimitedText, isWorking } from '../src/busy';
+import { openStore, journal } from '../src/store';
 
 describe('cursor', () => {
   test('処理中は ctrl+c to stop が出る → busy', () => {
@@ -93,5 +94,46 @@ describe('枠切れの見立て（isLimitedText）', () => {
     expect(isLimitedText('❯ ')).toBe(false);
     expect(isLimitedText('テストを 3 本足した。limit という語は本文に無い')).toBe(false);
     expect(isLimitedText('Working (12s · esc to interrupt)')).toBe(false);
+  });
+});
+
+describe('働いておる印（isWorking）— 画面ではなく正本から見立てる', () => {
+  const now = new Date('2026-09-06T01:17:00Z');
+  const fresh = () => {
+    const db = openStore({ path: ':memory:' });
+    db.run("INSERT OR IGNORE INTO task(agent, task_id, updated_at, raw) VALUES ('ashigaru6', 'idle', '2026-09-06T00:00:00Z', '{}')");
+    return db;
+  };
+
+  test('何も刻んでおらず lease も無い → 働いておらぬ', () => {
+    const db = fresh();
+    expect(isWorking(db, 'ashigaru6', now)).toBeNull();
+  });
+
+  test('直近 10 分に己の名で台帳へ刻んでおる → 働いておる（guard.deny の実例）', () => {
+    const db = fresh();
+    journal(db, { actor: 'ashigaru6', action: 'guard.deny', target: 'D005', at: new Date('2026-09-06T01:15:04Z') });
+    expect(isWorking(db, 'ashigaru6', now)).toContain('guard.deny');
+  });
+
+  test('刻みが 10 分より古ければ数えぬ', () => {
+    const db = fresh();
+    journal(db, { actor: 'ashigaru6', action: 'claim.take', at: new Date('2026-09-06T01:03:27Z') });
+    expect(isWorking(db, 'ashigaru6', now)).toBeNull();
+  });
+
+  test('他人の刻みや nudge 自身の刻みは数えぬ', () => {
+    const db = fresh();
+    journal(db, { actor: 'nudge', action: 'nudge.L2', target: 'ashigaru6', at: now });
+    journal(db, { actor: 'karo', action: 'inbox.write', target: 'ashigaru6', at: now });
+    expect(isWorking(db, 'ashigaru6', now)).toBeNull();
+  });
+
+  test('生きた lease を握っておる → 働いておる。切れておれば数えぬ', () => {
+    const db = fresh();
+    db.run("UPDATE task SET holder = 'ashigaru6', lease_until = '2026-09-06T01:33:27Z' WHERE agent = 'ashigaru6'");
+    expect(isWorking(db, 'ashigaru6', now)).toContain('lease');
+    db.run("UPDATE task SET lease_until = '2026-09-06T01:10:00Z' WHERE agent = 'ashigaru6'");
+    expect(isWorking(db, 'ashigaru6', now)).toBeNull();
   });
 });
