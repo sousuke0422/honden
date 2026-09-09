@@ -67,7 +67,7 @@ import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSupp
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock } from './nudge';
-import { captureBusy, captureLimited, isWorking } from './busy';
+import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
 import { emphasize } from './term';
