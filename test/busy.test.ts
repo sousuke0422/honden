@@ -80,6 +80,7 @@ describe('枠切れの見立て（isLimitedText）', () => {
     for (const s of [
       "❯\nYou've reached your usage limit. Your limit resets at 8am",
       "You've hit your session limit · resets 6:20pm (Asia/Tokyo)", // 殿採取の実文
+      "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/codex/settings/usage to purchase more credits or try again at 5:55 AM.", // codex 実文（殿採取 2026-09-10）
       '5-hour limit reached ∙ resets 2pm',
       "You've hit your usage limit. Try again at 14:00.",
       'Rate limited. Please wait.',
