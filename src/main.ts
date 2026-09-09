@@ -963,10 +963,14 @@ async function runNudgeInner(
   // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。
   // 段も reset の刻印も進めぬ——枠が明けた最初の周から通常の梯子が再開する。
   for (const p of plans) {
-    if (p.send && p.pane && captureLimited(p.pane)) {
+    if (!p.send || !p.pane) continue;
+    const wait = captureLimitedWaitMs(p.pane);
+    if (wait !== null) {
+      // 旗に明ける刻が書いてあれば、その刻の直後（+2 分）に再訪する。
+      // 読めねば 5 分の盲目再訪。段も reset の刻印も進めぬのは従前どおり。
       p.send = false;
-      p.reason = '使用枠が尽きておる（pane に案内あり）。回復まで撃たぬ——/clear で仕掛かりを焼かぬ';
-      p.nextInMs = 5 * 60_000;
+      p.reason = `使用枠が尽きておる（pane に案内あり）。約${Math.round(wait / 60_000)}分後に再訪——/clear で仕掛かりを焼かぬ`;
+      p.nextInMs = wait;
     }
   }
   const lines: string[] = [];

@@ -134,3 +134,50 @@ export function isWorking(db: Database, agent: string, now: Date = new Date()): 
   if (lease) return `lease を ${lease.lease_until} まで握っておる`;
   return null;
 }
+
+/**
+ * 枠切れの旗から「明ける刻」を読む（殿の求め・2026-09-10）。
+ *
+ * 実物の旗は刻を刷る:
+ *   claude: You've hit your session limit · resets 6:20pm (Asia/Tokyo)
+ *   codex:  … or try again at 5:55 AM.
+ *
+ * 刻が読めれば「その刻 + 2 分」までの待ちを返し、読めねば 5 分（従前の盲目再訪）。
+ * 枠切れでなければ null。刻は端末の locale の壁時計と看做す（旗の TZ 註記が
+ * 母屋と食い違う CLI は今のところ無い）。過ぎた刻は翌日と読む。
+ * 待ちは 6 時間で頭打ち——読み違いで一昼夜黙る事故を作らぬ。
+ */
+const LIMITED_FALLBACK_MS = 5 * 60_000;
+const LIMITED_MARGIN_MS = 2 * 60_000;
+const LIMITED_MAX_WAIT_MS = 6 * 60 * 60_000;
+const RESET_TIME = /(?:resets?(?:\s+at)?|try again at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+
+export function limitedWaitMs(capture: string, now: Date): number | null {
+  if (!isLimitedText(capture)) return null;
+  const tail = capture
+    .replace(/\s+$/, '')
+    .split('\n')
+    .filter((l) => l.trim() !== '')
+    .slice(-8)
+    .join('\n');
+  const m = RESET_TIME.exec(tail);
+  if (!m) return LIMITED_FALLBACK_MS;
+  let h = Number(m[1]);
+  const min = Number(m[2] ?? '0');
+  const ap = m[3]?.toLowerCase();
+  if (ap === 'pm' && h !== 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  if (h > 23 || min > 59) return LIMITED_FALLBACK_MS;
+  const t = new Date(now);
+  t.setHours(h, min, 0, 0);
+  if (t.getTime() <= now.getTime()) t.setDate(t.getDate() + 1);
+  const wait = t.getTime() - now.getTime() + LIMITED_MARGIN_MS;
+  return Math.min(wait, LIMITED_MAX_WAIT_MS);
+}
+
+/** pane を写して待ちを見立てる。枠切れでなければ null。 */
+export function captureLimitedWaitMs(pane: Pane, now: Date = new Date()): number | null {
+  const r = Bun.spawnSync(['tmux', 'capture-pane', '-t', pane.id, '-p']);
+  if (!r.success) return null;
+  return limitedWaitMs(r.stdout.toString(), now);
+}

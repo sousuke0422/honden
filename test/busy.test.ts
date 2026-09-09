@@ -5,7 +5,7 @@
  * （sleep 300 実行中の pane）から採った。
  */
 import { describe, expect, test } from 'bun:test';
-import { isBusyText, isLimitedText, isWorking } from '../src/busy';
+import { isBusyText, isLimitedText, isWorking , limitedWaitMs } from '../src/busy';
 import { openStore, journal } from '../src/store';
 
 describe('cursor', () => {
@@ -136,5 +136,33 @@ describe('働いておる印（isWorking）— 画面ではなく正本から見
     expect(isWorking(db, 'ashigaru6', now)).toContain('lease');
     db.run("UPDATE task SET lease_until = '2026-09-06T01:10:00Z' WHERE agent = 'ashigaru6'");
     expect(isWorking(db, 'ashigaru6', now)).toBeNull();
+  });
+});
+
+describe('枠切れの明ける刻を読む（limitedWaitMs）', () => {
+  const at = (h: number, m: number) => new Date(2026, 8, 10, h, m, 0, 0);
+  const MIN = 60_000;
+  test('claude 実文: resets 6:20pm を 15:00 に読むと 1 時間 22 分', () => {
+    const w = limitedWaitMs("You've hit your session limit · resets 6:20pm (Asia/Tokyo)", at(15, 0));
+    expect(w).toBe((18 * 60 + 20 - 15 * 60) * MIN + 2 * MIN);
+  });
+  test('codex 実文: try again at 5:55 AM を 23:00 に読むと翌朝——ただし 6 時間で頭打ち', () => {
+    const w = limitedWaitMs('or try again at 5:55 AM.', at(23, 0));
+    expect(w).toBe(6 * 60 * MIN);
+  });
+  test('過ぎた刻は翌日と読む（頭打ちの内側）', () => {
+    const w = limitedWaitMs('resets 2am', at(22, 30));
+    expect(w).toBe((3 * 60 + 30) * MIN + 2 * MIN);
+  });
+  test('刻の無い旗は 5 分の盲目再訪', () => {
+    expect(limitedWaitMs('Rate limited. Please wait.', at(12, 0))).toBe(5 * MIN);
+  });
+  test('枠切れでなければ null', () => {
+    expect(limitedWaitMs('❯ ', at(12, 0))).toBeNull();
+    expect(limitedWaitMs('Working (3s · esc to interrupt)', at(12, 0))).toBeNull();
+  });
+  test('12 時の折り返し: 12:30pm と 12:05am', () => {
+    expect(limitedWaitMs('usage limit — resets 12:30pm', at(12, 0))).toBe(30 * MIN + 2 * MIN);
+    expect(limitedWaitMs('usage limit — try again at 12:05 AM', at(23, 50))).toBe(15 * MIN + 2 * MIN);
   });
 });
