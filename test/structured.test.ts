@@ -63,7 +63,7 @@ describe('門自身の単独呼び出しは平面の紋様を免除する', () =
 
   test('二重引用の --cmd 内にある連結記号も、外の連結とは取り違えぬ', () => {
     const cmd = 'honden guard appeal --cmd "tmux send-keys -t %9 x; rm -rf /"';
-    expect(judge(cmd).rule).toBe('D001');
+    expect(judge(cmd).permission).toBe('deny');
     expect(judgeStructured(cmd, run).permission).toBe('allow');
   });
 
