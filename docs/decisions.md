@@ -2189,6 +2189,17 @@ cmd new / report qc / decide / guard grant へ配線されておらぬ**。外�
 D012 でも試験が偽陽性を釣った: `src/guard.ts.md` に `guard.ts` が当たった。
 `(?![\w.])` で締めた。**門を広げるたびに、門が邪魔者になる道も広がる。**
 
+**追記（2026-09-11）**: 上の「`Edit(...)` / `Write(...)` を足した」は、
+実装と食い違っておった。実際の deny は九経路とも `Edit(...)` だけで、ファイルを
+丸ごと置く `Write(...)` と複数箇所を替える `MultiEdit(...)` が素通りしていた。
+旧陣から殿の裁可（2026-09-10）を受けて、既存の `Edit(...)` を残したまま、
+`.cursor/hooks.json`・`.cursor/hooks/**`・`.codex/hooks.json`・
+`.codex/hooks/**`・`.claude/settings.json`・`src/guard.ts`・`src/identity.ts`・
+`config/opencode-permissions.yaml`・`agents/**` の九経路へ両方を足した。
+`NotebookEdit` は notebook のセルだけを扱い、この九経路のいずれも対象にできぬため
+加えておらぬ。触った範囲はこの deny 表、`judgeStructured` 入口の門自身免除、
+その試験、および本追記だけである。
+
 **残る穴（塞いでおらぬ・優先順）**
 
 | 筋 | 中身 | 見立て |

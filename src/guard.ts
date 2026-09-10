@@ -367,6 +367,14 @@ const RULES: Rule[] = [
  * 「解けぬ」という一事で拒みに落ちる。
  */
 export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd): Verdict {
+  // 門自身の副命令まで平面の紋様で先に止めると、たとえば直訴の --cmd に
+  // D014 の字面を載せただけで直訴そのものが閉じる。門を検める六つの口に限り、
+  // **単独の単純命令**なら中の字面を裁かぬ。judge 単体は従来どおりである。
+  //
+  // 引用内の `; | >` は --cmd の値にすぎぬ。一方、引用外の連結・向き替え・
+  // 置換・改行は別の命を走らせうるため、免除しない。閉じぬ引用も同じである。
+  if (isStandaloneGuardInvocation(raw)) return { permission: 'allow' };
+
   // 一、紋様の層。取りこぼしはあれど、取り過ぎはせぬ。
   const flat = judge(cmd);
   if (flat.permission === 'deny') return flat;
@@ -408,6 +416,81 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
     if (v.permission === 'deny') return v;
   }
   return { permission: 'allow' };
+}
+
+const GUARD_EXEMPT_SUBCOMMANDS = new Set([
+  'appeal',
+  'check',
+  'facts',
+  'grant',
+  'selftest',
+  'hook',
+]);
+
+/** 引用を保ったまま、一つの単純命令であるかを検める。 */
+function isStandaloneGuardInvocation(raw: string): boolean {
+  const words: string[] = [];
+  let word = '';
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+
+  const finishWord = () => {
+    if (word !== '') words.push(word);
+    word = '';
+  };
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i]!;
+
+    // 改行は引用内でも免除せぬ。命の境を曖昧にしないためである。
+    if (ch === '\n' || ch === '\r') return false;
+
+    if (escaped) {
+      word += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (ch === "'") quote = undefined;
+      else word += ch;
+      continue;
+    }
+
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = undefined;
+        continue;
+      }
+      // 二重引用内でも置換は実行される。--cmd の値として安全に渡すなら
+      // 単一引用を使わせ、ここでは別命の混入として退ける。
+      if (ch === '`' || (ch === '$' && raw[i + 1] === '(')) return false;
+      word += ch;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      finishWord();
+      continue;
+    }
+    if (';&|<>()`'.includes(ch) || (ch === '$' && raw[i + 1] === '(')) return false;
+    word += ch;
+  }
+
+  if (quote || escaped) return false;
+  finishWord();
+  if (words.length < 3) return false;
+  const executable = words[0]!;
+  return /(?:^|\/)honden$/.test(executable) && words[1] === 'guard' && GUARD_EXEMPT_SUBCOMMANDS.has(words[2]!);
 }
 
 export function judge(cmd: string): Verdict {

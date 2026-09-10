@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test';
 import { judge, judgeStructured, splitOtp } from '../src/guard';
 import { realRunner } from '../src/parse';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 
 const ROOT = join(import.meta.dir, '..');
 const run = realRunner(ROOT);
@@ -48,6 +49,83 @@ describe('通すべきものは通る（誤検知を出さぬ）', () => {
   for (const cmd of fine) {
     test(`通す: ${cmd}`, () => expect(deny(cmd)).toBe(false));
   }
+});
+
+describe('門自身の単独呼び出しは平面の紋様を免除する', () => {
+  const subcommands = ['appeal', 'check', 'facts', 'grant', 'selftest', 'hook'];
+  for (const subcommand of subcommands) {
+    test(`${subcommand}: --cmd の引用内に D014 があっても通す`, () => {
+      const cmd = `honden guard ${subcommand} --cmd 'tmux send-keys -t %9 x'`;
+      expect(judge(cmd).rule).toBe('D014'); // 平面だけなら止まる陽性対照
+      expect(judgeStructured(cmd, run).permission).toBe('allow');
+    });
+  }
+
+  test('二重引用の --cmd 内にある連結記号も、外の連結とは取り違えぬ', () => {
+    const cmd = 'honden guard appeal --cmd "tmux send-keys -t %9 x; rm -rf /"';
+    expect(judge(cmd).rule).toBe('D001');
+    expect(judgeStructured(cmd, run).permission).toBe('allow');
+  });
+
+  test('直訴の後ろへ別の破壊的な命を連結した形は免除せぬ', () => {
+    const cmd = "honden guard appeal --cmd 'tmux send-keys -t %9 x' ; rm -rf /";
+    expect(judgeStructured(cmd, run).permission).toBe('deny');
+  });
+
+  test('引用外のパイプ・向き替え・置換・改行は免除せぬ', () => {
+    const unsafe = [
+      "honden guard appeal --cmd 'tmux send-keys -t %9 x' | sh",
+      "honden guard appeal --cmd 'tmux send-keys -t %9 x' > /tmp/result",
+      "honden guard appeal --cmd 'tmux send-keys -t %9 x' $(rm -rf /)",
+      "honden guard appeal --cmd 'tmux send-keys -t %9 x'\nrm -rf /",
+    ];
+    for (const cmd of unsafe) expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+  });
+
+  test('閉じておらぬ引用は免除せぬ', () => {
+    const cmd = "honden guard appeal --cmd 'tmux send-keys -t %9 x";
+    expect(judgeStructured(cmd, run).permission).toBe('deny');
+  });
+
+  test('似た名の副命令・別の命は免除せぬ', () => {
+    for (const cmd of [
+      "honden guard unknown --cmd 'tmux send-keys -t %9 x'",
+      "echo honden guard appeal --cmd 'tmux send-keys -t %9 x'",
+    ]) {
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+});
+
+describe('門の自衛は上書き系の道具でも閉じる', () => {
+  test('九経路の Edit / Write / MultiEdit をすべて deny する', () => {
+    const settings = JSON.parse(readFileSync(join(ROOT, '.claude/settings.json'), 'utf8')) as {
+      permissions: { deny: string[] };
+    };
+    const paths = [
+      '.cursor/hooks.json',
+      '.cursor/hooks/**',
+      '.codex/hooks.json',
+      '.codex/hooks/**',
+      '.claude/settings.json',
+      'src/guard.ts',
+      'src/identity.ts',
+      'config/opencode-permissions.yaml',
+      'agents/**',
+    ];
+    for (const path of paths) {
+      for (const tool of ['Edit', 'Write', 'MultiEdit']) {
+        expect(settings.permissions.deny, `${tool}(${path})`).toContain(`${tool}(${path})`);
+      }
+    }
+  });
+
+  test('NotebookEdit は notebook 以外を対象にできぬため deny を増やさぬ', () => {
+    const settings = JSON.parse(readFileSync(join(ROOT, '.claude/settings.json'), 'utf8')) as {
+      permissions: { deny: string[] };
+    };
+    expect(settings.permissions.deny.some((rule) => rule.startsWith('NotebookEdit('))).toBe(false);
+  });
 });
 
 describe('解けぬ命は拒む（知らぬ形を通さぬ）', () => {
