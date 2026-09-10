@@ -29,6 +29,8 @@
 
 import type { Database } from 'bun:sqlite';
 import { journal, tx, raiseSignal } from './store';
+import { roleOrNull } from './roster';
+import { checkReason } from './validate';
 
 export interface Message {
   id: string;
@@ -210,6 +212,52 @@ export function ackAll(db: Database, selfId: string): AckResult {
   const ids = list(db, selfId, { limit: 1000 }).map((m) => m.id);
   if (ids.length === 0) return { ok: true, changed: [], already: [] };
   return ack(db, selfId, ids);
+}
+
+/**
+ * 他人の未読を代わりに片付ける（殿の裁可・cmd_20 の求め）。
+ *
+ * 「他人の報せを既読にすると、その相手は報せが来たことを永久に知らぬ」——
+ * `ack` がこれを断るのは正しい。だが**当人が動けぬ時、その正しさが輪を閉じる**。
+ * 閉じた司令の古い未読は誰も消さず（inbox の行は cmd と紐づいておらぬ）、
+ * 未読が残る限り芯は段を上げ続け、三度で見放す。見放された当人は合図を受けぬゆえ
+ * 己では ack を打てぬ。正本を手で書き換えるほか無かった（実測: 足軽6号）。
+ *
+ * ゆえに上役だけに、理由を添えて開ける。作法は `lease release --force` に倣い、
+ * 別の名（`inbox.ack.force`）で台帳へ残す——「誰が・なぜ・何件を」当人が後から
+ * 辿れるように。読む側には既に `--agent` の前例がある（`inbox read --agent` は
+ * 覗いた跡を `inbox.peek` として刻む）。足りなんだのは片付ける側だけである。
+ */
+export function ackFor(
+  db: Database,
+  opts: { agent: string; by: string; reason?: string },
+): AckResult {
+  if (roleOrNull(opts.by) !== 'commander') {
+    return {
+      ok: false,
+      changed: [],
+      already: [],
+      message:
+        '他人の報せを片付けられるのは家老までである。\n' +
+        '  足軽が互いに片付け合うと、報せが届いておらぬことに誰も気づけぬ。家老へ回されよ。',
+    };
+  }
+  const bad = checkReason(opts.reason, `${opts.agent} は止まっており、閉じた司令の未読が残っておる`);
+  if (bad) return { ok: false, changed: [], already: [], message: bad };
+
+  const ids = list(db, opts.agent, { limit: 1000 }).map((m) => m.id);
+  if (ids.length === 0) return { ok: true, changed: [], already: [] };
+
+  tx(db, () => {
+    db.prepare(`UPDATE inbox SET read = 1 WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+    journal(db, {
+      actor: opts.by,
+      action: 'inbox.ack.force',
+      target: opts.agent,
+      detail: `${ids.length}件: ${ids.join(',')} reason=${JSON.stringify(opts.reason)}`,
+    });
+  });
+  return { ok: true, changed: ids, already: [] };
 }
 
 /**

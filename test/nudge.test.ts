@@ -12,7 +12,7 @@
 import { expect, test, describe } from 'bun:test';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
-import { deliver } from '../src/inbox';
+import { deliver, summarize, ackFor } from '../src/inbox';
 import {
   plan,
   record,
@@ -27,6 +27,8 @@ import {
   stateOf,
   FOLLOWUP_KEY,
   GIVE_UP_AFTER_RESETS,
+  revive,
+  startClocks,
 } from '../src/nudge';
 import type { Pane } from '../src/pane';
 import { setMode, getMode, parseUntil } from '../src/mode';
@@ -572,5 +574,98 @@ describe('諦める段 — 撃ち続けて良いことは無い', () => {
     markSince(db, 'ashigaru1', at3(GIVE_UP_AFTER_RESETS));
     const p = find(plan(db, at(1000 + LEVEL_3_AFTER_MS * 10), { panes: PANES }), 'ashigaru1')!;
     expect(p.send).toBe(true);
+  });
+
+  /**
+   * 実測の詰まり（2026-09-09・足軽6号）と、その解き方。
+   *
+   * 三度の文脈消しの後、pane は生きたまま止まり、**閉じた司令の古い未読 3 件**を
+   * 抱えて見放された。未読が残る限り `forget` は走らず数えは凍り、当人は合図を
+   * 受けぬゆえ己では ack を打てぬ。輪が閉じており、正本を手で書き換えるほか無かった。
+   */
+  describe('閉じた輪と、その切り方', () => {
+    const abandoned = () => {
+      const db = seeded();
+      unreadFor(db, 'ashigaru1', 3); // 閉じた司令の古い未読 3 件（誰も消さぬ）
+      markSince(db, 'ashigaru1', T0);
+      afterResets(db, 'ashigaru1', GIVE_UP_AFTER_RESETS);
+      return db;
+    };
+    const NOW = at3(GIVE_UP_AFTER_RESETS);
+
+    test('未読が残る限り、自ずとは戻らぬ（詰まりの再現）', () => {
+      const db = abandoned();
+      // 何周まわしても撃たぬ。時が経っても同じ
+      for (const t of [NOW, at3(GIVE_UP_AFTER_RESETS + 5), at3(GIVE_UP_AFTER_RESETS + 50)]) {
+        const p = find(plan(db, t, { panes: PANES }), 'ashigaru1')!;
+        expect(p.send, `${t.toISOString()} でも撃たぬ`).toBe(false);
+        expect(p.reason).toContain('撃つのをやめた');
+      }
+      // 未読は 3 件のまま。当人は合図を受けぬゆえ己では片付けられぬ
+      expect(summarize(db, 'ashigaru1').total).toBe(3);
+    });
+
+    test('revive で合図が戻る', () => {
+      const db = abandoned();
+      const r = tx(db, () =>
+        revive(db, { agent: 'ashigaru1', by: 'karo', reason: 'ashigaru1 の pane は生きておるが応えぬ。人の手で確かめた' }),
+      );
+      expect(r.ok, r.message).toBe(true);
+      markSince(db, 'ashigaru1', NOW);
+      const p = find(plan(db, at3(GIVE_UP_AFTER_RESETS + 1), { panes: PANES }), 'ashigaru1')!;
+      expect(p.send, '見放しが解けて撃てる').toBe(true);
+    });
+
+    test('戻した跡が台帳に残る（何度消させたか・なぜ解いたか）', () => {
+      const db = abandoned();
+      tx(db, () => revive(db, { agent: 'ashigaru1', by: 'karo', reason: 'pane は生きておるが応えぬ。人の手で確かめた' }));
+      const row = db
+        .query("SELECT actor, target, detail FROM ledger WHERE action = 'nudge.revive'")
+        .get() as { actor: string; target: string; detail: string } | null;
+      expect(row?.actor).toBe('karo');
+      expect(row?.target).toBe('ashigaru1');
+      expect(row?.detail).toContain(`reset_count=${GIVE_UP_AFTER_RESETS}`);
+      expect(row?.detail).toContain('人の手で確かめた');
+    });
+
+    test('理由の無い解きは断る（跡が読めぬ解きを残さぬ）', () => {
+      const db = abandoned();
+      expect(tx(db, () => revive(db, { agent: 'ashigaru1', by: 'karo' })).ok).toBe(false);
+      expect(tx(db, () => revive(db, { agent: 'ashigaru1', by: 'karo', reason: 'テスト' })).ok).toBe(false);
+      // 断られた以上、見放しは解けておらぬ
+      expect(find(plan(db, NOW, { panes: PANES }), 'ashigaru1')!.send).toBe(false);
+    });
+
+    test('足軽は解けぬ——見放した見立てが誰のものでもなくなる', () => {
+      const db = abandoned();
+      const r = tx(db, () =>
+        revive(db, { agent: 'ashigaru1', by: 'ashigaru2', reason: 'pane は生きておるが応えぬ。人の手で確かめた' }),
+      );
+      expect(r.ok).toBe(false);
+      expect(r.message).toContain('家老');
+    });
+
+    test('見放されておらぬ相手には効かぬ（空振りの解きを残さぬ）', () => {
+      const db = seeded();
+      const r = tx(db, () =>
+        revive(db, { agent: 'ashigaru1', by: 'karo', reason: 'pane は生きておるが応えぬ。人の手で確かめた' }),
+      );
+      expect(r.ok).toBe(false);
+      expect(r.message).toContain('覚えは無い');
+    });
+
+    test('当人が動けぬなら、上役が未読を代わりに片付けて輪を切る', () => {
+      const db = abandoned();
+      // 片付ける側（inbox ack --agent）
+      const a = tx(db, () =>
+        ackFor(db, { agent: 'ashigaru1', by: 'karo', reason: 'ashigaru1 は止まっており、閉じた司令の未読が残っておる' }),
+      );
+      expect(a.ok, a.message).toBe(true);
+      expect(a.changed.length).toBe(3);
+      expect(summarize(db, 'ashigaru1').total).toBe(0);
+      // 未読が 0 になれば、芯は次の周で覚えを落とす（forget の既存経路）
+      tx(db, () => startClocks(db, at3(GIVE_UP_AFTER_RESETS + 1)));
+      expect(find(plan(db, at3(GIVE_UP_AFTER_RESETS + 2), { panes: PANES }), 'ashigaru1')).toBeUndefined();
+    });
   });
 });

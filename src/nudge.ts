@@ -41,9 +41,10 @@
 import type { Database } from 'bun:sqlite';
 import { journal } from './store';
 import { summarize, nudgeText, type Summary } from './inbox';
-import { roster } from './roster';
+import { roster, roleOrNull } from './roster';
 import { panes, type Pane } from './pane';
 import { isAutonomous } from './mode';
+import { checkReason } from './validate';
 
 /** 殿が在席の間は撃たぬ相手。殿の入力と同じ場所に居るゆえ。 */
 export const ATTENDED_SILENT = 'shogun';
@@ -348,6 +349,60 @@ export function forget(db: Database, agents: string[]): void {
   if (agents.length === 0) return;
   const q = agents.map(() => '?').join(',');
   db.run(`DELETE FROM nudge WHERE agent IN (${q})`, agents);
+}
+
+/**
+ * 見放しを解く（殿の裁可・cmd_20 の求め）。
+ *
+ * `reset_count` が閾値に達すると芯は撃つのをやめ、「片付けば自ずと戻る」と案内する。
+ * だがその片付けは**当人しか行えぬ**——`inbox ack` は己の分しか触れず、当人は
+ * 合図を受けぬゆえ己では気づけぬ。閉じた司令の古い未読は誰も消さぬ（inbox の行は
+ * cmd と紐づいておらぬ）ゆえ、未読が残る限り `forget` は走らず、数えは凍る。
+ * **輪が閉じており、正本を手で書き換えるほか無かった**（実測: 足軽6号が三度の
+ * 文脈消しの後、pane は生きたまま止まり、閉じた司令の未読 3 を抱えて見放された）。
+ *
+ * ここで輪を切る。作法は `lease release --force` に倣う——明示の副命令・理由必須・
+ * 上役だけ・別の名で台帳へ・解いた時の様子まで残す。
+ *
+ * 覚えを丸ごと落とすのは意図である。`reset_count` だけ 0 にすると古い `since` が
+ * 残り、**次の周でいきなり段 3 から始まる**（`forget` の doc と同じ理由）。
+ */
+export function revive(
+  db: Database,
+  opts: { agent: string; by: string; reason?: string; now?: Date },
+): { ok: boolean; message: string } {
+  if (roleOrNull(opts.by) !== 'commander') {
+    return {
+      ok: false,
+      message: '見放しを解けるのは家老までである。足軽が互いに解き合うと、見放した見立てが誰のものでもなくなる。\n  家老へ回されよ。',
+    };
+  }
+  const st = stateOf(db, opts.agent);
+  if (st.since === null && st.reset_count === 0) {
+    return { ok: false, message: `${opts.agent} の覚えは無い。見放されておらぬ。` };
+  }
+  const bad = checkReason(opts.reason, `${opts.agent} の pane は生きておるが応えぬ。人の手で確かめた`);
+  if (bad) return { ok: false, message: bad };
+  forget(db, [opts.agent]);
+  journal(db, {
+    actor: opts.by,
+    action: 'nudge.revive',
+    target: opts.agent,
+    detail:
+      `reset_count=${st.reset_count} since=${st.since ?? 'なし'} ` +
+      `last_level=${st.last_level ?? 'なし'} last_reset_at=${st.last_reset_at ?? 'なし'} ` +
+      `reason=${JSON.stringify(opts.reason)}`,
+  });
+  const s: Summary = summarize(db, opts.agent);
+  const tail =
+    s.total > 0
+      ? `\n  ただし未読が ${s.total} 件残っておる。当人が片付けねば、また段が上がって同じ所へ戻る。` +
+        `\n  当人が動けぬなら honden inbox ack --agent ${opts.agent} --reason "…" で片付けよ。`
+      : '';
+  return {
+    ok: true,
+    message: `${opts.agent} への合図を戻した（${st.reset_count} 度の文脈消しの覚えを落とした）。跡は台帳に残る。${tail}`,
+  };
 }
 
 /**

@@ -63,10 +63,10 @@ import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
-import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSuppressed } from './inbox';
+import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
-import { plan, send, record, startClocks, withNudgeLock } from './nudge';
+import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
 import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
@@ -539,6 +539,58 @@ export function runInboxAck(
   };
 }
 
+/**
+ * `honden inbox ack --agent <agent> --reason "…"` — 他人の未読を代わりに片付ける。
+ *
+ * 当人が止まって己では打てぬ時のための口である。上役だけ・理由必須・台帳に残る。
+ */
+export function runInboxAckFor(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  agent: string,
+  reason: string | undefined,
+): RunResult {
+  if (!selfId) {
+    return { code: EXIT_INVALID, err: '誰であるか確かめられぬ。HONDEN_AGENT_ID を置かれよ。' };
+  }
+  const db = openStore({ path: dbPath });
+  const r = ackFor(db, { agent, by: selfId, reason });
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}\n  書き込みは行っておらぬ。` };
+  if (r.changed.length === 0) {
+    return { code: EXIT_OK, out: `  ${agent} に未読は無い。` };
+  }
+  return {
+    code: EXIT_OK,
+    out:
+      `  ${agent} の未読 ${r.changed.length} 件を代わりに既読にした。跡は台帳に残る。\n` +
+      `  当人はこの報せを読まぬまま進む——要る中身なら、改めて honden inbox write で伝えられよ。`,
+  };
+}
+
+/**
+ * `honden nudge revive <agent> --reason "…"` — 見放した相手への合図を戻す。
+ */
+export function runNudgeRevive(
+  dbPath: string | undefined,
+  selfId: string | undefined,
+  agent: string | undefined,
+  reason: string | undefined,
+): RunResult {
+  if (!selfId) {
+    return { code: EXIT_INVALID, err: '誰であるか確かめられぬ。HONDEN_AGENT_ID を置かれよ。' };
+  }
+  if (!agent) {
+    return {
+      code: EXIT_INVALID,
+      err: 'どの相手か分からぬ。\n  honden nudge revive <agent> --reason "…"',
+    };
+  }
+  const db = openStore({ path: dbPath });
+  const r = tx(db, () => revive(db, { agent, by: selfId, reason }));
+  if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}\n  書き込みは行っておらぬ。` };
+  return { code: EXIT_OK, out: `  ${r.message}` };
+}
+
 /** `honden route <bloom>` — 誰に振れるかを挙げる。 */
 export function runRoute(
   dbPath: string | undefined,
@@ -962,9 +1014,12 @@ async function runNudgeInner(
   // **枠切れの pane には何も撃たぬ。** 5h 枠の枯渇で止まった相手に段梯子を
   // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。
   // 段も reset の刻印も進めぬ——枠が明けた最初の周から通常の梯子が再開する。
+  //
+  // 刻は plan と同じ now で見る。既定引数に任せると判定ごとに別の時計を引き、
+  // 明ける刻の際どい所で「撃つ/撃たぬ」が一周の中で揺れる。
   for (const p of plans) {
     if (!p.send || !p.pane) continue;
-    const wait = captureLimitedWaitMs(p.pane);
+    const wait = captureLimitedWaitMs(p.pane, now);
     if (wait !== null) {
       // 旗に明ける刻が書いてあれば、その刻の直後（+2 分）に再訪する。
       // 読めねば 5 分の盲目再訪。段も reset の刻印も進めぬのは従前どおり。
@@ -2900,6 +2955,8 @@ function notifyAfterNudge(dbPath: string | undefined): void {
     const reason = flags['reason'];
     delete flags['wake-shogun'];
     delete flags['reason'];
+    // 見放しを解く口。撃つ側ではなく、撃つのをやめた覚えを落とす側である
+    if (rest[1] === 'revive') return emit(runNudgeRevive(dbPath, selfId(), rest[2], reason));
     const nudged = await runNudge(dbPath, dryRun, wakeShogun, reason, selfId());
     // 合図の後に報せを撃つ（殿の裁可 2026-08-30・「い」の道）。
     // 素振りでは撃たぬ——素振りが撃つのは重い（decisions.md 百五十五）。
@@ -3038,7 +3095,13 @@ function notifyAfterNudge(dbPath: string | undefined): void {
 
   if (rest[0] === 'inbox' && rest[1] === 'ack') {
     const all = flags['all'] === 'true';
+    const forAgent = flags['agent'];
+    const reason = flags['reason'];
     delete flags['all'];
+    delete flags['agent'];
+    delete flags['reason'];
+    // --agent は「他人の分を代わりに片付ける」口。上役だけ・理由必須（inbox.ackFor）
+    if (forAgent) return emit(runInboxAckFor(dbPath, selfId(), forAgent, reason));
     return emit(runInboxAck(dbPath, selfId(), rest.slice(2), all));
   }
 

@@ -128,8 +128,13 @@ EOF`,
   },
   'inbox ack': {
     summary: '処理した報せを既読にする。**己の分だけ。**',
-    usage: 'honden inbox ack --all   /   honden inbox ack <id> [<id>…]',
-    notes: ['他人の分は既読にできぬ——相手が永久に気づけなくなるゆえ'],
+    usage:
+      'honden inbox ack --all   /   honden inbox ack <id> [<id>…]\n' +
+      '  honden inbox ack --agent <名> --reason "…"   （他人の分を代わりに。家老まで）',
+    notes: [
+      '他人の分は既読にできぬ——相手が永久に気づけなくなるゆえ',
+      '例外は --agent。当人が止まって己では打てぬ時だけの口で、理由が要り、跡は台帳に残る',
+    ],
   },
   'inbox unread': {
     summary: '未読の数と内訳を引く。',
@@ -245,10 +250,13 @@ EOF`,
   },
   nudge: {
     summary: '未読を抱えた者へ合図を撃つ。芯が呼ぶ。',
-    usage: 'honden nudge [--dry-run] [--wake-shogun --reason "<なぜ起こすか>"]',
+    usage:
+      'honden nudge [--dry-run] [--wake-shogun --reason "<なぜ起こすか>"]\n' +
+      '  honden nudge revive <名> --reason "…"   （見放した相手へ合図を戻す。家老まで）',
     notes: [
       '殿が在席の間は将軍へ撃たぬ。一度きりの例外が --wake-shogun',
       '三度文脈を消させても応えぬ相手には撃つのをやめる（人の手へ回す）',
+      '人の手で確かめたら revive で戻す。未読が残っておれば、併せて inbox ack --agent で片付けよ',
     ],
   },
   patch: {

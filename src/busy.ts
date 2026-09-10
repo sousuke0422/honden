@@ -88,19 +88,36 @@ export function captureBusy(pane: Pane, cli: string | null): boolean {
 const LIMITED =
   /(hit your \w+ limit|(usage|session) limit|limit reached|5-?h(our)? limit|rate limit(ed)?|resets?( at)? \d{1,2}(:\d{2})?\s*(am|pm)?|try again (at|in)|out of (free )?(usage|credits)|quota (exceeded|reached)|上限に達し|利用制限)/i;
 
-export function isLimitedText(capture: string): boolean {
-  const visible = capture
+// 枠が**有る**ことの案内。字面が枠切れの旗と紛らわしい（殿採取・2026-09-10・claude）:
+//   You have 3 usage limit resets available. Run /usage to use one.
+// 「usage limit」だけを見て立てると、余裕を告げる文を枯渇と読む。旗より先に当てる。
+const NOT_LIMITED = /resets?\s+available/i;
+
+/** 尻の数行だけを見る（scroll-back の古い文で false を作らぬ・busy と同じ作法）。 */
+function tailOf(capture: string, n = 8): string {
+  return capture
     .replace(/\s+$/, '')
     .split('\n')
-    .filter((l) => l.trim() !== '');
-  return LIMITED.test(visible.slice(-8).join('\n'));
+    .filter((l) => l.trim() !== '')
+    .slice(-n)
+    .join('\n');
+}
+
+/**
+ * 枠切れか否かは**刻で決まる**。案内された刻が過ぎておれば枠は既に戻っておる。
+ *
+ * 判定は `limitedWaitMs` の一本に集める——「切れておるか」と「いつ明けるか」を
+ * 別々に判ずると、字面では切れておるのに待ちが無い、という食い違いが生まれる。
+ */
+export function isLimitedText(capture: string, now: Date = new Date()): boolean {
+  return limitedWaitMs(capture, now) !== null;
 }
 
 /** 実際に pane を写して見立てる。写せぬなら「切れておらぬ」扱い（撃つ側の判断へ譲る）。 */
-export function captureLimited(pane: Pane): boolean {
+export function captureLimited(pane: Pane, now: Date = new Date()): boolean {
   const r = Bun.spawnSync(['tmux', 'capture-pane', '-t', pane.id, '-p']);
   if (!r.success) return false;
-  return isLimitedText(r.stdout.toString());
+  return isLimitedText(r.stdout.toString(), now);
 }
 
 /**
@@ -142,35 +159,62 @@ export function isWorking(db: Database, agent: string, now: Date = new Date()): 
  *   claude: You've hit your session limit · resets 6:20pm (Asia/Tokyo)
  *   codex:  … or try again at 5:55 AM.
  *
- * 刻が読めれば「その刻 + 2 分」までの待ちを返し、読めねば 5 分（従前の盲目再訪）。
- * 枠切れでなければ null。刻は端末の locale の壁時計と看做す（旗の TZ 註記が
- * 母屋と食い違う CLI は今のところ無い）。過ぎた刻は翌日と読む。
- * 待ちは 6 時間で頭打ち——読み違いで一昼夜黙る事故を作らぬ。
+ * **枠切れの印は復帰時刻の併記である**（殿の決め・2026-09-10）。旗の字面だけを
+ * 見ると、枠が**有る**ことの案内（`… resets available`）まで枯渇と読む。刻を
+ * 併記せぬ文面は、`usage limit` の字を含んでいても枠切れと見ぬ。
+ *
+ * 併記された刻が過ぎておれば枠は既に戻っておるゆえ、旗が画面に残っておっても
+ * 枠切れと見ぬ。pane の写しは scroll-back を抱えるゆえ、明けた後も旗は居座る
+ * ——字面だけで判ずると、一度枠を使い切った相手が延々と撃たれぬままになる。
+ *
+ * 刻が読めれば「その刻 + 2 分」までの待ちを返す。読めぬ形（刻の併記が無い・
+ * 24 時を超える等）は枠切れと見ぬ——**撃たぬ側へ倒すのは安全ではない**。
+ * 撃たねば相手は止まったまま気づかれず、段梯子も台帳の跡も進まぬ。
+ * 刻は端末の locale の壁時計と看做す（旗の TZ 註記が母屋と食い違う CLI は
+ * 今のところ無い）。待ちは 6 時間で頭打ち——読み違いで一昼夜黙る事故を作らぬ。
  */
-const LIMITED_FALLBACK_MS = 5 * 60_000;
 const LIMITED_MARGIN_MS = 2 * 60_000;
 const LIMITED_MAX_WAIT_MS = 6 * 60 * 60_000;
 const RESET_TIME = /(?:resets?(?:\s+at)?|try again at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
 
+/**
+ * 壁時計の刻を暦へ落とす。**今から最も近い解釈を採る。**
+ *
+ * 旗は日付を刷らぬゆえ、「5:55」が今日の朝か明朝かは前後関係でしか決まらぬ。
+ * 深夜 23 時に「5:55 AM」と出れば明朝（6 時間後）であり、朝 7 時に同じ字面を
+ * 見れば今朝（1 時間前・既に明けておる）である。どちらも「近い方」を採れば合う。
+ * 境目はちょうど 12 時間で、そこでは過去の側を採る——半日前に明けると
+ * 告げられた旗は、もう用を終えておる。
+ */
+function nearestClockTime(h: number, min: number, now: Date): Date {
+  const today = new Date(now);
+  today.setHours(h, min, 0, 0);
+  // 暦日で動かす（±24h の足し算では夏時間で 1 時間ずれる）
+  const prev = new Date(today);
+  prev.setDate(prev.getDate() - 1);
+  const next = new Date(today);
+  next.setDate(next.getDate() + 1);
+  let best = today;
+  for (const c of [prev, next]) {
+    if (Math.abs(c.getTime() - now.getTime()) < Math.abs(best.getTime() - now.getTime())) best = c;
+  }
+  return best;
+}
+
 export function limitedWaitMs(capture: string, now: Date): number | null {
-  if (!isLimitedText(capture)) return null;
-  const tail = capture
-    .replace(/\s+$/, '')
-    .split('\n')
-    .filter((l) => l.trim() !== '')
-    .slice(-8)
-    .join('\n');
+  const tail = tailOf(capture);
+  if (NOT_LIMITED.test(tail)) return null; // 枠が有るという案内。枯渇ではない
+  if (!LIMITED.test(tail)) return null;
   const m = RESET_TIME.exec(tail);
-  if (!m) return LIMITED_FALLBACK_MS;
+  if (!m) return null; // 刻の併記が無い——枠切れの印はこれである
   let h = Number(m[1]);
   const min = Number(m[2] ?? '0');
   const ap = m[3]?.toLowerCase();
   if (ap === 'pm' && h !== 12) h += 12;
   if (ap === 'am' && h === 12) h = 0;
-  if (h > 23 || min > 59) return LIMITED_FALLBACK_MS;
-  const t = new Date(now);
-  t.setHours(h, min, 0, 0);
-  if (t.getTime() <= now.getTime()) t.setDate(t.getDate() + 1);
+  if (h > 23 || min > 59) return null; // 刻が読めぬ
+  const t = nearestClockTime(h, min, now);
+  if (t.getTime() <= now.getTime()) return null; // 刻は過ぎておる——枠は戻っておる
   const wait = t.getTime() - now.getTime() + LIMITED_MARGIN_MS;
   return Math.min(wait, LIMITED_MAX_WAIT_MS);
 }
