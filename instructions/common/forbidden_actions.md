@@ -9,6 +9,8 @@
 | F006 | 指示書の写しを別に置く・生成物を作って配る | 部品を直せ。`instructions/roles/{role}.md`・`instructions/common/{protocol,task_flow,forbidden_actions}.md`・`instructions/cli/{cli}.md` の一系統だけが正で、読む者は `honden brief` で出す | honden は**出す時に組む**。生成物が無いゆえ build を忘れる余地も、部品とずれる余地も無い。写しを置けば、旧環境の二系統の割れ（手書き本文がどこへも行かぬ）がそのまま戻る |
 | F007 | `git push` without the Lord's explicit approval | Ask the Lord first | Prevents leaking secrets / unreviewed changes. 門が止めるのは force の類（D003）だけである。ただの push はここでしか止まらぬ |
 
+| F008 | 内部の台帳番号（`cmd_<数字>`、`subtask_<数字>_<英数字>` の類）をコード、コメント、commit message、docs、PR 本文へ書く | 番号で理由を代弁させず、外の読み手にも分かる理由そのものを書く | 台帳番号は台帳の指し先であり、外の読み手には何も指さぬ |
+
 **急ぎの報せ**（範囲の増減など）は、honden のどの副命令の出力にも「⚠ 急ぎの未読」として一行載る。
 待ち構えて回す要は無い。仕事の節目で honden を叩けば気づける——それが F004 の代わりの目である。
 
