@@ -147,13 +147,28 @@ describe('家老への報せ', () => {
     expect(inbox()).toHaveLength(1);
   });
 
-  test('振り直されて再び見捨てられれば、新しい跡として改めて鳴る', () => {
+  test('振り直されて再び見捨てられれば、改めて鳴る', () => {
     const { db, cmdId } = seeded();
     abandon(db, cmdId, 'ashigaru1');
     expect(notifyAbandoned(db, after()).length).toBe(1);
     // 家老が振り直したが、また同じ形で空いた
     abandon(db, cmdId, 'ashigaru2');
-    // 跡の刻が変わるまで待つ（claim の at は実時間ゆえ、後の跡は必ず新しい）
+    const sent = notifyAbandoned(db, new Date(Date.now() + 2 * ABANDONED_AFTER_MS));
+    expect(sent.map((s) => s.cmdId)).toEqual([cmdId]);
+    expect(
+      db.query("SELECT COUNT(*) n FROM inbox WHERE msg_type = 'cmd_abandoned'").get() as { n: number },
+    ).toEqual({ n: 2 });
+  });
+
+  test('二度目の見捨てが一度目と同じ刻に落ちても黙らぬ', () => {
+    const { db, cmdId } = seeded();
+    abandon(db, cmdId, 'ashigaru1');
+    expect(notifyAbandoned(db, after()).length).toBe(1);
+    abandon(db, cmdId, 'ashigaru2');
+    // 実時間では二つの見捨てが同じ ms に落ちることがある（:memory: では常態）。
+    // その最悪の形を決め打ちで作る——全ての跡の刻を一度目と同じ値へ揃える。
+    const first = (db.query('SELECT MIN(at) t FROM claim').get() as { t: string }).t;
+    db.run('UPDATE claim SET at = ?, released_at = ?', [first, first]);
     const sent = notifyAbandoned(db, new Date(Date.now() + 2 * ABANDONED_AFTER_MS));
     expect(sent.map((s) => s.cmdId)).toEqual([cmdId]);
     expect(

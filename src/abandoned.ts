@@ -45,6 +45,13 @@ export interface Abandoned {
   purpose: string | null;
   /** 最後の跡（claim の at / released_at の新しい方）。ISO。 */
   lastTraceAt: string;
+  /**
+   * 最後の跡の行番号（claim.id の最大）。重複抑止の鍵はこちらを使う。
+   * 刻（lastTraceAt）を鍵にすると、二度目の見捨てが同じ ms に落ちた時に
+   * id が衝突して**黙って skip される**（実測で赤を確認）。行番号は
+   * AUTOINCREMENT ゆえ、新しい見捨ては必ず新しい claim 行を持つ。
+   */
+  lastClaimId: number;
   /** 振られた跡のある相手。読み手（家老）が経緯を辿る取っ掛かり。 */
   agents: string;
 }
@@ -54,6 +61,7 @@ export function findAbandoned(db: Database, now: Date = new Date()): Abandoned[]
     .query(
       `SELECT c.id cmdId, c.purpose purpose,
               MAX(MAX(cl.at), COALESCE(MAX(cl.released_at), '')) lastTraceAt,
+              MAX(cl.id) lastClaimId,
               GROUP_CONCAT(DISTINCT cl.agent) agents
        FROM cmd c
        JOIN claim cl ON cl.cmd_id = c.id
@@ -78,15 +86,17 @@ export function findAbandoned(db: Database, now: Date = new Date()): Abandoned[]
  * 既存の機構が既に扱う。二つ、cmd list の印は振り直すか閉じるまで
  * 消えぬゆえ、同じ一覧を見る将軍の目にも自然に入る。
  *
- * 同じ見捨てに二度は鳴らさぬ。報せの id を cmd と最後の跡の刻から
- * 決めて引く——同じ跡なら同じ id ゆえ、二度目は挿さらぬ。
- * 振り直されて再び見捨てられれば跡の刻が変わり、新しい報せが出る。
+ * 同じ見捨てに二度は鳴らさぬ。報せの id を cmd と最後の跡の行番号
+ * （claim.id の最大）から決めて引く——同じ跡なら同じ id ゆえ、二度目は
+ * 挿さらぬ。振り直されて再び見捨てられれば必ず新しい claim 行が増え、
+ * 新しい報せが出る。刻を鍵にせぬのは、二度目が同じ ms に落ちると
+ * 衝突して黙るゆえ（Abandoned.lastClaimId の注を見よ）。
  */
 export function notifyAbandoned(db: Database, now: Date = new Date()): Abandoned[] {
   const found = findAbandoned(db, now);
   const sent: Abandoned[] = [];
   for (const a of found) {
-    const id = `msg_abandoned_${a.cmdId}_${Date.parse(a.lastTraceAt).toString(36)}`;
+    const id = `msg_abandoned_${a.cmdId}_c${a.lastClaimId}`;
     if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) continue;
     deliver(db, {
       id,
