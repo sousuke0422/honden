@@ -49,6 +49,8 @@ honden inbox write --to ashigaru3 --type task_assigned --from karo \
 `report_received` / `report_completed` / `task_assigned` / `cmd_new` / `cmd_update` /
 `cmd_abandoned` / `clear_command` / `guard_appeal` / `guard_grant`
 
+`cmd_abandoned` を受けた家老は、司令を振り直すか閉じるか差配せよ。
+
 Delivery is handled by the resident watch, which calls `honden nudge`.
 **Agents NEVER call tmux send-keys directly.**
 
