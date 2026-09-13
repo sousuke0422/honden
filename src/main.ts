@@ -1082,7 +1082,19 @@ async function runNudgeInner(
       if (found.length > 0) {
         lines.push(`  見捨てられた司令を家老へ報せた: ${found.map((a) => a.cmdId).join(', ')}`);
       }
-    } catch { /* 報せ損ねても次の周で見つかる */ }
+    } catch (e) {
+      // 成功時の cmd.abandoned.notice と同じ名前空間へ失敗を残す。
+      // 台帳そのものが書けぬ時まで nudge を落としてはならぬため、ここも飲み込む。
+      try {
+        journal(db, {
+          actor: 'core',
+          action: 'cmd.abandoned.notice.error',
+          target: 'cmd_abandoned',
+          detail: e instanceof Error ? e.message : String(e),
+          at: now,
+        });
+      } catch { /* 報せも台帳も次の周で試す */ }
+    }
   }
 
   // 芯への返事。人が読む行に混ざってよいが、必ず最後に置く。

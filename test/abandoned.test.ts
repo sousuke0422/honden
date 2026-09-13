@@ -21,7 +21,7 @@ import { submitReport } from '../src/report';
 import { releaseAllOf } from '../src/claim';
 import { release as leaseRelease, leaseState } from '../src/lease';
 import { findAbandoned, notifyAbandoned, ABANDONED_AFTER_MS } from '../src/abandoned';
-import { runCmdList } from '../src/main';
+import { runCmdList, runNudge } from '../src/main';
 
 const CMD = {
   north_star: '振られた仕事が黙って消えると司令が永久に寝る',
@@ -174,6 +174,55 @@ describe('家老への報せ', () => {
     expect(
       db.query("SELECT COUNT(*) n FROM inbox WHERE msg_type = 'cmd_abandoned'").get() as { n: number },
     ).toEqual({ n: 2 });
+  });
+
+  test('報せに失敗したら台帳へ理由を刻み、合図の輪は落とさぬ', async () => {
+    const path = join(tmpdir(), `abandoned-notice-error-${Date.now()}.db`);
+    try {
+      const { db, cmdId } = seeded(path);
+      abandon(db, cmdId);
+      const past = new Date(Date.now() - ABANDONED_AFTER_MS - 60_000).toISOString();
+      db.run('UPDATE claim SET at = ?, released_at = ?', [past, past]);
+      db.run(`CREATE TRIGGER fail_abandoned_notice
+              BEFORE INSERT ON inbox
+              WHEN NEW.msg_type = 'cmd_abandoned'
+              BEGIN SELECT RAISE(ABORT, 'forced abandoned notice failure'); END`);
+
+      const r = await runNudge(path, false, false, undefined, 'core');
+      expect(r.code).toBe(0);
+      expect(r.out).toContain('next_wake_ms');
+      const led = db
+        .query("SELECT actor, action, target, detail FROM ledger WHERE action = 'cmd.abandoned.notice.error'")
+        .all() as { actor: string; action: string; target: string; detail: string }[];
+      expect(led).toHaveLength(1);
+      expect(led[0]).toMatchObject({
+        actor: 'core',
+        action: 'cmd.abandoned.notice.error',
+        target: 'cmd_abandoned',
+      });
+      expect(led[0]!.detail).toContain('forced abandoned notice failure');
+    } finally {
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
+  });
+
+  test('報せが成功した時は失敗の台帳行を刻まぬ', async () => {
+    const path = join(tmpdir(), `abandoned-notice-success-${Date.now()}.db`);
+    try {
+      const { db, cmdId } = seeded(path);
+      abandon(db, cmdId);
+      const past = new Date(Date.now() - ABANDONED_AFTER_MS - 60_000).toISOString();
+      db.run('UPDATE claim SET at = ?, released_at = ?', [past, past]);
+
+      const r = await runNudge(path, false, false, undefined, 'core');
+      expect(r.code).toBe(0);
+      const led = db
+        .query("SELECT action FROM ledger WHERE action = 'cmd.abandoned.notice.error'")
+        .all();
+      expect(led).toEqual([]);
+    } finally {
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
   });
 });
 
