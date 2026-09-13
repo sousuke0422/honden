@@ -67,6 +67,7 @@ import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideA
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
+import { findAbandoned, notifyAbandoned } from './abandoned';
 import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
@@ -896,6 +897,9 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
   if (rows.length === 0) {
     return { code: EXIT_OK, out: all ? '  司令が一つも無い。' : '  動いておる司令は無い（済んだものも見るなら --all）。' };
   }
+  // 見捨てられた司令に印を立てる。期限切れ（★期限切・握ったまま）とは
+  // 別の言葉にする——こちらは握っておらぬのに残っておるもの。
+  const abandoned = new Set(findAbandoned(db).map((a) => a.cmdId));
   const lines = rows.map((r) => {
     const who = r.assigned_to ? ` → ${r.assigned_to}` : '';
     const p = r.purpose ? ` ${r.purpose.split('\n')[0]!.slice(0, 42)}` : '';
@@ -904,7 +908,8 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
       r.completed_at && (r.status === 'done' || r.status === 'cancelled')
         ? `閉じて${ago(r.completed_at)}`
         : `起草から${ago(r.created_at)}`;
-    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}`;
+    const mark = abandoned.has(r.id) ? '  ⚠見捨てられ（振られた跡のみ残り、握る者も報告も無い）' : '';
+    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}`;
   });
   return { code: EXIT_OK, out: lines.join('\n') + `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` };
 }
@@ -1067,6 +1072,17 @@ async function runNudgeInner(
       });
       if (n > 0) lines.push(`  縁を ${n} 枚書き直した`);
     } catch { /* 縁は飾り */ }
+  }
+
+  // 見捨てられた司令（振られた跡があり、誰も握らず、報告も無いまま
+  // 残ったもの）を見つけ、家老へ報せる。見つけの失敗で合図の輪は落とさぬ。
+  if (!dryRun) {
+    try {
+      const found = notifyAbandoned(db, now);
+      if (found.length > 0) {
+        lines.push(`  見捨てられた司令を家老へ報せた: ${found.map((a) => a.cmdId).join(', ')}`);
+      }
+    } catch { /* 報せ損ねても次の周で見つかる */ }
   }
 
   // 芯への返事。人が読む行に混ざってよいが、必ず最後に置く。

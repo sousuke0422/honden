@@ -74,7 +74,16 @@ export interface Summary {
  * `clear_command` と `cmd_new` は手を止めるべきもの。
  * `report_received` は区切りまで待てる。
  */
-const URGENT_TYPES = new Set(['clear_command', 'cmd_new', 'cmd_update', 'guard_appeal', 'guard_grant']);
+const URGENT_TYPES = new Set([
+  'clear_command',
+  'cmd_new',
+  'cmd_update',
+  'guard_appeal',
+  'guard_grant',
+  // 見捨てられた司令は既に閾値分の時を失っておる。家老が次に honden を
+  // 叩いた節目で横乗せの一行に出るよう、急ぎに数える (src/abandoned.ts)。
+  'cmd_abandoned',
+]);
 
 /**
  * 出力の尻に横乗せする急報の一行。**全 CLI 共通の第一経路である**（殿裁定
