@@ -48,7 +48,15 @@ case "$ACTION" in
       rm -f "$CTRL_SOCK"
     fi
     if [ ! -S "$CTRL_SOCK" ]; then
-      ssh -M -S "$CTRL_SOCK" -fNT "${WORKSPACE}.coder"
+      # 長く生きる process に呼び出し元の stdin/stdout/stderr を渡さない。
+      # ssh -f と sshfs は自らの stdio を /dev/null へ差し替えるが、
+      # ssh が daemonize の前に産む ProxyCommand の子（coder ssh --stdio）は
+      # その時点の stderr を継承したまま常駐する。呼び出し元が pipe だと
+      # 書き口が閉じず、$( ) やパイプ越しの呼び出しが永久に待たされる
+      # （実測: 素で数秒の mount が 25 秒の時切りまで戻らなかった）。
+      # 誤りの言葉は闇へ流さず、file へ落として失敗時に読み上げる。
+      CM_LOG=$(mktemp)
+      ssh -M -S "$CTRL_SOCK" -fNT "${WORKSPACE}.coder" </dev/null >"$CM_LOG" 2>&1 || true
       # ソケット確立を待つ
       for i in $(seq 1 10); do
         [ -S "$CTRL_SOCK" ] && break
@@ -56,8 +64,11 @@ case "$ACTION" in
       done
       if [ ! -S "$CTRL_SOCK" ]; then
         echo "[coder-mount] Error: ControlMaster socket not created after 3s" >&2
+        [ -s "$CM_LOG" ] && sed 's/^/[coder-mount] ssh: /' "$CM_LOG" >&2
+        rm -f "$CM_LOG"
         exit 1
       fi
+      rm -f "$CM_LOG"
     fi
     # ControlMaster が channel を受け付けるまで待つ（socket 出現直後は auth 未完了のことがある）
     READY=0
@@ -73,15 +84,22 @@ case "$ACTION" in
     fi
     mkdir -p "$MOUNT_PATH"
     # ssh_command で ControlMaster ソケット経由の接続を明示（ProxyCommand を経由しない）
-    SSHFS_ERR=$(sshfs \
+    #
+    # $( ) で受けてはならぬ。sshfs は daemonize しても書き口を継いだ子
+    # （sftp の ssh）が残り、$( ) は書き手が全て閉じるまで EOF を待つ——
+    # mount が張れたのに呼び出しが終わらぬ形になる。file へ落として読む。
+    SSHFS_LOG=$(mktemp)
+    sshfs \
       -o "ssh_command=ssh -S ${CTRL_SOCK} -o ControlMaster=no" \
-      "${WORKSPACE}.coder:${REMOTE_PATH}" "$MOUNT_PATH" 2>&1) || true
+      "${WORKSPACE}.coder:${REMOTE_PATH}" "$MOUNT_PATH" </dev/null >"$SSHFS_LOG" 2>&1 || true
     # マウント確認で成否を判定
     if findmnt "$MOUNT_PATH" &>/dev/null; then
       echo "Mounted ${WORKSPACE}.coder:${REMOTE_PATH} → ${MOUNT_PATH}"
+      rm -f "$SSHFS_LOG"
     else
       echo "[coder-mount] Error: mount failed for ${WORKSPACE}.coder:${REMOTE_PATH}" >&2
-      [ -n "$SSHFS_ERR" ] && echo "[coder-mount] sshfs: ${SSHFS_ERR}" >&2
+      [ -s "$SSHFS_LOG" ] && sed 's/^/[coder-mount] sshfs: /' "$SSHFS_LOG" >&2
+      rm -f "$SSHFS_LOG"
       exit 1
     fi
     ;;

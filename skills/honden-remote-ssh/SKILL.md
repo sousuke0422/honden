@@ -110,7 +110,10 @@ ssh -S ~/.ssh/ctl-<host> <host> -- tmux kill-window -t remote-servers:<name>
 ```bash
 MOUNT=~/remote/<host>
 mkdir -p "$MOUNT"
-sshfs -o ControlPath=~/.ssh/ctl-<host> <host>:<workdir> "$MOUNT"
+LOG=$(mktemp)
+sshfs -o ControlPath=~/.ssh/ctl-<host> <host>:<workdir> "$MOUNT" </dev/null >"$LOG" 2>&1 \
+  || sed 's/^/[sshfs] /' "$LOG" >&2
+rm -f "$LOG"
 
 findmnt "$MOUNT"                 # 確かめ
 fusermount -u "$MOUNT"           # 外す
@@ -118,10 +121,18 @@ fusermount -u "$MOUNT"           # 外す
 
 ControlMaster が張ってあれば SSHFS も同じ接続を使う。無ければ毎回認証が走る。先に張る。
 
+**stdio は必ず切り離す**（`</dev/null >"$LOG" 2>&1` の形）。sshfs や `ssh -f` の産む
+子が呼び出し元の pipe を継ぐと、書き口が閉じず `$( )` やパイプ越しの呼び出しが
+永久に待たされる（coder_mount.sh で実測・cmd の検分 2026-09-14）。
+誤りの言葉は `/dev/null` へ捨てず file へ落として読み上げる——闇へ流せば失敗が黙って通る。
+
 ## ControlMaster
 
 ```bash
-ssh -fNM -S ~/.ssh/ctl-<host> <host>        # 張る
+LOG=$(mktemp)
+ssh -fNM -S ~/.ssh/ctl-<host> <host> </dev/null >"$LOG" 2>&1 \
+  || sed 's/^/[ssh] /' "$LOG" >&2   # 張る（stdio を切り離す。理由は上の節）
+rm -f "$LOG"
 ssh -S ~/.ssh/ctl-<host> -O check <host>    # 生きておるか
 ssh -S ~/.ssh/ctl-<host> -O exit <host>     # 畳む
 ```
@@ -130,7 +141,7 @@ ssh -S ~/.ssh/ctl-<host> -O exit <host>     # 畳む
 
 | 症状 | 原因 | 手当て |
 |---|---|---|
-| `ControlSocket … no such file` | 張っていない | `ssh -fNM -S ~/.ssh/ctl-<host> <host>` |
+| `ControlSocket … no such file` | 張っていない | ControlMaster の節の形で張る（stdio を切り離す） |
 | `Connection refused` | 先が止まっている、sshd が居ない | 先の状態を確かめる（VM なら console） |
 | `sshfs: command not found` | 手元に sshfs が無い | 導入は STOP して報告（D011-AT） |
 | `Transport endpoint is not connected` | mount が切れた | `fusermount -u` してから張り直す |
