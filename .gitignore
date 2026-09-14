@@ -125,6 +125,10 @@
 !context/
 !context/README.md
 
+# Memo README（起票前の構想。中身は載せぬ。載るのは README だけ）
+!memo/
+!memo/README.md
+
 # Python venv
 !requirements.txt
 
