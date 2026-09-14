@@ -13,7 +13,7 @@ import type { Database } from 'bun:sqlite';
 import { clockLine, ago } from './cli';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
-import { paneInOwn } from './pane';
+import { paneInOwn, panes } from './pane';
 import { applyBorders } from './border';
 import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
@@ -68,6 +68,7 @@ import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
+import { findStalled, notifyStalled } from './stalled';
 import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
@@ -1090,6 +1091,35 @@ async function runNudgeInner(
           actor: 'core',
           action: 'cmd.abandoned.notice.error',
           target: 'cmd_abandoned',
+          detail: e instanceof Error ? e.message : String(e),
+          at: now,
+        });
+      } catch { /* 報せも台帳も次の周で試す */ }
+    }
+  }
+
+  // 期限切れ後も holder が立ったまま、働いておる印も消えた持ち場を家老へ報せる。
+  if (!dryRun) {
+    try {
+      const stalledBusy = new Set<string>();
+      const paneByAgent = panes();
+      const cliByAgent = new Map(roster(db).map((r) => [r.id, r.cli]));
+      for (const s of findStalled(db, new Set(), now)) {
+        const pane = paneByAgent.get(s.agent);
+        if (isWorking(db, s.agent, now) || (pane && captureBusy(pane, cliByAgent.get(s.agent) ?? null))) {
+          stalledBusy.add(s.agent);
+        }
+      }
+      const found = notifyStalled(db, stalledBusy, now);
+      if (found.length > 0) {
+        lines.push(`  止まった持ち場を家老へ報せた: ${found.map((s) => s.agent).join(', ')}`);
+      }
+    } catch (e) {
+      try {
+        journal(db, {
+          actor: 'core',
+          action: 'lease.stalled.notice.error',
+          target: 'lease_stalled',
           detail: e instanceof Error ? e.message : String(e),
           at: now,
         });
