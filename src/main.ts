@@ -980,14 +980,19 @@ export function deferLimitResets(
     dryRun: boolean;
     busy?: ReadonlySet<string>;
     busyReason?: ReadonlyMap<string, string>;
+    decisionEvidence?: ReadonlyMap<string, string>;
   },
 ): Plan[] {
-  if (guardedAgents.size === 0) return plans;
-  const busy = new Set([...(opts.busy ?? []), ...guardedAgents]);
-  const reasons = new Map(opts.busyReason ?? []);
-  for (const agent of guardedAgents) reasons.set(agent, 'pane に使用枠の気配あり——文脈消しだけ見送る');
-  const lowered = plan(db, now, { wakeShogun: opts.wakeShogun, busy, busyReason: reasons });
+  let lowered = plans;
+  if (guardedAgents.size > 0) {
+    const busy = new Set([...(opts.busy ?? []), ...guardedAgents]);
+    const reasons = new Map(opts.busyReason ?? []);
+    for (const agent of guardedAgents) reasons.set(agent, 'pane に使用枠の気配あり——文脈消しだけ見送る');
+    lowered = plan(db, now, { wakeShogun: opts.wakeShogun, busy, busyReason: reasons });
+  }
   for (const p of lowered) {
+    const evidence = opts.decisionEvidence?.get(p.agent);
+    if (p.level === 3 && evidence) p.decisionEvidence = evidence;
     if (!guardedAgents.has(p.agent)) continue;
     p.hardRecovery = false;
     if (!opts.dryRun) {
@@ -995,7 +1000,7 @@ export function deferLimitResets(
         actor: 'nudge',
         action: 'nudge.reset.deferred.limit',
         target: p.agent,
-        detail: `cli=${p.cli ?? '不明'} pane=${p.pane?.label ?? 'なし'} 枠の気配ゆえ文脈消しを見送った`,
+        detail: `${evidence ?? `cli=${p.cli ?? '不明'} pane=${p.pane?.label ?? 'なし'}`} 枠の気配ゆえ文脈消しを見送った`,
         at: now,
       });
     }
@@ -1056,12 +1061,23 @@ async function runNudgeInner(
   // 確証が無くとも、枠の気配が少しでもあれば段3の /clear・/new だけは止める。
   // 段2の inbox 合図へ降ろし、Escape/Ctrl-C も添えずに気づきを促す。
   const limitResetGuard = new Set<string>();
+  const resetEvidence = new Map<string, string>();
   for (const p of plans) {
     if (!(p.send && p.level === 3 && p.pane)) continue;
-    if (!captureLimitSignal(p.pane, p.cli)) continue;
-    limitResetGuard.add(p.agent);
+    const signaled = captureLimitSignal(p.pane, p.cli);
+    resetEvidence.set(
+      p.agent,
+      `cli=${p.cli ?? '不明'} pane=${p.pane.label} recognized_limit_signal=${signaled}`,
+    );
+    if (signaled) limitResetGuard.add(p.agent);
   }
-  plans = deferLimitResets(db, plans, limitResetGuard, now, { wakeShogun, dryRun, busy, busyReason });
+  plans = deferLimitResets(db, plans, limitResetGuard, now, {
+    wakeShogun,
+    dryRun,
+    busy,
+    busyReason,
+    decisionEvidence: resetEvidence,
+  });
 
   // **枠切れの pane には何も撃たぬ。** 5h 枠の枯渇で止まった相手に段梯子を
   // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。

@@ -12,7 +12,7 @@
  * |---|---|
  * | 0〜2 分 | 素の合図 |
  * | 2〜4 分 | 立て直しの合図。Copilot/Kimi は Escape×2 + Ctrl-C を先に打つ |
- * | 4 分〜 | 文脈を消させる。5 分に一度まで |
+ * | 4 分〜 | 文脈を消させる。15 分に一度まで |
  *
  * 段は覚えず、時刻の差から毎回計算する。段を持つと、覚えと実際がずれた時に
  * どちらが正しいか決まらない。
@@ -55,8 +55,8 @@ export const LEVEL_2_AFTER_MS = 2 * 60_000;
 export const LEVEL_3_AFTER_MS = 4 * 60_000;
 /** 同じ段を撃ち直すまでの間。うるさくせぬため。 */
 export const REPEAT_MS = 60_000;
-/** 文脈を消させるのは 5 分に一度まで。 */
-export const RESET_COOLDOWN_MS = 5 * 60_000;
+/** 文脈を消させるのは 15 分に一度まで。三連続消去の実害（cmd_45）を受けて延ばした。 */
+export const RESET_COOLDOWN_MS = 15 * 60_000;
 /**
  * 何度文脈を消させても応えぬなら、諦めて上役へ回す。
  *
@@ -122,6 +122,8 @@ export interface Plan {
   text: string;
   /** 先に Escape×2 と Ctrl-C を打つか。 */
   hardRecovery: boolean;
+  /** 文脈消しを撃つ／見送る判断の根拠。台帳へ残す。 */
+  decisionEvidence?: string;
   /** 次にこの相手を見るまでの間 (ms)。 */
   nextInMs: number;
   /**
@@ -333,6 +335,7 @@ export function record(db: Database, p: Plan, now: Date, reason?: string, by?: s
     detail:
       `unread=${p.unread} pane=${p.pane?.label ?? 'なし'} ${JSON.stringify(p.text)}` +
       (p.byExplicitWake && reason ? ` reason=${JSON.stringify(reason)}` : '') +
+      (p.decisionEvidence ? ` decision=${JSON.stringify(p.decisionEvidence)}` : '') +
       // 段 3 を降ろして撃った跡は、なぜ降ろしたかまで残す。後から
       // 「働いておる者に撃ったか」を台帳だけで辿れるように。
       (p.escalationLevel === 3 && p.level === 2 && p.reason ? ` deferred=${JSON.stringify(p.reason)}` : ''),

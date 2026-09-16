@@ -93,11 +93,6 @@ const LIMITED =
 // 「usage limit」だけを見て立てると、余裕を告げる文を枯渇と読む。旗より先に当てる。
 const NOT_LIMITED = /resets?\s+available/i;
 
-// claude（殿採取 2026-09-16・Claude Code 2.1.268）— weekly limit に触れ、
-// 低優先枠なら続けられると案内する実文。復帰時刻を刷らぬため limitedWaitMs
-// では待ち時間を決められないが、文脈消しを避けるには十分な「枠の気配」である。
-const CLAUDE_LOW_PRIORITY_LIMIT = /\/low-priority\s+continue\s+now\s+priority\s+weekly\s+limit/i;
-
 /** 尻の数行だけを見る（scroll-back の古い文で false を作らぬ・busy と同じ作法）。 */
 function tailOf(capture: string, n = 8): string {
   return capture
@@ -128,8 +123,10 @@ export function isLimitedText(capture: string, now: Date = new Date()): boolean 
 export function hasLimitSignalText(capture: string, cli: string | null = null): boolean {
   const tail = tailOf(capture);
   if (NOT_LIMITED.test(tail)) return false;
-  if (LIMITED.test(tail)) return true;
-  return cli === 'claude' && CLAUDE_LOW_PRIORITY_LIMIT.test(tail);
+  // CLI ごとの未実測文面を推測で足さぬ。cli は呼び手が根拠を台帳へ残すための
+  // 対称な口として受けるが、判定は実測済みの共通紋様だけで行う。
+  void cli;
+  return LIMITED.test(tail);
 }
 
 /** pane を写し、文脈消しを止める弱い「枠の気配」を見る。 */

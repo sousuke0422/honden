@@ -23,8 +23,6 @@ const CLAUDE_LIMIT = "You've hit your session limit · resets 6:20pm (Asia/Tokyo
 // claude（殿採取 2026-09-10）— **枠切れではない。** 手で使える無料のリセットが
 // 3 回残っておるという案内である（殿の教示）。復帰時刻を併記せぬのが見分けの印
 const CLAUDE_RESETS_AVAILABLE = 'You have 3 usage limit resets available. Run /usage to use one.';
-// claude（殿採取 2026-09-16・Claude Code 2.1.268）— 復帰時刻を刷らぬ実文。
-const CLAUDE_LOW_PRIORITY_LIMIT = '/low-priority continue now priority weekly limit';
 import { openStore, journal } from '../src/store';
 
 describe('cursor', () => {
@@ -133,11 +131,6 @@ describe('枠切れの見立て（isLimitedText）— 印は復帰時刻の併�
 });
 
 describe('文脈消しを止める弱い枠の気配（hasLimitSignalText）', () => {
-  test('claude の刻なし weekly limit 実文を拾うが、強い枠切れ判定にはしない', () => {
-    expect(hasLimitSignalText(CLAUDE_LOW_PRIORITY_LIMIT, 'claude')).toBe(true);
-    expect(limitedWaitMs(CLAUDE_LOW_PRIORITY_LIMIT, new Date('2026-09-16T15:38:00+09:00'))).toBeNull();
-  });
-
   test('codex の実文は復帰刻の前後を問わず文脈消しを止める気配になる', () => {
     expect(hasLimitSignalText(CODEX_LIMIT, 'codex')).toBe(true);
   });
@@ -145,6 +138,11 @@ describe('文脈消しを止める弱い枠の気配（hasLimitSignalText）', (
   test('枠が有る resets available と無関係な prompt は拾わぬ', () => {
     expect(hasLimitSignalText(CLAUDE_RESETS_AVAILABLE, 'claude')).toBe(false);
     expect(hasLimitSignalText('❯ ', 'claude')).toBe(false);
+  });
+
+  test('常時表示の low-priority 案内を枠の気配と誤認しない', () => {
+    const alwaysShown = '/low-priority continue now priority weekly limit';
+    expect(hasLimitSignalText(alwaysShown, 'claude')).toBe(false);
   });
 });
 
