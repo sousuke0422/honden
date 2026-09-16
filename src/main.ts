@@ -66,10 +66,10 @@ import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
-import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
+import { plan, send, record, startClocks, withNudgeLock, revive, type Plan } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
 import { findStalled, notifyStalled } from './stalled';
-import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
+import { captureBusy, captureLimitedWaitMs, captureLimitSignal, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
 import { emphasize } from './term';
@@ -969,6 +969,40 @@ export async function runNudge(
   return r;
 }
 
+/** 枠の気配がある者だけ、段3の文脈消しを素の段2合図へ降ろす。 */
+export function deferLimitResets(
+  db: Database,
+  plans: Plan[],
+  guardedAgents: ReadonlySet<string>,
+  now: Date,
+  opts: {
+    wakeShogun: boolean;
+    dryRun: boolean;
+    busy?: ReadonlySet<string>;
+    busyReason?: ReadonlyMap<string, string>;
+  },
+): Plan[] {
+  if (guardedAgents.size === 0) return plans;
+  const busy = new Set([...(opts.busy ?? []), ...guardedAgents]);
+  const reasons = new Map(opts.busyReason ?? []);
+  for (const agent of guardedAgents) reasons.set(agent, 'pane に使用枠の気配あり——文脈消しだけ見送る');
+  const lowered = plan(db, now, { wakeShogun: opts.wakeShogun, busy, busyReason: reasons });
+  for (const p of lowered) {
+    if (!guardedAgents.has(p.agent)) continue;
+    p.hardRecovery = false;
+    if (!opts.dryRun) {
+      journal(db, {
+        actor: 'nudge',
+        action: 'nudge.reset.deferred.limit',
+        target: p.agent,
+        detail: `cli=${p.cli ?? '不明'} pane=${p.pane?.label ?? 'なし'} 枠の気配ゆえ文脈消しを見送った`,
+        at: now,
+      });
+    }
+  }
+  return lowered;
+}
+
 async function runNudgeInner(
   dbPath: string | undefined,
   dryRun: boolean,
@@ -1017,6 +1051,18 @@ async function runNudgeInner(
     }
   }
   if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy, busyReason });
+
+  // 素の合図と文脈消しでは害が違う。復帰時刻まで読めず、合図を止めるほどの
+  // 確証が無くとも、枠の気配が少しでもあれば段3の /clear・/new だけは止める。
+  // 段2の inbox 合図へ降ろし、Escape/Ctrl-C も添えずに気づきを促す。
+  const limitResetGuard = new Set<string>();
+  for (const p of plans) {
+    if (!(p.send && p.level === 3 && p.pane)) continue;
+    if (!captureLimitSignal(p.pane, p.cli)) continue;
+    limitResetGuard.add(p.agent);
+  }
+  plans = deferLimitResets(db, plans, limitResetGuard, now, { wakeShogun, dryRun, busy, busyReason });
+
   // **枠切れの pane には何も撃たぬ。** 5h 枠の枯渇で止まった相手に段梯子を
   // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。
   // 段も reset の刻印も進めぬ——枠が明けた最初の周から通常の梯子が再開する。

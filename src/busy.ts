@@ -93,6 +93,11 @@ const LIMITED =
 // 「usage limit」だけを見て立てると、余裕を告げる文を枯渇と読む。旗より先に当てる。
 const NOT_LIMITED = /resets?\s+available/i;
 
+// claude（殿採取 2026-09-16・Claude Code 2.1.268）— weekly limit に触れ、
+// 低優先枠なら続けられると案内する実文。復帰時刻を刷らぬため limitedWaitMs
+// では待ち時間を決められないが、文脈消しを避けるには十分な「枠の気配」である。
+const CLAUDE_LOW_PRIORITY_LIMIT = /\/low-priority\s+continue\s+now\s+priority\s+weekly\s+limit/i;
+
 /** 尻の数行だけを見る（scroll-back の古い文で false を作らぬ・busy と同じ作法）。 */
 function tailOf(capture: string, n = 8): string {
   return capture
@@ -111,6 +116,27 @@ function tailOf(capture: string, n = 8): string {
  */
 export function isLimitedText(capture: string, now: Date = new Date()): boolean {
   return limitedWaitMs(capture, now) !== null;
+}
+
+/**
+ * 文脈消しを止めるための、弱い「枠の気配」。
+ *
+ * 合図そのものを止める limitedWaitMs は復帰時刻まで読める時だけ立つ。
+ * こちらは害の大きい /clear・/new を避ける秤なので、刻が無くても実測済みの
+ * 枠文面なら立つ。枠が有る旨の `resets available` は枯渇でないため除く。
+ */
+export function hasLimitSignalText(capture: string, cli: string | null = null): boolean {
+  const tail = tailOf(capture);
+  if (NOT_LIMITED.test(tail)) return false;
+  if (LIMITED.test(tail)) return true;
+  return cli === 'claude' && CLAUDE_LOW_PRIORITY_LIMIT.test(tail);
+}
+
+/** pane を写し、文脈消しを止める弱い「枠の気配」を見る。 */
+export function captureLimitSignal(pane: Pane, cli: string | null = null): boolean {
+  const r = Bun.spawnSync(['tmux', 'capture-pane', '-t', pane.id, '-p']);
+  if (!r.success) return false;
+  return hasLimitSignalText(r.stdout.toString(), cli);
 }
 
 /** 実際に pane を写して見立てる。写せぬなら「切れておらぬ」扱い（撃つ側の判断へ譲る）。 */
