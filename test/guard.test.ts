@@ -13,6 +13,12 @@ import { realRunner } from '../src/parse';
 /** 本物の解析器で見る。**贋物では、解けぬ形の扱いが試せぬ。** */
 const run = realRunner(new URL('..', import.meta.url).pathname);
 import { openStore } from '../src/store';
+import { requireBuilt } from './prereq';
+
+// 構造の判定（judgeStructured）は bin/honden-parse を叩く。建てておらぬ機では
+// fail-closed で deny に倒れ、deny 側は空緑・allow 側はただの赤になる——
+// どちらも意味を成さぬゆえ、読める赤一つで止めて当該の巻は登録せぬ。
+const BUILT = requireBuilt(new URL('..', import.meta.url).pathname, 'test/guard.test.ts');
 
 const T0 = new Date('2026-08-27T12:00:00Z');
 const at = (ms: number) => new Date(T0.getTime() + ms);
@@ -89,6 +95,7 @@ describe('**後で走る命**を取り出す（二度目の監査 2026-09-01 が
   //   sh -c '…' / bash -lc '…' / chroot / … / flock … / find -exec … / ssh …
   //
   // 判定は `judgeStructured`（門の正の口）で見る。紋様の層だけでは届かぬ。
+  if (!BUILT) return;
   const RM = ['rm', '-rf', '/'].join(' ');
   const S = (c: string) => judgeStructured(c, run).permission;
 
@@ -143,6 +150,7 @@ describe('**後で走る命**を取り出す（二度目の監査 2026-09-01 が
 });
 
 describe('表の中の取りこぼし（三度目の監査 2026-09-01 が釣った）', () => {
+  if (!BUILT) return;
   const RM = ['rm', '-rf', '/'].join(' ');
   const S = (c: string) => judgeStructured(c, run).permission;
 
@@ -198,7 +206,8 @@ describe('表の中の取りこぼし（三度目の監査 2026-09-01 が釣っ�
 });
 
 describe('D006 — 生の kill は拒み、honden-kill だけを通す', () => {
-  test('生の形は包みを被せても拒む', () => {
+  // この巻は紋様層（judge・bin 不要）が主。構造層を叩く一つだけ BUILT で分ける。
+  if (BUILT) test('生の形は包みを被せても拒む', () => {
     // 包みを跨ぐ判定は構造の層（`judgeStructured`）の役である。
     // 紋様の層は文字列をそのまま見るだけで、そこで包みを剥がすと
     // 引数にすぎぬ語を命と読む（誤検知の因・2026-09-01）

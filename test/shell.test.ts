@@ -14,6 +14,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { requireBuilt } from './prereq';
 
 const ROOT = join(import.meta.dir, '..');
 const TESTS = join(ROOT, 'tests');
@@ -36,7 +37,15 @@ describe('貝の試験（bats）', () => {
     }
   });
 
-  test('tests/*.bats がすべて通る', () => {
+  // 走行は三つの前提が揃った時だけ登録する。欠けておれば上の二つの赤か
+  // 【建てておらぬ】の赤が理由を語る——赤の雨で本物の赤を霞ませぬため。
+  // 前提が在るのに飛ぶ筋は無い: 揃えば必ず登録され、bats の壊れは従来どおり赤くなる。
+  const batsReady = Bun.spawnSync(['bats', '--version']).success;
+  const helpersReady = ['bats-support', 'bats-assert'].every((m) =>
+    existsSync(join(TESTS, 'test_helper', m, 'load.bash')),
+  );
+  const binReady = requireBuilt(ROOT, 'test/shell.test.ts——tests/*.bats が bin/honden を叩く', ['honden']);
+  if (batsReady && helpersReady && binReady) test('tests/*.bats がすべて通る', () => {
     // 並べて回す。素だと 12 秒、四本並べて 2 秒——貝の試験は待ちが主ゆえ。
     const p = Bun.spawnSync(['bats', '-j', '4', '--tap', TESTS], { cwd: ROOT });
     const out = new TextDecoder().decode(p.stdout) + new TextDecoder().decode(p.stderr);

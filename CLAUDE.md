@@ -48,6 +48,13 @@ honden decisions     # 殿の裁可を待っておるもの
 門が生きておるかは `honden guard selftest` で確かめられる。
 **据えただけでは効かぬことがある**——hook の設定を書き換えると信頼が切れ、黙って飛ぶ。
 
+## 作業木で試験を走らせるなら
+
+先に `bun install` と `bun run build:all` を走らせよ。`tests/*.bats` まで回すなら
+`git submodule update --init --recursive` も要る。切った直後の作業木は
+`bin/`（白名簿の外）も submodule も持たぬゆえ、素の `bun test` は
+**【建てておらぬ】の赤**で止まる——それは本物の赤ではない。
+
 ## 道具の出力を鵜呑みにするな
 
 **フィルタを通った表示を、証拠として文書へ転記するな。**

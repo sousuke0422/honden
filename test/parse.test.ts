@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import { interpret, parseCommand, commandNames, realRunner, parserPath, type Runner } from '../src/parse';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { requireBuilt } from './prereq';
 
 const ROOT = join(import.meta.dir, '..');
 const good = (o: unknown) => JSON.stringify({ ok: true, complete: true, commands: [], heredocs: [], substitutions: [], unhandled: [], ...(o as object) });
@@ -114,10 +115,13 @@ describe('parseCommand — 注いだ手で回る', () => {
 describe('本物の芯（core/guard）', () => {
   const run = realRunner(ROOT);
 
+  // 建てておらぬなら、読める赤一つで止める。残りは登録せぬ（prereq.ts の頭書き）。
+  if (!requireBuilt(ROOT, 'test/parse.test.ts')) return;
+
   test('bin/honden-parse が焼けておる', () => {
     expect(
       existsSync(parserPath(ROOT)),
-      'bin/honden-parse が無い。焼かれよ: cd core/guard && cargo build --release && cp target/release/honden-parse ../../bin/',
+      'bin/honden-parse が無い。焼かれよ: bun run build:all（芯だけなら cd core/guard && cargo build --release && cp target/release/honden-parse ../../bin/）',
     ).toBe(true);
   });
 

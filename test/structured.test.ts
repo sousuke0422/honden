@@ -17,7 +17,14 @@ const ROOT = join(import.meta.dir, '..');
 const run = realRunner(ROOT);
 const deny = (cmd: string) => judgeStructured(cmd, run).permission === 'deny';
 
+// 構造の判定は bin/honden-parse を叩く。建てておらぬ機では読める赤一つで止め、
+// 実体を要する巻は登録せぬ（test/prereq.ts の頭書き）。
+// 贋 runner の試験と settings.json の検査は bin 不要ゆえ、そのまま走る。
+import { requireBuilt } from './prereq';
+const BUILT = requireBuilt(ROOT, 'test/structured.test.ts');
+
 describe('紋様が取りこぼしておった形', () => {
+  if (!BUILT) return;
   // 一つずつ、**紋様では通り、構造では止まる**ことを対で示す。
   // 片方だけでは「元から止まっておった」のか「構造が効いた」のか判じられぬ。
   const escapes: [string, string][] = [
@@ -38,6 +45,7 @@ describe('紋様が取りこぼしておった形', () => {
 });
 
 describe('通すべきものは通る（誤検知を出さぬ）', () => {
+  if (!BUILT) return;
   const fine = [
     'echo rm -rf /',              // 命ではなく echo の引数
     'grep -rn "rm -rf /" docs/',  // 引用された字面
@@ -52,6 +60,7 @@ describe('通すべきものは通る（誤検知を出さぬ）', () => {
 });
 
 describe('門自身の単独呼び出しは平面の紋様を免除する', () => {
+  if (!BUILT) return;
   const subcommands = ['appeal', 'check', 'facts', 'grant', 'selftest', 'hook'];
   for (const subcommand of subcommands) {
     test(`${subcommand}: --cmd の引用内に D014 があっても通す`, () => {
@@ -129,7 +138,8 @@ describe('門の自衛は上書き系の道具でも閉じる', () => {
 });
 
 describe('解けぬ命は拒む（知らぬ形を通さぬ）', () => {
-  test('壊れた入力', () => {
+  // 本物の解き手が要る一つだけ BUILT で分ける。贋 runner の二つは bin 不要。
+  if (BUILT) test('壊れた入力', () => {
     const v = judgeStructured('some !! invalid <<< ((( garbage', run);
     expect(v.permission).toBe('deny');
     expect(v.rule).toBe('D000');
@@ -163,7 +173,8 @@ describe('整形が構文を壊さぬこと', () => {
     expect(s.raw).not.toContain('HONDEN_OTP');
   });
 
-  test('生を解かせておる（潰した方を解けば、この形は通ってしまう）', () => {
+  // 本物の解き手が要る一つだけ BUILT で分ける。splitOtp の二つは bin 不要。
+  if (BUILT) test('生を解かせておる（潰した方を解けば、この形は通ってしまう）', () => {
     const s = splitOtp('ls\nrm -rf /');
     expect(judgeStructured(s.cmd, run, s.raw).permission).toBe('deny');
     // 陽性対照: 潰した方だけを解けば通る——これが一巡した理由である
@@ -172,6 +183,7 @@ describe('整形が構文を壊さぬこと', () => {
 });
 
 describe('heredoc は貰い手で分ける', () => {
+  if (!BUILT) return;
   test('python への heredoc は命ではない（将軍が二度弾かれた形）', () => {
     expect(deny("python3 <<'EOF'\nrm -rf /\nEOF\n")).toBe(false);
   });
@@ -182,6 +194,7 @@ describe('heredoc は貰い手で分ける', () => {
 });
 
 describe('日常の往来を止めぬ（実物 14,131 通りで測った形）', () => {
+  if (!BUILT) return;
   // 一巡目でこれらを拒んでおった。**畳めるものを畳まずに拒むのは、
   // 門ではなくただの障害物である。**
   const daily = [
