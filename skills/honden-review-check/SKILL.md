@@ -97,24 +97,39 @@ reviewDecision だけで過去の `CHANGES_REQUESTED` を捨てない。
 ### 4. task の盤を読む
 
 ```bash
-task review summary --project "$project" --pr "$pr" --repo "$repo" --head "$head_sha" --json
+summary_json=$(task review summary --project "$project" --pr "$pr" --repo "$repo" --head "$head_sha" --json)
 summary_exit=$?
 task review list --project "$project" --pr "$pr" --repo "$repo" --json
 task review rounds --project "$project" --pr "$pr" --repo "$repo" --json
 ```
 
+exit code を読む前に、`$summary_json` が有効な JSON かを確かめる（`jq -e . >/dev/null` 等）。
+blocked と結論してよいのは「exit=1、かつ有効な summary の JSON を取れ、
+その中身がゲート不成立を示す」場合だけである。
+JSON を取れていない exit=1 は通信障害等の失敗であり、task 側未読として
+「片方しか読めない場合」の形式で「判定不能」と報告する。
+
 `summary` の exit code は次の意味で扱う。
 
-| exit | 意味 | 次の処置 |
-|---:|---|---|
-| 0 | mergeable | 二つの盤に未解決が無いことを確認して merge 候補と報告する |
-| 1 | blocked | 未解決 finding、未検証 finding、古い review SHA を具体的に列挙する |
-| 2 | 鍵または設定が無い | 不足した設定名を示し、task 側は未読と報告する |
-| 3 | 鍵が偽で 401 | `task auth whoami` の結果とともに認証更新を求める |
-| 5 | project が無い | project key、tenant、allowed_project_ids を照合する |
+| exit | 意味 | 見分け方 | 次の処置 |
+|---:|---|---|---|
+| 0 | mergeable | — | 二つの盤に未解決が無いことを確認して merge 候補と報告する |
+| 1 | 二義: ゲート不成立（blocked）と、通信障害・HTTP 500 等の未分類の失敗 | 有効な summary の JSON を取れたかで分ける | JSON 有: blocked として未解決 finding、未検証 finding、古い review SHA を列挙する。JSON 無: 判定不能・task 側未読と報告する |
+| 2 | 二義: 鍵・設定が無い、と引数の検証に落ちた | stderr か JSON の中身で「設定不足」と「入力不正」を分ける | 設定不足: 不足した設定名を示す。入力不正: 誤った引数を示す。いずれも task 側は未読と報告する |
+| 3 | 鍵が偽（401） | — | `task auth whoami` の結果とともに認証更新を求める |
+| 4 | 権限不足（403） | — | scope、tenant、project authorization を whoami の事実で照合する |
+| 5 | 対象が無い（404。project に限らぬ） | stderr で何が見つからなかったかを読む | project key、tenant、allowed_project_ids、PR 番号を照合する |
 
-この表は 2026-09-17 の task CLI 実測に基づく。
+この表は 2026-09-18 に task CLI v0.1.24 の `review summary` で実測した物である。
+exit=3 はレビューの契約一覧には無いが実測では在る。実測を正とする。
 `403`、`blocked`、鍵不在を同じ「読めない」に丸めない。
+
+exit code の数だけで blocked と断じない。
+exit=1 は「有効な summary の JSON を取れ、その中身がゲート不成立を示す」時に限り blocked とする。
+JSON が取れていない exit=1 は task 側未読であり、結論は「判定不能」である。
+死んだ接続先でも exit=1 が返ることを 2026-09-18 に実測した
+（stderr は `error sending request for url (…)`、JSON 無し）。
+この形を blocked と読めば、通信障害のたびに偽の指摘を報告することになる。
 
 ### 5. finding の状態と SHA を照合する
 
