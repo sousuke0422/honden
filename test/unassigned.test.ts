@@ -41,7 +41,7 @@ function age(db: ReturnType<typeof seeded>['db'], cmdId: string, milliseconds: n
 }
 
 describe('振られぬまま止まった司令の定め', () => {
-  test('陽性対照: 実件 cmd_45 と同じ18時間・task 0・家老未読1・未閉鎖を検知する', () => {
+  test('陽性対照: 実件と同じ18時間・task 0・家老未読1・未閉鎖を検知する', () => {
     const { db, cmdId } = seeded();
     age(db, cmdId, 18 * 60 * 60_000);
     deliver(db, {
