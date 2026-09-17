@@ -148,7 +148,7 @@ export function captureLimited(pane: Pane, now: Date = new Date()): boolean {
  *
  * 画面の見立て（isBusyText）は CLI の描き方に依る。cursor は 'ctrl+c to stop' を
  * 出さぬ形で長い命（coder ssh …）を回すことがあり、その間は idle と見えて
- * 段 3 の文脈消しが刺さる。ashigaru6 は cmd_15 で配られてから 19 分の間に
+ * 段 3 の文脈消しが刺さる。ashigaru6 は任を配られてから 19 分の間に
  * claim と guard.deny を台帳へ刻みながら三度 /new-chat を撃たれ、仕掛かりを
  * 失った（台帳実測・2026-09-06 01:03〜01:22 JST）。
  *
