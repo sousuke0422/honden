@@ -47,8 +47,9 @@ honden inbox write --to ashigaru3 --type task_assigned --from karo \
 在るのはこれだけである:
 
 `report_received` / `report_completed` / `task_assigned` / `cmd_new` / `cmd_update` /
-`cmd_abandoned` / `lease_stalled` / `clear_command` / `guard_appeal` / `guard_grant`
+`cmd_unassigned` / `cmd_abandoned` / `lease_stalled` / `clear_command` / `guard_appeal` / `guard_grant`
 
+`cmd_unassigned` を受けた家老は、一度も振られておらぬ司令を振るか閉じるか差配せよ。
 `cmd_abandoned` を受けた家老は、司令を振り直すか閉じるか差配せよ。
 `lease_stalled` を受けた家老は、振り直すか、貸与を解くか、長い処理ならそのまま待つか差配せよ。
 
@@ -97,7 +98,7 @@ Two layers:
      仕掛かりを捨てさせずに届く。send-keys の届き方は CLI ごとにまちまちだが、
      この経路に CLI 差は無い。
      `inbox` 系（見に行く行為そのもの）と `nudge` には載せぬ。
-     急ぎ（`clear_command` / `cmd_new` / `cmd_update` / `cmd_abandoned` / `lease_stalled` / `guard_appeal` / `guard_grant`）
+     急ぎ（`clear_command` / `cmd_new` / `cmd_update` / `cmd_unassigned` / `cmd_abandoned` / `lease_stalled` / `guard_appeal` / `guard_grant`）
      でなければ載せぬ——毎回うるさくすると読み飛ばしが癖になり、いざの一行まで死ぬ。
 
    - **優先度2 — push (`honden nudge`)**: 常駐の芯が正本の変化に気づき、短い合図を pane へ撃つ。

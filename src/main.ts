@@ -68,6 +68,7 @@ import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
+import { findUnassigned, notifyUnassigned } from './unassigned';
 import { findStalled, notifyStalled } from './stalled';
 import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
@@ -901,6 +902,7 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
   // 見捨てられた司令に印を立てる。期限切れ（★期限切・握ったまま）とは
   // 別の言葉にする——こちらは握っておらぬのに残っておるもの。
   const abandoned = new Set(findAbandoned(db).map((a) => a.cmdId));
+  const unassigned = new Set(findUnassigned(db).map((c) => c.cmdId));
   const lines = rows.map((r) => {
     const who = r.assigned_to ? ` → ${r.assigned_to}` : '';
     const p = r.purpose ? ` ${r.purpose.split('\n')[0]!.slice(0, 42)}` : '';
@@ -909,7 +911,11 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
       r.completed_at && (r.status === 'done' || r.status === 'cancelled')
         ? `閉じて${ago(r.completed_at)}`
         : `起草から${ago(r.created_at)}`;
-    const mark = abandoned.has(r.id) ? '  ⚠見捨てられ（振られた跡のみ残り、握る者も報告も無い）' : '';
+    const mark = unassigned.has(r.id)
+      ? '  ⚠未差配（一度も振られぬまま止まっておる）'
+      : abandoned.has(r.id)
+        ? '  ⚠見捨てられ（振られた跡のみ残り、握る者も報告も無い）'
+        : '';
     return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}`;
   });
   return { code: EXIT_OK, out: lines.join('\n') + `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` };
@@ -1073,6 +1079,26 @@ async function runNudgeInner(
       });
       if (n > 0) lines.push(`  縁を ${n} 枚書き直した`);
     } catch { /* 縁は飾り */ }
+  }
+
+  // 一度も振られぬまま、起草から一定時間が過ぎた司令を家老へ報せる。
+  if (!dryRun) {
+    try {
+      const found = notifyUnassigned(db, now);
+      if (found.length > 0) {
+        lines.push(`  振られぬまま止まった司令を家老へ報せた: ${found.map((c) => c.cmdId).join(', ')}`);
+      }
+    } catch (e) {
+      try {
+        journal(db, {
+          actor: 'core',
+          action: 'cmd.unassigned.notice.error',
+          target: 'cmd_unassigned',
+          detail: e instanceof Error ? e.message : String(e),
+          at: now,
+        });
+      } catch { /* 報せも台帳も次の周で試す */ }
+    }
   }
 
   // 見捨てられた司令（振られた跡があり、誰も握らず、報告も無いまま
