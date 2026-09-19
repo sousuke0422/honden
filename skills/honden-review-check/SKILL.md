@@ -153,26 +153,33 @@ q='query($owner:String!,$name:String!,$pr:Int!,$after:String){
     reviewThreads(first:100,after:$after){
       pageInfo{hasNextPage endCursor}
       nodes{isResolved isOutdated comments(first:1){nodes{path body}}}}}}}'
-after=""; threads="[]"
+after=""; threads="[]"; threads_incomplete=0
 while :; do
   page=$(gh api graphql -f query="$q" -f owner="${repo%%/*}" -f name="${repo##*/}" \
-    -F pr="$pr" ${after:+-f after="$after"}) || { echo "判定不能: thread を取れない"; break; }
+    -F pr="$pr" ${after:+-f after="$after"}) || { threads_incomplete=1; break; }
   threads=$(jq -c --argjson t "$threads" '$t + .data.repository.pullRequest.reviewThreads.nodes' <<<"$page")
   hasNext=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$page")
   after=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"$page")
   [ "$hasNext" = "true" ] || break
 done
+[ "${hasNext:-true}" = "true" ] && threads_incomplete=1   # 失敗 break は前頁の真が残る。印で上書きする
 ```
 
 `gh api graphql --paginate` は reviewThreads のような入れ子の接続には効かない。
 `pageInfo` を読み、`hasNextPage` が真のあいだ `after` に `endCursor` を渡して回す。
 偽になれば止まり、`endCursor` はページごとに進むため無限には回らない。
 
-未解決（`isResolved` が false）の thread は、件数と path を記録し、
-merge 可否より先に列挙する。
-thread を取れなかったとき、および `hasNextPage` が真のまま処理を終えたときは、
-GitHub 側未読として「判定不能」へ倒す。
-取れなかったこと、読み切れなかったことを黙って「未解決なし」に化けさせない。
+取得に失敗すると `threads_incomplete=1` の印が立つ。
+`threads` を空にする形は採らない。空にすると「取れなかった」と「ほんとうに一件も無い」が
+同じ顔になるためである。輪の後の一行は、失敗 break で `hasNext` に前の頁の真が
+残ったままでも、判定が印の側で上書きされることを保証する。
+
+未解決（`isResolved` が false）の thread の列挙は、
+`threads_incomplete` が立っていないときだけ行う。
+件数と path を記録し、merge 可否より先に列挙する。
+印が立っているときは列挙せず、「判定不能: GitHub 側未読（thread を読み切れていない。
+`threads` に残っているのは途中までの頁である）」と理由を添えて報じる。
+途中までの一覧を全部の顔で出すこと、列挙せずに黙ることの両方を塞ぐ。
 
 ### 4. task の盤を読む
 
