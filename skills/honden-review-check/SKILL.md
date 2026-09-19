@@ -112,12 +112,27 @@ SHA の比較は checkout した木に依らない。
 reviewDecision だけで過去の `CHANGES_REQUESTED` を捨てない。
 
 GitHub 側のマージ条件は最終判定に含める。
-次のいずれかに当たる PR を `mergeable` と報じない。
+肯定してよいのは `mergeable` が `MERGEABLE`、かつ `mergeStateStatus` が `CLEAN` の時だけである。
+それ以外の値は次の表で倒す。値を見て迷わない。
 
-- `isDraft` が true
-- `mergeStateStatus` が `DIRTY`（マージ競合）
-- `statusCheckRollup` に失敗（`FAILURE` 等)や実行中の必須 check がある
-  （`mergeStateStatus` が `UNSTABLE` や `BLOCKED` の場合はここを読む）
+| 取った値 | 倒し先 | 意味 |
+|---|---|---|
+| `mergeable=CONFLICTING` | blocked | マージ競合 |
+| `mergeStateStatus=DIRTY` | blocked | マージ競合 |
+| `mergeStateStatus=BLOCKED` | blocked | 保護規則が塞いでいる（承認不足など。check が全部通っていても塞がる） |
+| `mergeStateStatus=UNSTABLE` | blocked | 必須 check の失敗か実行中（`statusCheckRollup` でどれかを特定する） |
+| `mergeStateStatus=DRAFT` / `isDraft=true` | blocked | draft |
+| `mergeStateStatus=BEHIND` | blocked | base から遅れている |
+| `mergeStateStatus=HAS_HOOKS` | blocked | pre-receive hook 待ち |
+| `mergeable=UNKNOWN` / `mergeStateStatus=UNKNOWN` | 判定不能 | GitHub がまだ判じていない。少し待って同じ取得をやり直す |
+
+`BLOCKED` はそれ自体が止め条件である。
+check の結論だけを読んで「通っているから良し」とするのは誤りで、
+承認不足で `BLOCKED` のまま check は全部通る形が現にある。
+
+`UNKNOWN` を blocked に寄せるのも誤りである。
+GitHub はマージ可能性を遅延計算するため、取得直後は `UNKNOWN` が返ることがある。
+判定不能とし、少し待って取り直す手を示す。
 
 判定名について三つを決めてある。
 判定名は `mergeable` のまま残す。
@@ -132,13 +147,32 @@ review 本文の外、行に付いたコメントは `reviews` に出ない。
 
 ```bash
 gh api --paginate "repos/$repo/pulls/$pr/comments"
-gh api graphql -f query='query{repository(owner:"'"${repo%%/*}"'",name:"'"${repo##*/}"'"){pullRequest(number:'"$pr"'){reviewThreads(first:100){nodes{isResolved isOutdated comments(first:1){nodes{path body}}}}}}}'
+
+q='query($owner:String!,$name:String!,$pr:Int!,$after:String){
+  repository(owner:$owner,name:$name){pullRequest(number:$pr){
+    reviewThreads(first:100,after:$after){
+      pageInfo{hasNextPage endCursor}
+      nodes{isResolved isOutdated comments(first:1){nodes{path body}}}}}}}'
+after=""; threads="[]"
+while :; do
+  page=$(gh api graphql -f query="$q" -f owner="${repo%%/*}" -f name="${repo##*/}" \
+    -F pr="$pr" ${after:+-f after="$after"}) || { echo "判定不能: thread を取れない"; break; }
+  threads=$(jq -c --argjson t "$threads" '$t + .data.repository.pullRequest.reviewThreads.nodes' <<<"$page")
+  hasNext=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$page")
+  after=$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"$page")
+  [ "$hasNext" = "true" ] || break
+done
 ```
+
+`gh api graphql --paginate` は reviewThreads のような入れ子の接続には効かない。
+`pageInfo` を読み、`hasNextPage` が真のあいだ `after` に `endCursor` を渡して回す。
+偽になれば止まり、`endCursor` はページごとに進むため無限には回らない。
 
 未解決（`isResolved` が false）の thread は、件数と path を記録し、
 merge 可否より先に列挙する。
-thread を取れなかったときは GitHub 側未読として「判定不能」へ倒す。
-取れなかったことを黙って「未解決なし」に化けさせない。
+thread を取れなかったとき、および `hasNextPage` が真のまま処理を終えたときは、
+GitHub 側未読として「判定不能」へ倒す。
+取れなかったこと、読み切れなかったことを黙って「未解決なし」に化けさせない。
 
 ### 4. task の盤を読む
 
