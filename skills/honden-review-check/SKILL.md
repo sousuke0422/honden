@@ -26,6 +26,7 @@ review の投稿、finding の登録や状態変更、PR の merge は行わな�
 
 - `$0`：PR 番号。必須。
 - `--project project`：task の project key または UUID。省略時は `task auth whoami --json` と `task projects list --json` から一意に定められる場合だけ補う。
+- `--repo owner/name`：対象 repo。省略時は cwd の repo を使う。対象 repo の木の外で実行するときは必ず渡す。
 
 PR 番号が無ければ、番号を一度だけ尋ねる。
 project が複数候補から一意に定まらなければ、候補を示して project を尋ねる。
@@ -53,7 +54,7 @@ task の R1 には HIGH、verified の「Guest は Web UI から許可された�
 ```bash
 pr="$0"                # 引数で受けた PR 番号
 project="…"            # --project で受けた project key または UUID
-repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+repo="${REPO_ARG:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"  # --repo が優先。無ければ cwd の repo
 git rev-parse --show-toplevel
 git rev-parse HEAD     # 報告の「repo HEAD」欄の記録用。比較には使わない
 ```
@@ -88,21 +89,56 @@ scope、tenant、project authorization の不足でも拒否されるため、�
 
 ```bash
 gh pr view "$pr" --repo "$repo" \
-  --json number,title,state,headRefOid,reviewDecision,reviews
+  --json number,title,state,url,headRefOid,reviewDecision,reviews,isDraft,mergeable,mergeStateStatus,statusCheckRollup
 head_sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid)
+gh pr view "$pr" --repo "$repo" --json url -q .url   # $repo と一致することを目で突き合わせる
 ```
 
 以降、`--head` にはこの `$head_sha` だけを渡す。
 PR 自身の headRefOid を唯一の比較対象と定めることで、
-どの repo・どの SHA の checkout から叩いても判定が変わらない。
+SHA の比較は checkout した木に依らない。
+`$repo` は `--repo` を省くと cwd から取るため、対象 repo の木の外では `--repo` を必ず渡す。
+
+`url` が `$repo` と食い違えば「判定不能: repo 不一致」で止める。
+別 repo の同番号 PR を黙って読む事故をここで塞ぐ。
 
 次を分けて記録する。
 
 - PR の現在 state と head SHA
 - 現在の reviewDecision
 - review ごとの state、commit SHA、reviewer、submittedAt、本文
+- isDraft、mergeStateStatus、statusCheckRollup の各 check の結論
 
 reviewDecision だけで過去の `CHANGES_REQUESTED` を捨てない。
+
+GitHub 側のマージ条件は最終判定に含める。
+次のいずれかに当たる PR を `mergeable` と報じない。
+
+- `isDraft` が true
+- `mergeStateStatus` が `DIRTY`（マージ競合）
+- `statusCheckRollup` に失敗（`FAILURE` 等)や実行中の必須 check がある
+  （`mergeStateStatus` が `UNSTABLE` や `BLOCKED` の場合はここを読む）
+
+判定名について三つを決めてある。
+判定名は `mergeable` のまま残す。
+材料の側に上の四項目を足す。
+理由は、この書の起動語に「マージできるか確認」があり、名を review-gate-clear へ
+逃がすと、読む者が期待する物と書が答える物が離れるためである。
+
+### 3b. インラインの thread を読む
+
+review 本文の外、行に付いたコメントは `reviews` に出ない。
+別口で取り、未解決の thread を判定に含める。
+
+```bash
+gh api --paginate "repos/$repo/pulls/$pr/comments"
+gh api graphql -f query='query{repository(owner:"'"${repo%%/*}"'",name:"'"${repo##*/}"'"){pullRequest(number:'"$pr"'){reviewThreads(first:100){nodes{isResolved isOutdated comments(first:1){nodes{path body}}}}}}}'
+```
+
+未解決（`isResolved` が false）の thread は、件数と path を記録し、
+merge 可否より先に列挙する。
+thread を取れなかったときは GitHub 側未読として「判定不能」へ倒す。
+取れなかったことを黙って「未解決なし」に化けさせない。
 
 ### 4. task の盤を読む
 
@@ -226,6 +262,8 @@ date -u +%Y-%m-%dT%H:%M:%SZ
 ### GitHub
 
 - 現在の state と reviewDecision
+- isDraft、mergeStateStatus、必須 check の結論
+- 未解決のインライン thread: 件数と path（取れなければ「判定不能」の理由に書く）
 - review history: state、SHA、reviewer、日時、本文要旨
 
 ### task
