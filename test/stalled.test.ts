@@ -39,6 +39,10 @@ function setLease(db: ReturnType<typeof seeded>['db'], leaseUntil: Date) {
   db.run('UPDATE task SET lease_until = ? WHERE agent = ?', [leaseUntil.toISOString(), 'ashigaru9']);
 }
 
+function lendToKaro(db: ReturnType<typeof seeded>['db']) {
+  db.run("UPDATE task SET holder = 'karo' WHERE agent = 'ashigaru9'");
+}
+
 const NOW = new Date('2026-09-15T00:57:00Z');
 
 describe('止まった持ち場の定め', () => {
@@ -143,6 +147,76 @@ describe('家老への報せ', () => {
       expect(result.code).toBe(0);
       expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).toBeNull();
       expect(db.query("SELECT 1 FROM ledger WHERE action = 'lease.stalled.notice'").get()).toBeNull();
+    } finally {
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
+  });
+
+  test('nudge は agent と異なる holder だけが働いておれば報せぬ', async () => {
+    const path = join(tmpdir(), `stalled-holder-working-${Date.now()}.db`);
+    try {
+      const { db } = seeded(path);
+      lendToKaro(db);
+      setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
+
+      const result = await runNudge(path, false, false, undefined, 'core', () => new Map());
+      expect(result.code).toBe(0);
+      expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).toBeNull();
+    } finally {
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
+  });
+
+  test('nudge は agent だけが働き holder が止まっておれば報せる', async () => {
+    const path = join(tmpdir(), `stalled-agent-working-${Date.now()}.db`);
+    try {
+      const { db } = seeded(path);
+      lendToKaro(db);
+      setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
+      db.run("UPDATE ledger SET actor = 'ashigaru9', at = ?", [new Date().toISOString()]);
+
+      const result = await runNudge(path, false, false, undefined, 'core', () => new Map());
+      expect(result.code).toBe(0);
+      expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).not.toBeNull();
+    } finally {
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
+  });
+
+  test('nudge は holder の pane が処理中なら報せぬ', async () => {
+    const path = join(tmpdir(), `stalled-pane-busy-${Date.now()}.db`);
+    try {
+      const { db } = seeded(path);
+      setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
+      db.run("UPDATE ledger SET at = '2000-01-01T00:00:00.000Z'");
+
+      const paneReader = () => new Map([['ashigaru9', { id: '%9', label: 'honden:agents.9' }]]);
+      const result = await runNudge(path, false, false, undefined, 'core', paneReader, () => true);
+      expect(result.code).toBe(0);
+      expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).toBeNull();
+    } finally {
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
+  });
+
+  test('nudge は holder の pane が無ければ報せる', async () => {
+    const path = join(tmpdir(), `stalled-pane-absent-${Date.now()}.db`);
+    try {
+      const { db } = seeded(path);
+      setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
+      db.run("UPDATE ledger SET at = '2000-01-01T00:00:00.000Z'");
+
+      const result = await runNudge(
+        path,
+        false,
+        false,
+        undefined,
+        'core',
+        () => new Map(),
+        () => { throw new Error('pane が無ければ captureBusy を呼んではならぬ'); },
+      );
+      expect(result.code).toBe(0);
+      expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).not.toBeNull();
     } finally {
       try { unlinkSync(path); } catch { /* 消えておればよい */ }
     }

@@ -22,6 +22,7 @@ export const STALLED_AFTER_MS = DEFAULT_LEASE_MINUTES * 60_000;
 export interface StalledLease {
   taskId: string;
   agent: string;
+  holder: string;
   cmdId: string | null;
   leaseUntil: string;
 }
@@ -33,7 +34,7 @@ export function findStalled(
 ): StalledLease[] {
   const rows = db
     .query(
-      `SELECT task_id taskId, agent, cmd_id cmdId, lease_until leaseUntil
+      `SELECT task_id taskId, agent, holder, cmd_id cmdId, lease_until leaseUntil
        FROM task
        WHERE holder IS NOT NULL
          AND task_id IS NOT NULL

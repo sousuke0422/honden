@@ -13,7 +13,7 @@ import type { Database } from 'bun:sqlite';
 import { clockLine, ago } from './cli';
 import { resolve as resolveIdentity, mayActAs, type Identity } from './identity';
 import { anchorFrom, realProbe } from './anchor';
-import { paneInOwn, panes } from './pane';
+import { paneInOwn, panes, type Pane, type TmuxRunner } from './pane';
 import { applyBorders } from './border';
 import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
@@ -953,14 +953,16 @@ export async function runNudge(
   wakeShogun: boolean,
   reason: string | undefined,
   selfId?: string,
+  paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
+  busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
 ): Promise<RunResult> {
   // 二つの手が同時に撃つのを止める。芯は前の子が終わる前に次を起こすゆえ、
   // 錠が無ければ両方が「まだ撃っておらぬ」と読んで揃って撃つ（実害を見た）。
   // --dry-run は書かぬゆえ錠を要さぬ。
-  if (dryRun) return runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId);
+  if (dryRun) return runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader);
   const lockPath = `${dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH}.nudge.lock`;
   const r = await withNudgeLock(lockPath, () =>
-    runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId),
+    runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader),
   );
   if (r === null) {
     // 撃たぬのが正しい。芯へは「次は普通の間で」と返す。
@@ -975,6 +977,8 @@ async function runNudgeInner(
   wakeShogun: boolean,
   reason: string | undefined,
   selfId?: string,
+  paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
+  busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
 ): Promise<RunResult> {
   const db = openStore({ path: dbPath });
 
@@ -1102,11 +1106,11 @@ async function runNudgeInner(
   if (!dryRun) {
     try {
       const stalledBusy = new Set<string>();
-      const paneByAgent = panes();
+      const paneByAgent = paneReader();
       const cliByAgent = new Map(roster(db).map((r) => [r.id, r.cli]));
       for (const s of findStalled(db, new Set(), now)) {
-        const pane = paneByAgent.get(s.agent);
-        if (isWorking(db, s.agent, now) || (pane && captureBusy(pane, cliByAgent.get(s.agent) ?? null))) {
+        const pane = paneByAgent.get(s.holder);
+        if (isWorking(db, s.holder, now) || (pane && busyReader(pane, cliByAgent.get(s.holder) ?? null))) {
           stalledBusy.add(s.agent);
         }
       }
