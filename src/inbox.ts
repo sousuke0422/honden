@@ -83,6 +83,7 @@ const URGENT_TYPES = new Set([
   // 見捨てられた司令は既に閾値分の時を失っておる。家老が次に honden を
   // 叩いた節目で横乗せの一行に出るよう、急ぎに数える (src/abandoned.ts)。
   'cmd_abandoned',
+  'lease_stalled',
 ]);
 
 /**
