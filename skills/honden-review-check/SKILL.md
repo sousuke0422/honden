@@ -46,22 +46,27 @@ task の R1 には HIGH、verified の「Guest は Web UI から許可された�
 
 ## 照合手順
 
-### 1. 対象 repo と HEAD を固定する
+### 1. 対象 repo と引数を固定する
 
 対象 PR の repo の worktree で実行する。
 
 ```bash
+pr="$0"                # 引数で受けた PR 番号
+project="…"            # --project で受けた project key または UUID
+repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 git rev-parse --show-toplevel
-git rev-parse HEAD
-gh repo view --json nameWithOwner -q .nameWithOwner
+git rev-parse HEAD     # 報告の「repo HEAD」欄の記録用。比較には使わない
 ```
 
-`task review summary` は既定で cwd の `git rev-parse HEAD` を比較対象にする。
-別 repo で実行すると、その repo の HEAD と review round の SHA を比較して `blocked` になる。
-この罠は旧陣で 2026-09-17 に実測した。
+`git rev-parse HEAD` は cwd の checkout を写すだけで、PR の head とは限らない。
+記録用に留め、merge 判定の比較対象には使わない。
+比較に使う SHA は Step 3 で PR 自身から取る（`$head_sha`）。
 
-対象 repo の worktree へ移れない場合は、`--head` に対象 PR の40桁 head SHAを明示する。
-別 repo の HEAD をそのまま使わない。
+`task review summary` は `--head` を省くと cwd の `git rev-parse HEAD` を比較対象にする。
+別 repo や別 SHA の checkout で実行すると、無関係な SHA と review round の SHA を
+比較して `blocked` になる。この罠は旧陣で 2026-09-17 に実測した。
+ゆえに `--head` は省かず、常に `$head_sha`（Step 3 で取る PR の headRefOid）を渡す。
+cwd がどこであっても手順は変わらない。
 
 ### 2. task の認証を先に確かめる
 
@@ -84,7 +89,12 @@ scope、tenant、project authorization の不足でも拒否されるため、�
 ```bash
 gh pr view "$pr" --repo "$repo" \
   --json number,title,state,headRefOid,reviewDecision,reviews
+head_sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid)
 ```
+
+以降、`--head` にはこの `$head_sha` だけを渡す。
+PR 自身の headRefOid を唯一の比較対象と定めることで、
+どの repo・どの SHA の checkout から叩いても判定が変わらない。
 
 次を分けて記録する。
 
