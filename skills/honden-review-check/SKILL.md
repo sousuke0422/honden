@@ -112,11 +112,18 @@ SHA の比較は checkout した木に依らない。
 reviewDecision だけで過去の `CHANGES_REQUESTED` を捨てない。
 
 GitHub 側のマージ条件は最終判定に含める。
-肯定してよいのは `mergeable` が `MERGEABLE`、かつ `mergeStateStatus` が `CLEAN` の時だけである。
+最初に `state` を見る。他の欄より先である。
+閉じた PR は `mergeable=MERGEABLE`・`mergeStateStatus=CLEAN` を返したままのことがあり
+（この repo の閉じた PR で実測・2026-09-20）、state を後回しにすると誤って肯定が出る。
+
+肯定してよいのは `state` が `OPEN`、かつ `mergeable` が `MERGEABLE`、
+かつ `mergeStateStatus` が `CLEAN` の時だけである。
 それ以外の値は次の表で倒す。値を見て迷わない。
 
 | 取った値 | 倒し先 | 意味 |
 |---|---|---|
+| `state=MERGED` | マージ済み（判定終了） | 既に取り込まれている。mergeable とも blocked とも言わず、レビュー可否は答えない |
+| `state=CLOSED` | blocked（再オープンが要る） | 開き直さなければ merge できない。普通の blocked と次の手が違うため分けて出す |
 | `mergeable=CONFLICTING` | blocked | マージ競合 |
 | `mergeStateStatus=DIRTY` | blocked | マージ競合 |
 | `mergeStateStatus=BLOCKED` | blocked | 保護規則が塞いでいる（承認不足など。check が全部通っていても塞がる） |
@@ -294,7 +301,7 @@ date -u +%Y-%m-%dT%H:%M:%SZ
 - 取得時刻: YYYY-MM-DDTHH:MM:SSZ
 - repo HEAD: 40桁 SHA
 - PR head: 40桁 SHA
-- 判定: mergeable / blocked / 判定不能
+- 判定: mergeable / blocked / 判定不能 / マージ済み（blocked のうち再オープンが要る物はその旨を添える）
 
 ### 読めなかった盤
 
