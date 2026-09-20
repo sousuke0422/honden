@@ -236,3 +236,36 @@ describe('枠切れの明ける刻を読む（limitedWaitMs）', () => {
     expect(limitedWaitMs('usage limit — try again at 12:05 AM', at(23, 50))).toBe(15 * MIN + 2 * MIN);
   });
 });
+
+describe('日付を添えた旗を読む（実物採取 2026-09-20・ashigaru3 の pane・codex）', () => {
+  const MIN = 60_000;
+  // 実物の字面そのまま。序数の接尾（st）・年・午前午後つき。
+  const DATED = 'or try again at Sep 21st, 2026 12:03 AM.';
+  // pane の写しの形（尻の数行に旗が居る）
+  const PANE =
+    'Y■ You\'ve hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing)\n' +
+    `  or visit https://chatgpt.com/codex/settings/usage to purchase more credits ${DATED}\n`;
+  const on = (d: number, h: number, m: number) => new Date(2026, 8, d, h, m, 0, 0);
+
+  test('実物の pane の写しから刻が読める（直す前は null であった）', () => {
+    // 2026-09-20 21:00 に読むと、明けは 09-21 00:03。待ちは 3 時間 3 分 + 2 分
+    expect(limitedWaitMs(PANE, on(20, 21, 0))).toBe((3 * 60 + 3 + 2) * MIN);
+  });
+  test('日を跨ぐ長い待ちは 6 時間で頭打ち——切れても撃たず、次の周が写し直して待ち直す', () => {
+    expect(limitedWaitMs(PANE, on(20, 12, 0))).toBe(6 * 60 * MIN);
+  });
+  test('日付が正である——「近い方」の推し量りに落ちぬ', () => {
+    // 09-21 23:00 に読むと、旗の 09-21 00:03 は 23 時間前。日付を読めば過ぎた旗である。
+    // 日付を無視して「近い方」を採れば翌 00:03（1 時間後）と誤読し、撃たずに待ち続ける
+    expect(limitedWaitMs(PANE, on(21, 23, 0))).toBeNull();
+  });
+  test('過ぎた日付つきの旗は枠切れと見ぬ（scroll-back の残骸）', () => {
+    expect(limitedWaitMs(PANE, on(22, 9, 0))).toBeNull();
+  });
+  test('暦に無い日付は枠切れと見ぬ', () => {
+    expect(limitedWaitMs('usage limit — try again at Sep 32nd, 2026 1:00 AM.', on(20, 12, 0))).toBeNull();
+  });
+  test('枠が有る旨の案内は日付つきの筋でも枯渇と読まぬ', () => {
+    expect(limitedWaitMs(CLAUDE_RESETS_AVAILABLE, on(20, 12, 0))).toBeNull();
+  });
+});

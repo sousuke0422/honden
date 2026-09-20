@@ -955,14 +955,15 @@ export async function runNudge(
   selfId?: string,
   paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
   busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
+  limitedReader: (pane: Pane, now: Date) => number | null = captureLimitedWaitMs,
 ): Promise<RunResult> {
   // 二つの手が同時に撃つのを止める。芯は前の子が終わる前に次を起こすゆえ、
   // 錠が無ければ両方が「まだ撃っておらぬ」と読んで揃って撃つ（実害を見た）。
   // --dry-run は書かぬゆえ錠を要さぬ。
-  if (dryRun) return runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader);
+  if (dryRun) return runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader, limitedReader);
   const lockPath = `${dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH}.nudge.lock`;
   const r = await withNudgeLock(lockPath, () =>
-    runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader),
+    runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader, limitedReader),
   );
   if (r === null) {
     // 撃たぬのが正しい。芯へは「次は普通の間で」と返す。
@@ -979,6 +980,7 @@ async function runNudgeInner(
   selfId?: string,
   paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
   busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
+  limitedReader: (pane: Pane, now: Date) => number | null = captureLimitedWaitMs,
 ): Promise<RunResult> {
   const db = openStore({ path: dbPath });
 
@@ -1002,7 +1004,8 @@ async function runNudgeInner(
   // 前回の残りから始まってしまう。
   startClocks(db, now, { wakeShogun });
 
-  let plans = plan(db, now, { wakeShogun });
+  const paneMap = paneReader();
+  let plans = plan(db, now, { wakeShogun, panes: paneMap });
   // 段 3 の的が手すきかを見る。busy の相手に文脈消しを撃っても拒まれる
   // （codex 実測）ゆえ、塞がっておる者は素の合図へ降ろして延期する。
   // 画面だけでは見逃す（cursor は長い命の間 'ctrl+c to stop' を出さぬ）ゆえ、
@@ -1020,7 +1023,7 @@ async function runNudgeInner(
       busyReason.set(p.agent, '画面が処理中');
     }
   }
-  if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy, busyReason });
+  if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy, busyReason, panes: paneMap });
   // **枠切れの pane には何も撃たぬ。** 5h 枠の枯渇で止まった相手に段梯子を
   // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。
   // 段も reset の刻印も進めぬ——枠が明けた最初の周から通常の梯子が再開する。
@@ -1029,7 +1032,7 @@ async function runNudgeInner(
   // 明ける刻の際どい所で「撃つ/撃たぬ」が一周の中で揺れる。
   for (const p of plans) {
     if (!p.send || !p.pane) continue;
-    const wait = captureLimitedWaitMs(p.pane, now);
+    const wait = limitedReader(p.pane, now);
     if (wait !== null) {
       // 旗に明ける刻が書いてあれば、その刻の直後（+2 分）に再訪する。
       // 読めねば 5 分の盲目再訪。段も reset の刻印も進めぬのは従前どおり。

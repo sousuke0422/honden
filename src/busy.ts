@@ -177,6 +177,17 @@ const LIMITED_MARGIN_MS = 2 * 60_000;
 const LIMITED_MAX_WAIT_MS = 6 * 60 * 60_000;
 const RESET_TIME = /(?:resets?(?:\s+at)?|try again at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
 
+// 日付を添えた旗（実物・2026-09-20 採取・codex）:
+//   … or try again at Sep 21st, 2026 12:03 AM.
+// 月名・序数の接尾（st/nd/rd/th）・年・午前午後まで刷られる。
+// 日付が在るならそれが正であり、「今から近い方」の推し量りは要らぬ。
+const DATED_RESET =
+  /(?:resets?(?:\s+at)?|try again at)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+const MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
 /**
  * 壁時計の刻を暦へ落とす。**今から最も近い解釈を採る。**
  *
@@ -201,19 +212,43 @@ function nearestClockTime(h: number, min: number, now: Date): Date {
   return best;
 }
 
+/** 午前午後を 24 時間へ落とす。読めぬ刻は null。 */
+function to24h(hRaw: number, min: number, ap: string | undefined): number | null {
+  let h = hRaw;
+  if (ap === 'pm' && h !== 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  if (h > 23 || min > 59) return null;
+  return h;
+}
+
 export function limitedWaitMs(capture: string, now: Date): number | null {
   const tail = tailOf(capture);
   if (NOT_LIMITED.test(tail)) return null; // 枠が有るという案内。枯渇ではない
   if (!LIMITED.test(tail)) return null;
+
+  // 日付つきの旗が先。日付が刷られておるなら、それが正である——
+  // 「今から近い方」を採る筋は日付を持たぬ旗のための推し量りにすぎぬ。
+  const d = DATED_RESET.exec(tail);
+  if (d) {
+    const month = MONTHS[d[1]!.toLowerCase().slice(0, 3)]!;
+    const day = Number(d[2]);
+    const year = Number(d[3]);
+    const h = to24h(Number(d[4]), Number(d[5] ?? '0'), d[6]?.toLowerCase());
+    if (h === null) return null; // 刻が読めぬ
+    const t = new Date(year, month, day, h, Number(d[5] ?? '0'), 0, 0);
+    if (t.getMonth() !== month || t.getDate() !== day) return null; // 32 日等、暦に無い日付
+    if (t.getTime() <= now.getTime()) return null; // 過ぎた旗は scroll-back の残骸
+    const wait = t.getTime() - now.getTime() + LIMITED_MARGIN_MS;
+    // 頭打ちは保つ。切れても撃たぬ——次の周が pane を写し直し、旗がまだ
+    // 未来を指しておれば改めて待つ。頭打ちは読み違いで一昼夜黙る事故だけを塞ぐ。
+    return Math.min(wait, LIMITED_MAX_WAIT_MS);
+  }
+
   const m = RESET_TIME.exec(tail);
   if (!m) return null; // 刻の併記が無い——枠切れの印はこれである
-  let h = Number(m[1]);
-  const min = Number(m[2] ?? '0');
-  const ap = m[3]?.toLowerCase();
-  if (ap === 'pm' && h !== 12) h += 12;
-  if (ap === 'am' && h === 12) h = 0;
-  if (h > 23 || min > 59) return null; // 刻が読めぬ
-  const t = nearestClockTime(h, min, now);
+  const h = to24h(Number(m[1]), Number(m[2] ?? '0'), m[3]?.toLowerCase());
+  if (h === null) return null; // 刻が読めぬ
+  const t = nearestClockTime(h, Number(m[2] ?? '0'), now);
   if (t.getTime() <= now.getTime()) return null; // 刻は過ぎておる——枠は戻っておる
   const wait = t.getTime() - now.getTime() + LIMITED_MARGIN_MS;
   return Math.min(wait, LIMITED_MAX_WAIT_MS);
