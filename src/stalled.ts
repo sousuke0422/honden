@@ -67,6 +67,8 @@ export function notifyStalled(
     const id = `msg_stalled_${s.taskId}_u${Date.parse(s.leaseUntil)}`;
     if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) continue;
     const expiredMinutes = Math.floor((now.getTime() - Date.parse(s.leaseUntil)) / 60_000);
+    const assignee = s.holder === s.agent ? s.agent : `${s.agent}（holder: ${s.holder}）`;
+    const divider = s.holder === s.agent ? ' / ' : '/ ';
     deliver(db, {
       id,
       agent: ASSIGNER,
@@ -74,8 +76,8 @@ export function notifyStalled(
       type: 'lease_stalled',
       sender: 'core',
       body:
-        `止まった持ち場: ${s.agent} / ${s.taskId}${s.cmdId ? ` / ${s.cmdId}` : ''}\n\n` +
-        `holder が立ったまま貸与期限 ${s.leaseUntil} から ${expiredMinutes} 分が過ぎ、` +
+        `止まった持ち場: ${assignee}${divider}${s.taskId}${s.cmdId ? ` / ${s.cmdId}` : ''}\n\n` +
+        `${s.holder} が holder として立ったまま貸与期限 ${s.leaseUntil} から ${expiredMinutes} 分が過ぎ、` +
         `直近の活動も pane の処理中表示も見つからぬ。\n` +
         `振り直すか、貸与を解くか、長い処理と確かめてそのまま待つか差配されよ。`,
     });
@@ -83,7 +85,7 @@ export function notifyStalled(
       actor: 'core',
       action: 'lease.stalled.notice',
       target: s.taskId,
-      detail: `agent=${s.agent} lease_until=${s.leaseUntil}`,
+      detail: `agent=${s.agent} holder=${s.holder} lease_until=${s.leaseUntil}`,
       at: now,
     });
     sent.push(s);

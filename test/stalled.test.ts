@@ -97,9 +97,27 @@ describe('家老への報せ', () => {
       .all() as { agent: string; msg_type: string; body: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0]!.agent).toBe('karo');
-    expect(rows[0]!.body).toContain('止まった持ち場');
+    expect(rows[0]!.body).toContain('止まった持ち場: ashigaru9 /');
+    expect(rows[0]!.body).not.toContain('（holder:');
     expect(rows[0]!.body).toContain('振り直すか、貸与を解くか');
     expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'cmd_abandoned'").get()).toBeNull();
+  });
+
+  test('holder が agent と異なれば報せと journal に実保持者を載せる', () => {
+    const { db } = seeded();
+    lendToKaro(db);
+    setLease(db, new Date(NOW.getTime() - STALLED_AFTER_MS - 60_000));
+
+    expect(notifyStalled(db, new Set(), NOW)).toHaveLength(1);
+    const notice = db
+      .query("SELECT body FROM inbox WHERE msg_type = 'lease_stalled'")
+      .get() as { body: string };
+    expect(notice.body).toContain('止まった持ち場: ashigaru9（holder: karo）/');
+    expect(notice.body).toContain('karo が holder として立ったまま');
+    const entry = db
+      .query("SELECT detail FROM ledger WHERE action = 'lease.stalled.notice'")
+      .get() as { detail: string };
+    expect(entry.detail).toContain('agent=ashigaru9 holder=karo');
   });
 
   test('貸与が更新された後に再び止まれば改めて鳴る', () => {
