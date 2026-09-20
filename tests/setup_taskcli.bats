@@ -46,7 +46,14 @@ setup() {
 }
 
 @test "**数が合わねば置かぬ**（紙を書き換えて仕込む）" {
-  sed -i '1s/^./0/; 1s/^0/1/' "$SERVE/SHA256SUMS"   # 先頭一字を確実に変える
+  # 元の先頭が 0 なら 1 へ、それ以外は 0 へ——元の字に依らず必ず変わる
+  before=$(cat "$SERVE/SHA256SUMS")
+  case "$before" in
+    0*) sed -i '1s/^./1/' "$SERVE/SHA256SUMS" ;;
+    *)  sed -i '1s/^./0/' "$SERVE/SHA256SUMS" ;;
+  esac
+  after=$(cat "$SERVE/SHA256SUMS")
+  [ "$before" != "$after" ]   # 仕込みが効かなんだら、ここで試験ごと落とす
   run bash "$ROOT/scripts/setup_task_cli.sh" --yes
   [ "$status" -ne 0 ]
   [ ! -e "$HOME/.local/bin/task" ]
