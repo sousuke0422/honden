@@ -294,6 +294,15 @@ describe('過ぎた旗が新しい旗を隠さぬ（scroll-back に二つ残る�
     // 20:00: 先頭一致（2pm）は過ぎておる。末尾の 9:30pm を採れば 1 時間 32 分
     expect(limitedWaitMs(pane, on(21, 20, 0))).toBe((90 + 2) * MIN);
   });
+  test('古い刻のみの下に過ぎた日付つきが在れば null——最も下の旗が正', () => {
+    // 09-21 20:00: 一番下の旗（日付つき 09-21 00:03）は過ぎておる＝枠は戻っておる。
+    // 上の resets 9:30pm は前の枠切れの残骸である。形（日付つきか否か）で選べば
+    // 残骸の 9:30pm を読んで 92 分待ってしまう——位置で選べばこの窓は開かぬ
+    const pane =
+      "You've hit your usage limit · resets 9:30pm\n" +
+      "You've hit your usage limit. or try again at Sep 21st, 2026 12:03 AM.\n";
+    expect(limitedWaitMs(pane, on(21, 20, 0))).toBeNull();
+  });
   test('陰性対照: 過ぎた旗しか無ければ従来どおり null', () => {
     const pane =
       'usage limit — or try again at Sep 21st, 2026 12:03 AM.\n' +
