@@ -269,3 +269,39 @@ describe('日付を添えた旗を読む（実物採取 2026-09-20・ashigaru3 �
     expect(limitedWaitMs(CLAUDE_RESETS_AVAILABLE, on(20, 12, 0))).toBeNull();
   });
 });
+
+describe('過ぎた旗が新しい旗を隠さぬ（scroll-back に二つ残る形）', () => {
+  const MIN = 60_000;
+  const on = (d: number, h: number, m: number) => new Date(2026, 8, d, h, m, 0, 0);
+
+  test('過ぎた日付つきの旗の下に、未来を指す刻のみの旗が居れば、そちらを読む', () => {
+    // 09-21 20:00: 日付つき（09-21 00:03）は残骸、刻のみ（9:30pm）が現の旗
+    const pane =
+      "You've hit your usage limit. or try again at Sep 21st, 2026 12:03 AM.\n" +
+      '❯ /continue\n' +
+      "You've hit your usage limit · resets 9:30pm\n";
+    expect(limitedWaitMs(pane, on(21, 20, 0))).toBe((90 + 2) * MIN);
+  });
+  test('日付つき同士が二つ残れば、末尾に近い方を採る', () => {
+    const pane =
+      'usage limit — or try again at Sep 21st, 2026 12:03 AM.\n' +
+      'usage limit — or try again at Sep 23rd, 2026 3:00 AM.\n';
+    // 09-22 23:00: 古い方は過ぎ、末尾の 09-23 03:00 まで 4 時間 + 2 分
+    expect(limitedWaitMs(pane, on(22, 23, 0))).toBe((4 * 60 + 2) * MIN);
+  });
+  test('刻のみ同士が二つ残れば、末尾に近い方を採る', () => {
+    const pane = 'usage limit — resets 2pm\nusage limit — resets 9:30pm\n';
+    // 20:00: 先頭一致（2pm）は過ぎておる。末尾の 9:30pm を採れば 1 時間 32 分
+    expect(limitedWaitMs(pane, on(21, 20, 0))).toBe((90 + 2) * MIN);
+  });
+  test('陰性対照: 過ぎた旗しか無ければ従来どおり null', () => {
+    const pane =
+      'usage limit — or try again at Sep 21st, 2026 12:03 AM.\n' +
+      'usage limit — resets 2pm\n';
+    // 09-21 20:00: どちらも過ぎておる——枠は戻っており、梯子は動いてよい
+    expect(limitedWaitMs(pane, on(21, 20, 0))).toBeNull();
+  });
+  test('陰性対照: 枠が有る旨の案内は従来どおり弾かれる', () => {
+    expect(limitedWaitMs(CLAUDE_RESETS_AVAILABLE, on(21, 20, 0))).toBeNull();
+  });
+});

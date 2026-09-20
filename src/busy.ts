@@ -175,14 +175,14 @@ export function isWorking(db: Database, agent: string, now: Date = new Date()): 
  */
 const LIMITED_MARGIN_MS = 2 * 60_000;
 const LIMITED_MAX_WAIT_MS = 6 * 60 * 60_000;
-const RESET_TIME = /(?:resets?(?:\s+at)?|try again at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+const RESET_TIME = /(?:resets?(?:\s+at)?|try again at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
 
 // 日付を添えた旗（実物・2026-09-20 採取・codex）:
 //   … or try again at Sep 21st, 2026 12:03 AM.
 // 月名・序数の接尾（st/nd/rd/th）・年・午前午後まで刷られる。
 // 日付が在るならそれが正であり、「今から近い方」の推し量りは要らぬ。
 const DATED_RESET =
-  /(?:resets?(?:\s+at)?|try again at)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+  /(?:resets?(?:\s+at)?|try again at)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
 const MONTHS: Record<string, number> = {
   jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
   jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
@@ -226,25 +226,35 @@ export function limitedWaitMs(capture: string, now: Date): number | null {
   if (NOT_LIMITED.test(tail)) return null; // 枠が有るという案内。枯渇ではない
   if (!LIMITED.test(tail)) return null;
 
+  // どちらの紋様も**末尾に最も近い一致**を採る。pane の写しは scroll-back を
+  // 抱えるゆえ、同じ形の旗が二つ残ることがある——新しい方が下に居る。
+  //
   // 日付つきの旗が先。日付が刷られておるなら、それが正である——
   // 「今から近い方」を採る筋は日付を持たぬ旗のための推し量りにすぎぬ。
-  const d = DATED_RESET.exec(tail);
+  // ただし**過ぎた日付つきの旗は打ち切りの理由にならぬ**。残骸の下に、
+  // 新しい刻のみの旗が居るやも知れぬゆえ、刻のみの判じへ落とす。
+  // 日付つきの字面は RESET_TIME に当たらぬ（月名が数字の位置を塞ぐ・実測済み）
+  // ゆえ、同じ旗を二重に読む心配は無い。
+  const d = [...tail.matchAll(DATED_RESET)].at(-1);
   if (d) {
     const month = MONTHS[d[1]!.toLowerCase().slice(0, 3)]!;
     const day = Number(d[2]);
     const year = Number(d[3]);
     const h = to24h(Number(d[4]), Number(d[5] ?? '0'), d[6]?.toLowerCase());
-    if (h === null) return null; // 刻が読めぬ
-    const t = new Date(year, month, day, h, Number(d[5] ?? '0'), 0, 0);
-    if (t.getMonth() !== month || t.getDate() !== day) return null; // 32 日等、暦に無い日付
-    if (t.getTime() <= now.getTime()) return null; // 過ぎた旗は scroll-back の残骸
-    const wait = t.getTime() - now.getTime() + LIMITED_MARGIN_MS;
-    // 頭打ちは保つ。切れても撃たぬ——次の周が pane を写し直し、旗がまだ
-    // 未来を指しておれば改めて待つ。頭打ちは読み違いで一昼夜黙る事故だけを塞ぐ。
-    return Math.min(wait, LIMITED_MAX_WAIT_MS);
+    if (h !== null) {
+      const t = new Date(year, month, day, h, Number(d[5] ?? '0'), 0, 0);
+      if (t.getMonth() === month && t.getDate() === day && t.getTime() > now.getTime()) {
+        const wait = t.getTime() - now.getTime() + LIMITED_MARGIN_MS;
+        // 頭打ちは保つ。切れても撃たぬ——次の周が pane を写し直し、旗がまだ
+        // 未来を指しておれば改めて待つ。頭打ちは読み違いで一昼夜黙る事故だけを塞ぐ。
+        return Math.min(wait, LIMITED_MAX_WAIT_MS);
+      }
+      // 過ぎた・暦に無い・読めぬ——いずれも scroll-back の残骸として捨て、
+      // 末尾側に新しい刻のみの旗が居らぬかを見る。
+    }
   }
 
-  const m = RESET_TIME.exec(tail);
+  const m = [...tail.matchAll(RESET_TIME)].at(-1);
   if (!m) return null; // 刻の併記が無い——枠切れの印はこれである
   const h = to24h(Number(m[1]), Number(m[2] ?? '0'), m[3]?.toLowerCase());
   if (h === null) return null; // 刻が読めぬ
