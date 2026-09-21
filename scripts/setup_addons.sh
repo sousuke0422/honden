@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# 外の道具（addon）を一つの口から据える。第一弾は Serena と context7 / deepwiki。
+#
+# これはアドオンの仕度である——**入れずとも honden は立つ**。走らせた者と
+# 走らせぬ者で honden の振る舞いは変わらぬ。
+#
+#   bash scripts/setup_addons.sh --check          # 何が据わっておるかを述べる（何も変えぬ）
+#   bash scripts/setup_addons.sh                  # 訊いてから全部を据える
+#   bash scripts/setup_addons.sh --yes            # 訊かぬ
+#   bash scripts/setup_addons.sh serena           # 選んで据える（serena / context7 / deepwiki）
+#   bash scripts/setup_addons.sh --uninstall serena  # serena を外す
+#
+# 作法は setup_task_cli.sh / setup_skills.sh に揃える:
+#   訊いてから変える（--yes で黙る）・検めを通らぬ物は置かぬ・断りは正直に。
+#
+# 鍵の扱い:
+#   **既定は鍵なし**である。context7 は鍵なしでも据わり、動く（上流の README は
+#   「鍵は rate limit を上げる推奨」と述べる。必須とは述べぬ）。deepwiki は
+#   そもそも鍵を持たぬ（free / no-authentication・上流の書）。この script は
+#   鍵を**書き込まぬし読み上げぬ**——在るか無いかだけを述べる。鍵を持つ者は
+#   各人の設定（~/.codex/config.toml の http_headers 等）へ自分で足す。
+#   repo の下へ鍵が落ちる道は無い（この script はカレントや repo 内に書かぬ）。
+#
+# 既に在る設定には触れぬ:
+#   設定に同じ名（mcp_servers.context7 等）が既に居れば、その区画は読みも
+#   書きもせず「据わっておる」と述べるだけである。鍵付きで繋いでおる者の
+#   設定を、仕度が黙って書き換えてはならぬ（setup_skills.sh と同じ倒し方）。
+set -uo pipefail
+
+CLAUDE_CFG="${ADDON_CLAUDE_CFG:-$HOME/.claude.json}"
+CODEX_CFG="${ADDON_CODEX_CFG:-$HOME/.codex/config.toml}"
+CURSOR_CFG="${ADDON_CURSOR_CFG:-$HOME/.cursor/mcp.json}"
+CTX7_URL="https://mcp.context7.com/mcp"
+DEEPWIKI_URL="https://mcp.deepwiki.com/mcp"
+
+c()   { printf '\033[%sm%s\033[0m' "$1" "$2"; }
+info(){ echo "  $(c '0;36' '│') $*"; }
+ok()  { echo "  $(c '1;32' '✓') $*"; }
+warn(){ echo "  $(c '1;33' '▲') $*"; }
+die() { echo "  $(c '1;31' '✗') $*" >&2; exit 1; }
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+YES=0; CHECK=0; UNINSTALL=0; PICK=()
+for a in "$@"; do
+  case "$a" in
+    --yes) YES=1 ;;
+    --check) CHECK=1 ;;
+    --uninstall) UNINSTALL=1 ;;
+    serena|context7|deepwiki) PICK+=("$a") ;;
+    *) die "知らぬ旗: $a（--check / --yes / --uninstall / serena / context7 / deepwiki）" ;;
+  esac
+done
+[ ${#PICK[@]} -eq 0 ] && PICK=(serena context7 deepwiki)
+
+[ "$(uname -s)" = Linux ] || die "この仕度は Linux 向けである（$(uname -s)）。他の土地は上流の手引きで手で"
+
+# ── 客（CLI）は正本から引く。honden が居らねば陣の三つへ倒す ──
+clients() {
+  if have honden; then
+    honden roster 2>/dev/null | grep -oE '\b(claude|codex|cursor)\b' | sort -u
+  fi
+}
+CLIENTS=$(clients)
+[ -n "$CLIENTS" ] || CLIENTS=$'claude\ncodex\ncursor'
+
+# ── 在るか無いかを見る（読み専用） ──
+in_claude(){ [ -f "$CLAUDE_CFG" ] && grep -q "\"$1\"" "$CLAUDE_CFG"; }
+in_codex(){  [ -f "$CODEX_CFG" ]  && grep -q "^\[mcp_servers\.$1\]" "$CODEX_CFG"; }
+in_cursor(){ [ -f "$CURSOR_CFG" ] && grep -q "\"$1\"" "$CURSOR_CFG"; }
+codex_key(){ [ -f "$CODEX_CFG" ] && grep -q "^\[mcp_servers\.$1\.http_headers\]" "$CODEX_CFG"; }
+
+state_line() { # <tool> <client> → 一行
+  local t="$1" cl="$2" s=""
+  case "$cl" in
+    claude) in_claude "$t" && s="据わっておる" || s="据わっておらぬ" ;;
+    codex)  in_codex  "$t" && s="据わっておる" || s="据わっておらぬ"
+            [ "$t" = context7 ] && codex_key "$t" && s="$s（鍵: 在る）" ;;
+    cursor) in_cursor "$t" && s="据わっておる" || s="据わっておらぬ" ;;
+  esac
+  echo "    $t / $cl: $s"
+}
+
+do_check() {
+  info "据わり具合（何も変えぬ）:"
+  if have serena; then ok "serena の本体: 在る（$(command -v serena)）"; else info "serena の本体: 無い"; fi
+  have uv || info "uv: 無い（serena を据えるには要る）"
+  for t in "${PICK[@]}"; do
+    if [ "$t" = serena ] && ! have serena && ! in_codex serena && ! in_claude serena && ! in_cursor serena; then
+      echo "    serena: どの客にも据わっておらぬ"; continue
+    fi
+    while read -r cl; do state_line "$t" "$cl"; done <<< "$CLIENTS"
+  done
+  # 鍵は在るか無いかだけ。実体は出さぬ
+  if [ -n "${CONTEXT7_API_KEY:-}" ]; then info "context7 の鍵（env）: 在る"; else info "context7 の鍵（env）: 無い（無くとも据わる・動く）"; fi
+  info "deepwiki は鍵を持たぬ（上流: free / no-authentication）"
+}
+
+if [ "$CHECK" = 1 ]; then do_check; exit 0; fi
+
+# ── 何をするかを述べてから訊く（setup_task_cli.sh の作法） ──
+plan_lines() {
+  local t cl
+  for t in "${PICK[@]}"; do
+    case "$t" in
+      serena)
+        if [ "$UNINSTALL" = 1 ]; then echo "serena を外す（uv tool uninstall serena-agent）"; continue; fi
+        have serena || echo "serena を uv で据える（uv tool install -p 3.13 serena-agent）"
+        while read -r cl; do
+          case "$cl" in
+            claude) in_claude serena || echo "serena を claude へ繋ぐ（serena setup claude-code）" ;;
+            codex)  in_codex  serena || echo "serena を codex へ繋ぐ（serena setup codex）" ;;
+            cursor) in_cursor serena || echo "serena を cursor へ繋ぐ（$CURSOR_CFG へ --context ide で書き足す）" ;;
+          esac
+        done <<< "$CLIENTS" ;;
+      context7|deepwiki)
+        [ "$UNINSTALL" = 1 ] && { echo "$t の外しは扱わぬ（登録は各 CLI の設定ゆえ、手で除かれよ）"; continue; }
+        local url; [ "$t" = context7 ] && url="$CTX7_URL" || url="$DEEPWIKI_URL"
+        while read -r cl; do
+          case "$cl" in
+            claude) in_claude "$t" || echo "$t を claude へ繋ぐ（claude mcp add -s user -t http $t $url）" ;;
+            codex)  in_codex  "$t" || echo "$t を codex へ繋ぐ（$CODEX_CFG へ url を書き足す・鍵は書かぬ）" ;;
+            cursor) in_cursor "$t" || echo "$t を cursor へ繋ぐ（$CURSOR_CFG へ url を書き足す）" ;;
+          esac
+        done <<< "$CLIENTS" ;;
+    esac
+  done
+}
+
+PLAN=$(plan_lines)
+if [ -z "$PLAN" ]; then ok "することが無い。みな据わっておる（--check で仔細）"; exit 0; fi
+info "これから行うこと:"
+while read -r l; do echo "      - $l"; done <<< "$PLAN"
+if [ "$YES" != 1 ]; then
+  printf '  続けてよいか [y/N]: '
+  read -r a || a=""
+  case "$a" in y|Y|yes) : ;; *) die "やめた。何も変えておらぬ" ;; esac
+fi
+
+# ── cursor の mcp.json へ一区画だけ書き足す（既に在れば呼ばれぬ） ──
+cursor_add() { # <名> <json 断片（servers の値）>
+  local name="$1" frag="$2"
+  mkdir -p "$(dirname "$CURSOR_CFG")"
+  [ -f "$CURSOR_CFG" ] || echo '{"mcpServers":{}}' > "$CURSOR_CFG"
+  python3 - "$CURSOR_CFG" "$name" "$frag" <<'PY' || return 1
+import json, sys
+path, name, frag = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+with open(path) as f: cfg = json.load(f)
+servers = cfg.setdefault('mcpServers', {})
+if name in servers:  # 二重に守る——呼び手も見ておるが、ここでも触らぬ
+    sys.exit(0)
+servers[name] = frag
+with open(path, 'w') as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+PY
+}
+
+# ── codex の config.toml の尻へ一区画だけ書き足す（既に在れば呼ばれぬ） ──
+codex_add() { # <名> <url>
+  mkdir -p "$(dirname "$CODEX_CFG")"
+  touch "$CODEX_CFG"
+  printf '\n[mcp_servers.%s]\nurl = "%s"\n' "$1" "$2" >> "$CODEX_CFG"
+}
+
+failed=0
+for t in "${PICK[@]}"; do
+  case "$t" in
+    serena)
+      if [ "$UNINSTALL" = 1 ]; then
+        if have uv && uv tool list 2>/dev/null | grep -q '^serena-agent\b'; then
+          uv tool uninstall serena-agent && ok "serena を外した（各 CLI の繋ぎは残る。要らねば手で除かれよ）" || { warn "serena を外せなんだ"; failed=1; }
+        else info "serena は uv の棚に居らぬ"; fi
+        continue
+      fi
+      if ! have serena; then
+        # uv は入れぬ——人の Python 環境の要であり、仕度が黙って持ち込む物ではない
+        have uv || { warn "uv が無い。serena は据えられぬ。入れ方: https://docs.astral.sh/uv/getting-started/installation/"; failed=1; continue; }
+        # PyPI の配布は uv が数（hash）を検める。上流は署名を出しておらぬゆえ、
+        # 身元の検めはできておらぬ——その旨を正直に述べる（黙って据えぬ）
+        info "serena を据える（uv が数を検める。上流は署名を出しておらぬ——身元までは検められぬ）"
+        uv tool install -p 3.13 serena-agent || { warn "serena を据えられなんだ。置いておらぬ"; failed=1; continue; }
+        have serena || { warn "据えたはずの serena が道に無い（uv tool の道が PATH に在るか）"; failed=1; continue; }
+        ok "serena を据えた（$(serena --version 2>/dev/null || echo '版は答えぬ')）"
+      else
+        ok "serena は据わっておる"
+      fi
+      [ -d "$HOME/.serena" ] || { serena init >/dev/null 2>&1 && ok "serena init を打った" || warn "serena init が通らなんだ"; }
+      while read -r cl; do
+        case "$cl" in
+          claude)
+            if in_claude serena; then ok "serena / claude: 据わっておる（触れぬ）"; else
+              serena setup claude-code >/dev/null 2>&1 && ok "serena / claude: 繋いだ" || { warn "serena / claude: 繋げなんだ"; failed=1; }
+            fi ;;
+          codex)
+            if in_codex serena; then ok "serena / codex: 据わっておる（触れぬ）"; else
+              serena setup codex >/dev/null 2>&1 && ok "serena / codex: 繋いだ" || { warn "serena / codex: 繋げなんだ"; failed=1; }
+            fi ;;
+          cursor)
+            if in_cursor serena; then ok "serena / cursor: 据わっておる（触れぬ）"; else
+              # 上流の installer は cursor CLI を名指しせぬ。IDE 系の勧め（--context ide）に従い手で書く
+              cursor_add serena '{"command":"serena","args":["start-mcp-server","--project-from-cwd","--context","ide"]}' \
+                && ok "serena / cursor: 繋いだ（--context ide）" || { warn "serena / cursor: 繋げなんだ"; failed=1; }
+            fi ;;
+        esac
+      done <<< "$CLIENTS"
+      # 効き目は謳わぬ。上流自身の註だけを写す
+      info "上流の註: Claude Code と Opus 系の近い更新で、Serena の道具への従いが著しく落ちる——"
+      info "上流は claude を system-prompt の上書きつきで起こす手を勧めておる（serena の書を見よ）"
+      ;;
+    context7|deepwiki)
+      [ "$UNINSTALL" = 1 ] && { info "$t の外しは扱わぬ"; continue; }
+      url="$CTX7_URL"; [ "$t" = deepwiki ] && url="$DEEPWIKI_URL"
+      while read -r cl; do
+        case "$cl" in
+          claude)
+            if in_claude "$t"; then ok "$t / claude: 据わっておる（触れぬ）"; else
+              have claude || { warn "$t / claude: claude CLI が無い。繋げなんだ"; failed=1; continue; }
+              claude mcp add -s user -t http "$t" "$url" >/dev/null 2>&1 \
+                && ok "$t / claude: 繋いだ（鍵なし）" || { warn "$t / claude: 繋げなんだ"; failed=1; }
+            fi ;;
+          codex)
+            if in_codex "$t"; then ok "$t / codex: 据わっておる（触れぬ）"; else
+              codex_add "$t" "$url" && ok "$t / codex: 繋いだ（鍵なし）" || { warn "$t / codex: 繋げなんだ"; failed=1; }
+            fi ;;
+          cursor)
+            if in_cursor "$t"; then ok "$t / cursor: 据わっておる（触れぬ）"; else
+              cursor_add "$t" "{\"url\":\"$url\"}" && ok "$t / cursor: 繋いだ（鍵なし）" || { warn "$t / cursor: 繋げなんだ"; failed=1; }
+            fi ;;
+        esac
+      done <<< "$CLIENTS"
+      if [ "$t" = context7 ]; then
+        info "鍵は無くとも動く（上流: 鍵は rate limit を上げる推奨）。持つ者は各人の設定へ自分で足されよ"
+      fi
+      ;;
+  esac
+done
+
+[ "$failed" = 0 ] || die "一部を据えられなんだ（上の ▲ を見よ）。据わった分は残しておる"
+ok "仕度が済んだ。--check で据わり具合を確かめられる"
