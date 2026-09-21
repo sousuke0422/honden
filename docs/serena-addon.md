@@ -9,22 +9,48 @@ Serena はアドオンである。**標準でも必須でもない。**
 [oraios/serena](https://github.com/oraios/serena)。無料・OSS。
 LSP を背にした symbol 単位の読み書きを MCP server として提供する。
 
-## 入れ方（二段）
+手順は上流の書に従う（2026-09-21 時点）:
 
-一段目。Claude Code に MCP server として繋ぐ:
+- <https://oraios.github.io/serena/02-usage/010_installation.html>
+- <https://oraios.github.io/serena/02-usage/030_clients.html>
+
+世に出回る記事の `claude mcp add serena -- uvx --from git+…` の形は
+古い。写さぬこと。
+
+## 入れ方
 
 ```bash
-claude mcp add serena -- uvx --from git+https://github.com/oraios/serena \
-  serena start-mcp-server --context ide-assistant --project "$(pwd)"
+# 入れる
+uv tool install -p 3.13 serena-agent
+
+# 初期化（言語サーバの背骨を使う場合）
+serena init
 ```
 
-二段目。Claude Code の session 内で初期指示を読み込ませる:
+客（client）ごとに繋ぎを打つ。我らで使いうるのは三つ:
 
+```bash
+serena setup claude-code   # Claude Code
+serena setup codex         # Codex
+serena setup cursor        # Cursor
 ```
-/mcp__serena__initial_instructions
+
+IDE 寄りの使い方なら `--context ide` を添える。
+
+外す時:
+
+```bash
+uv tool uninstall serena-agent
 ```
 
 初回の activate で `.serena/project.yml`（案件の設定）が生まれる。
+
+### Claude Code で使う時の註
+
+上流自身が、Opus 系の模型では道具への従いが著しく落ちると註しておる。
+上流の挙げる逃げ道
+`claude --system-prompt="$(serena prompts print-cc-system-prompt-override)"`
+は、我らの指示書とぶつかる恐れがあり**未検**である。使うなら先に検めよ。
 
 ## 版に載る物と載らぬ物
 
