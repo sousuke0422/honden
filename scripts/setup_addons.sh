@@ -32,6 +32,7 @@ CODEX_CFG="${ADDON_CODEX_CFG:-$HOME/.codex/config.toml}"
 CURSOR_CFG="${ADDON_CURSOR_CFG:-$HOME/.cursor/mcp.json}"
 # 試験が「codex CLI が無い」形を作れるよう、呼び名だけ差し替えられるようにする
 CODEX_BIN="${ADDON_CODEX_BIN:-codex}"
+HONDEN_BIN="${ADDON_HONDEN_BIN:-honden}"
 CTX7_URL="https://mcp.context7.com/mcp"
 DEEPWIKI_URL="https://mcp.deepwiki.com/mcp"
 
@@ -56,14 +57,20 @@ done
 
 [ "$(uname -s)" = Linux ] || die "この仕度は Linux 向けである（$(uname -s)）。他の土地は上流の手引きで手で"
 
-# ── 客（CLI）は正本から引く。honden が居らねば陣の三つへ倒す ──
-clients() {
-  if have honden; then
-    honden roster 2>/dev/null | grep -oE '\b(claude|codex|cursor)\b' | sort -u
+# ── 客（CLI）は正本から引く ──
+#
+# 三つへ倒すのは honden 自体が居らぬ時だけ。honden が在るなら roster の
+# 結果をそのまま正とし、対応する客（claude / codex / cursor）が零件なら
+# 何も変えずに終う——在りもせぬ客の設定へ手を出さぬ。
+if have "$HONDEN_BIN"; then
+  CLIENTS=$("$HONDEN_BIN" roster 2>/dev/null | grep -oE '\b(claude|codex|cursor)\b' | sort -u)
+  if [ -z "$CLIENTS" ]; then
+    info "roster に対応する客（claude / codex / cursor）が居らぬ。何も変えず終う"
+    exit 0
   fi
-}
-CLIENTS=$(clients)
-[ -n "$CLIENTS" ] || CLIENTS=$'claude\ncodex\ncursor'
+else
+  CLIENTS=$'claude\ncodex\ncursor'
+fi
 
 # ── 在るか無いかを見る（読み専用） ──
 #
@@ -171,28 +178,37 @@ cursor_add() { # <名> <json 断片（servers の値）>
   python3 - "$CURSOR_CFG" "$name" "$frag" <<'PY' || return 1
 import json, os, sys, tempfile
 path, name, frag = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-cfg = {"mcpServers": {}}
-if os.path.exists(path):
-    with open(path) as f: cfg = json.load(f)
-servers = cfg.setdefault('mcpServers', {})
-if name in servers:  # 二重に守る——呼び手も見ておるが、ここでも触らぬ
-    sys.exit(0)
-servers[name] = frag
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.', prefix='.mcp.json.')
+# symlink は先へ解いてから置き換える。link の位置で os.replace すると
+# link が普通の file に化け、先には何も届かぬ——束ねた設定が黙って割れる。
+target = os.path.realpath(path)
+tmp = None
 try:
-    if os.path.exists(path):
-        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    cfg = {"mcpServers": {}}
+    if os.path.exists(target):
+        with open(target) as f: cfg = json.load(f)
+    servers = cfg.setdefault('mcpServers', {})
+    if name in servers:  # 二重に守る——呼び手も見ておるが、ここでも触らぬ
+        sys.exit(0)
+    servers[name] = frag
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target) or '.', prefix='.mcp.json.')
+    if os.path.exists(target):
+        os.chmod(tmp, os.stat(target).st_mode & 0o7777)
     with os.fdopen(fd, 'w') as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
     with open(tmp) as f:
         json.load(f)  # 読み直して妥当な JSON であることを確かめる
-    os.replace(tmp, path)
-except BaseException:
-    try: os.unlink(tmp)
-    except OSError: pass
+    os.replace(tmp, target)
+except SystemExit:
     raise
+except BaseException as e:
+    if tmp is not None:
+        try: os.unlink(tmp)
+        except OSError: pass
+    # 生の悲鳴（Traceback）は出さぬ。一行で述べて非 0 で終う
+    print(f'書けなんだ: {e}', file=sys.stderr)
+    sys.exit(1)
 PY
 }
 

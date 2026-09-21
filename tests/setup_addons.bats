@@ -198,9 +198,47 @@ setup() {
   chmod 755 "$(dirname "$ADDON_CURSOR_CFG")"
   assert_failure
   assert_output --partial "deepwiki / cursor: 繋げなんだ"
+  refute_output --partial "Traceback"            # 生の悲鳴は出さぬ——一行の断りだけ
+  assert_output --partial "書けなんだ"
   [ "$before" = "$(cat "$ADDON_CURSOR_CFG")" ]  # 原形のまま
   # 仮の file の残骸も無い
   [ -z "$(ls "$(dirname "$ADDON_CURSOR_CFG")" | grep '^\.mcp\.json\.' || true)" ]
+}
+
+@test "**symlink の cursor 設定を壊さぬ**——先へ解いて更め、link は link のまま" {
+  mkdir -p "$HOME/dotfiles" "$(dirname "$ADDON_CURSOR_CFG")"
+  printf '{"mcpServers":{"mine":{"url":"https://example.invalid"}}}' > "$HOME/dotfiles/mcp.json"
+  ln -s "$HOME/dotfiles/mcp.json" "$ADDON_CURSOR_CFG"
+  run bash "$ROOT/scripts/setup_addons.sh" --yes deepwiki
+  assert_success
+  [ -L "$ADDON_CURSOR_CFG" ]                       # link は link のまま
+  grep -q '"deepwiki"' "$HOME/dotfiles/mcp.json"   # 先に届いておる
+  grep -q '"mine"' "$HOME/dotfiles/mcp.json"       # 元の中身も残る
+}
+
+@test "roster に対応する客が零件なら、何も変えずに終う" {
+  stub honden 0 $'ashigaru9  働き  opencode  待機'
+  run bash "$ROOT/scripts/setup_addons.sh" --yes deepwiki
+  assert_success
+  assert_output --partial "対応する客（claude / codex / cursor）が居らぬ。何も変えず終う"
+  [ ! -e "$ADDON_CODEX_CFG" ]
+  [ ! -e "$ADDON_CURSOR_CFG" ]
+  [ ! -e "$ADDON_CLAUDE_CFG" ]
+}
+
+@test "陰性対照: honden が居らねば従来どおり三つへ倒れ、幾つか返せばその分だけ" {
+  export ADDON_HONDEN_BIN=honden-not-here
+  run bash "$ROOT/scripts/setup_addons.sh" --check deepwiki
+  assert_success
+  assert_output --partial "deepwiki / claude"
+  assert_output --partial "deepwiki / codex"
+  assert_output --partial "deepwiki / cursor"
+  unset ADDON_HONDEN_BIN
+  stub honden 0 $'karo  差配  cursor  待機'
+  run bash "$ROOT/scripts/setup_addons.sh" --check deepwiki
+  assert_success
+  assert_output --partial "deepwiki / cursor"
+  refute_output --partial "deepwiki / claude"
 }
 
 @test "Linux 以外は正直に断る" {
