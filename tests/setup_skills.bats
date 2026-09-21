@@ -212,3 +212,59 @@ setup() {
   [ ! -e "$PROJ/.claude/skills/honden-coder" ]
   [ ! -e "$HOME/.agents/skills/honden-coder" ]
 }
+
+@test "symlink 越しの棚でも Codex の繋ぎ・繋ぎ直し・外しが通る" {
+  ln -s "$ROOT" "$HOME/via"
+  script="$HOME/via/scripts/setup_skills.sh"
+  target="$HOME/.agents/skills/skill-creator"
+
+  run bash "$script" --codex skill-creator
+  [ "$status" -eq 0 ]
+  [ "$(readlink -f "$target")" = "$(readlink -f "$ROOT/skills/skill-creator")" ]
+  run bash "$script" --codex skill-creator
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"繋ぎ済み"* ]]
+
+  # 棚の別 skill を指す古い link を置き、実際の置換も確かめる。
+  rm "$target"
+  ln -s "$ROOT/skills/honden-coder" "$target"
+  run bash "$script" --codex skill-creator
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"繋ぎ直した"* ]]
+  [ "$(readlink -f "$target")" = "$(readlink -f "$ROOT/skills/skill-creator")" ]
+
+  run bash "$script" --codex --unlink skill-creator
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"外した"* ]]
+  [ ! -L "$target" ]
+}
+
+@test "symlink 越しの project でも同じ案件の link を繋ぎ・外せる" {
+  ln -s "$ROOT" "$HOME/via"
+  ln -s "$PROJ" "$HOME/project-via"
+  script="$HOME/via/scripts/setup_skills.sh"
+  run bash "$script" --project "$HOME/project-via" honden-coder
+  [ "$status" -eq 0 ]
+  [ -L "$PROJ/.claude/skills/honden-coder" ]
+  run bash "$script" --project "$PROJ" honden-coder
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"繋ぎ済み"* ]]
+  run bash "$script" --project "$HOME/project-via" --unlink honden-coder
+  [ "$status" -eq 0 ]
+  [ ! -L "$PROJ/.claude/skills/honden-coder" ]
+}
+
+@test "symlink 越しでも棚の外を指す link は繋ぎ直さず外さぬ" {
+  ln -s "$ROOT" "$HOME/via"
+  other="$HOME/skills-other"
+  mkdir -p "$other" "$HOME/.agents/skills"
+  target="$HOME/.agents/skills/skill-creator"
+  ln -s "$other" "$target"
+  for flag in '' --unlink; do
+    run bash "$HOME/via/scripts/setup_skills.sh" --codex ${flag:+"$flag"} skill-creator
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"他所の link を指しておる。触らぬ"* ]]
+    [ -L "$target" ]
+    [ "$(readlink "$target")" = "$other" ]
+  done
+}

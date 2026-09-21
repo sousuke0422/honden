@@ -22,7 +22,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SHELF="$ROOT/skills"
+# readlink -f と resolve が返す物理の道に揃えて所有を判定する。
+SHELF="$(cd "$ROOT/skills" && pwd -P)"
 
 c()   { printf '\033[%sm%s\033[0m' "$1" "$2"; }
 info(){ echo "  $(c '0;36' '│') $*"; }
