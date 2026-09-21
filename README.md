@@ -712,13 +712,14 @@ honden がそこから直に引き継いだ品は確認していないが、系�
 **「追える上流があるか」**の別であって、免許の別ではない
 （`skills/README.md` に三つの別を書いてある）。
 
-いまの例外は三つ。
+いまの例外は四つ。
 
 | | 免許 |
 |---|---|
 | `skills/vendor/find-skills` | MIT（vercel-labs/skills を丸ごと） |
 | `skills/vendor/japanese-tech-writing` | Unlicense（k16shikano の gist を丸ごと。公有ゆえ条件は無い） |
 | `skills/vendor/skill-creator` | MIT（yohey-w/multi-agent-shogun を丸ごと。権利者は上流） |
+| `skills/vendor/gh-stack` | MIT（github/gh-stack の skills/gh-stack を丸ごと。権利者は GitHub, Inc.） |
 | `skills/honden-review` | **Apache-2.0**（gemini-cli-extensions / anthropics / openai の code-review を混ぜた派生） |
 
 `skills/honden-review` を MIT で配ることはできない。
