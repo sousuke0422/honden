@@ -42,6 +42,11 @@ function seeded(path = ':memory:') {
   });
   expect(assigned.ok).toBe(true);
   const taskId = (db.query('SELECT task_id FROM task WHERE agent = ?').get('ashigaru9') as { task_id: string }).task_id;
+  // 配られた task_assigned を既読にする。runNudge を通す試験で plan が
+  // ashigaru9 へ撃つ理由を残さぬため——plan は panes() で実の tmux を写すゆえ、
+  // 実陣に同じ名の pane が在れば本物へ撃ってしまう（sender の注ぎ口が
+  // main へ入るまでの塞ぎ）。
+  db.run("UPDATE inbox SET read = 1 WHERE agent = 'ashigaru9'");
   return { db, cmdId, taskId };
 }
 
@@ -149,16 +154,41 @@ describe('軍師への報せと家老への引き上げ', () => {
     expect(db2.query("SELECT 1 FROM ledger WHERE action = 'report.unreviewed.escalate'").get()).not.toBeNull();
   });
 
-  test('検めの後に直しの報告が再び詰まれば、新しい id で改めて鳴る', () => {
+  test('検め済みの task への直しの報告は軍師へ報せぬ——submitQc が拒み、果たせぬ命になるゆえ', () => {
     const { db, cmdId, taskId } = seeded();
     addReport(db, taskId, cmdId, 120 * MIN);
     notifyUnreviewed(db);
     addReport(db, taskId, cmdId, 100 * MIN, { agent: 'gunshi', verdict: 'CHANGES_REQUESTED' });
     expect(findUnreviewed(db)).toEqual([]); // 検めが出た——一旦静まる
-    addReport(db, taskId, cmdId, 45 * MIN); // 直しの報告がまた詰まった
+    addReport(db, taskId, cmdId, 45 * MIN); // 直しの報告が上がったが、この task はもう検められぬ
+    expect(findUnreviewed(db)).toEqual([]);
     notifyUnreviewed(db);
     const n = (db.query("SELECT COUNT(*) n FROM inbox WHERE agent = 'gunshi' AND msg_type = 'report_unreviewed'").get() as { n: number }).n;
-    expect(n).toBe(2);
+    expect(n).toBe(1); // 最初の一通だけ。軍師へは増えぬ
+  });
+
+  test('検め済みの task への直しの報告は、家老へ「振り直しが要る」として届く', () => {
+    const { db, cmdId, taskId } = seeded();
+    addReport(db, taskId, cmdId, 120 * MIN);
+    addReport(db, taskId, cmdId, 100 * MIN, { agent: 'gunshi', verdict: 'CHANGES_REQUESTED' });
+    const rid = addReport(db, taskId, cmdId, 45 * MIN);
+    notifyUnreviewed(db);
+    notifyUnreviewed(db); // 二度呼んでも一度だけ
+    const rows = db.query("SELECT agent, body FROM inbox WHERE msg_type = 'report_requeue'").all() as
+      { agent: string; body: string }[];
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.agent).toBe('karo');
+    expect(rows[0]!.body).toContain('振り直しが要る報告');
+    expect(rows[0]!.body).toContain(`#${rid}`);
+    expect(rows[0]!.body).toContain('新しい仕事として振り直されよ'); // submitQc の門と同じ言葉
+    expect(db.query("SELECT 1 FROM ledger WHERE action = 'report.requeue.notice'").get()).not.toBeNull();
+    // まだ間もない直しの報告（閾値前）は requeue にも数えぬ
+    const { db: db3, cmdId: c3, taskId: t3 } = seeded();
+    addReport(db3, t3, c3, 120 * MIN);
+    addReport(db3, t3, c3, 100 * MIN, { agent: 'gunshi', verdict: 'CHANGES_REQUESTED' });
+    addReport(db3, t3, c3, 5 * MIN);
+    notifyUnreviewed(db3);
+    expect(db3.query("SELECT 1 FROM inbox WHERE msg_type = 'report_requeue'").get()).toBeNull();
   });
 
   test('四つの検知が別の言葉・別の種別で現れる', () => {

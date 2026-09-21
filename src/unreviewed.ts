@@ -56,20 +56,50 @@ export interface Unreviewed {
   createdAt: string;
 }
 
-export function findUnreviewed(db: Database, now: Date = new Date()): Unreviewed[] {
-  const rows = db
-    .query(
-      `SELECT r.id reportId, r.task_id taskId, r.cmd_id cmdId, r.agent agent, r.created_at createdAt
-       FROM report r
+const BASE_WHERE = `
        WHERE r.verdict IS NULL
          AND r.origin = 'native'
          AND r.task_id IS NOT NULL
          AND r.id = (SELECT MAX(r2.id) FROM report r2 WHERE r2.task_id = r.task_id)
          AND (r.cmd_id IS NULL OR EXISTS (
-               SELECT 1 FROM cmd c WHERE c.id = r.cmd_id AND c.status IN ('pending','in_progress')))
+               SELECT 1 FROM cmd c WHERE c.id = r.cmd_id AND c.status IN ('pending','in_progress')))`;
+
+export function findUnreviewed(db: Database, now: Date = new Date()): Unreviewed[] {
+  // 検め済みの task への直しの報告は数えぬ——軍師は同じ task を二度検められぬ
+  // （src/report.ts submitQc の門）。軍師へ報せても果たせぬ命になる。
+  // その形は findRereported が拾い、家老へ別の言葉で届く。
+  const rows = db
+    .query(
+      `SELECT r.id reportId, r.task_id taskId, r.cmd_id cmdId, r.agent agent, r.created_at createdAt
+       FROM report r
+       ${BASE_WHERE}
+         AND NOT EXISTS (SELECT 1 FROM report q
+               WHERE q.task_id = r.task_id AND q.agent = ? AND q.verdict IS NOT NULL)
        ORDER BY r.created_at`,
     )
-    .all() as Unreviewed[];
+    .all(QC_AUTHOR) as Unreviewed[];
+  return rows.filter((r) => now.getTime() - Date.parse(r.createdAt) >= UNREVIEWED_AFTER_MS);
+}
+
+/**
+ * 検め済みの task へ上がった直しの報告。
+ *
+ * 軍師はこれを検められぬ（submitQc が拒む）ゆえ、放っておけば誰にも
+ * 読まれぬまま朽ちる——それ自体が「振り直しが要る」印である。
+ * 黙って捨てず、差配できる家老へ届ける。
+ */
+export function findRereported(db: Database, now: Date = new Date()): Unreviewed[] {
+  const rows = db
+    .query(
+      `SELECT r.id reportId, r.task_id taskId, r.cmd_id cmdId, r.agent agent, r.created_at createdAt
+       FROM report r
+       ${BASE_WHERE}
+         AND r.agent != ?
+         AND EXISTS (SELECT 1 FROM report q
+               WHERE q.task_id = r.task_id AND q.agent = ? AND q.verdict IS NOT NULL)
+       ORDER BY r.created_at`,
+    )
+    .all(QC_AUTHOR, QC_AUTHOR) as Unreviewed[];
   return rows.filter((r) => now.getTime() - Date.parse(r.createdAt) >= UNREVIEWED_AFTER_MS);
 }
 
@@ -131,6 +161,31 @@ export function notifyUnreviewed(db: Database, now: Date = new Date()): Unreview
         });
       }
     }
+  }
+
+  // 検め済みの task への直しの報告——軍師には果たせぬゆえ、家老へ別の言葉で。
+  // 案内は submitQc の門と同じ言葉に揃える（読む者が同じ手順へ辿り着くように）。
+  for (const u of findRereported(db, now)) {
+    const rid = `msg_requeue_${u.taskId}_r${u.reportId}`;
+    if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(rid)) continue;
+    deliver(db, {
+      id: rid,
+      agent: ASSIGNER,
+      at: now.toISOString(),
+      type: 'report_requeue',
+      sender: 'core',
+      body:
+        `振り直しが要る報告: #${u.reportId} ${u.agent} / ${u.taskId}${u.cmdId ? ` / ${u.cmdId}` : ''}\n\n` +
+        `${u.taskId} は既に検めてあり、軍師は同じ仕事を二度検められぬ。\n` +
+        `直しの報告が上がったままでは誰にも読まれぬ。\n` +
+        `やり直させるなら新しい仕事として振り直されよ（現行の Redo Protocol と同じ）。`,
+    });
+    journal(db, {
+      actor: 'core',
+      action: 'report.requeue.notice',
+      target: u.taskId,
+      detail: `report=#${u.reportId} agent=${u.agent}`,
+    });
   }
   return sent;
 }

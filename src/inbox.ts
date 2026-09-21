@@ -87,6 +87,8 @@ const URGENT_TYPES = new Set([
   // 検められておらぬ報告も閾値分の時を既に失っておる。軍師（と長引けば
   // 家老）が次に honden を叩いた節目で目に入るよう、急ぎに数える (src/unreviewed.ts)。
   'report_unreviewed',
+  // 検め済み task への直しの報告は振り直しが要る——家老の差配待ちゆえ急ぎ (src/unreviewed.ts)。
+  'report_requeue',
 ]);
 
 /**
