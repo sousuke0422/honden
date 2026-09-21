@@ -64,9 +64,28 @@ CLIENTS=$(clients)
 [ -n "$CLIENTS" ] || CLIENTS=$'claude\ncodex\ncursor'
 
 # ── 在るか無いかを見る（読み専用） ──
-in_claude(){ [ -f "$CLAUDE_CFG" ] && grep -q "\"$1\"" "$CLAUDE_CFG"; }
+#
+# claude の設定は user scope（頂の .mcpServers）の他に、案件ごとの段
+# （projects.*.mcpServers）を抱える。字面の grep では他の案件の段にだけ
+# 在る名まで「据わっておる」と誤読し、据えるべき物を飛ばす。JSON として
+# user scope だけを見る（python3 は cursor_add が既に前提としておる——
+# 新たな頼りは増えぬ）。読んだ中身は真偽にしか使わず、画面へは出さぬ。
+json_has_server() { # <設定の道> <名> — 頂の mcpServers に鍵として在るか
+  python3 - "$1" "$2" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1]) as f: cfg = json.load(f)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if sys.argv[2] in (cfg.get('mcpServers') or {}) else 1)
+PY
+}
+in_claude(){ [ -f "$CLAUDE_CFG" ] && json_has_server "$CLAUDE_CFG" "$1"; }
+# codex は toml。区画見出しは行頭の固定字面（^[mcp_servers.<名>]）で、
+# 値や註の中に同じ行頭形は現れず、案件ごとの段も持たぬゆえ grep のまま。
 in_codex(){  [ -f "$CODEX_CFG" ]  && grep -q "^\[mcp_servers\.$1\]" "$CODEX_CFG"; }
-in_cursor(){ [ -f "$CURSOR_CFG" ] && grep -q "\"$1\"" "$CURSOR_CFG"; }
+# cursor の mcp.json は claude と同じ形の平ら一枚。同じ手で見る。
+in_cursor(){ [ -f "$CURSOR_CFG" ] && json_has_server "$CURSOR_CFG" "$1"; }
 codex_key(){ [ -f "$CODEX_CFG" ] && grep -q "^\[mcp_servers\.$1\.http_headers\]" "$CODEX_CFG"; }
 
 state_line() { # <tool> <client> → 一行
