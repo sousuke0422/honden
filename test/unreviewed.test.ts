@@ -205,6 +205,23 @@ describe('軍師への報せと家老への引き上げ', () => {
   });
 });
 
+describe('報せと台帳は一つの取引', () => {
+  test('台帳が落ちれば報せも巻き戻り、次の周で改めて鳴る', () => {
+    const { db, cmdId, taskId } = seeded();
+    addReport(db, taskId, cmdId, 75 * MIN);
+    db.run(`CREATE TRIGGER fail_ledger BEFORE INSERT ON ledger
+            WHEN NEW.action = 'report.unreviewed.notice'
+            BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END`);
+    expect(() => notifyUnreviewed(db)).toThrow();
+    // inbox だけが残れば重複抑止の鍵が立ち、二度と鳴らぬ——両方巻き戻る
+    expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'report_unreviewed'").get()).toBeNull();
+    db.run('DROP TRIGGER fail_ledger');
+    expect(notifyUnreviewed(db).length).toBe(1); // 次の周で改めて試みられる
+    expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'report_unreviewed'").get()).not.toBeNull();
+    expect(db.query("SELECT 1 FROM ledger WHERE action = 'report.unreviewed.notice'").get()).not.toBeNull();
+  });
+});
+
 describe('nudge の輪との繋ぎ', () => {
   test('nudge が詰まりを見つけて報せ、報せの失敗でも輪を落とさぬ', async () => {
     const path = join(tmpdir(), `unreviewed-${Date.now()}.db`);

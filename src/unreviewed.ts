@@ -37,7 +37,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
-import { journal } from './store';
+import { journal, tx } from './store';
 import { deliver } from './inbox';
 import { DEFAULT_LEASE_MINUTES } from './lease';
 import { ASSIGNER } from './dispatch';
@@ -122,7 +122,11 @@ export function notifyUnreviewed(db: Database, now: Date = new Date()): Unreview
       `上がってから ${waitedMin} 分、検めが出ておらぬ。司令は閉じておらず、` +
       `これより新しい報告も無い。\n`;
     const id = `msg_unreviewed_${u.taskId}_r${u.reportId}`;
-    if (!db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) {
+    // 在るかの確かめ・報せ・台帳を一つの取引で確定する。台帳が落ちれば
+    // 報せも巻き戻り、次の周で改めて試みられる——inbox だけが残ると
+    // 重複抑止の鍵が既に在ることになり、二度と鳴らぬ。
+    const delivered = tx(db, () => {
+      if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) return false;
       deliver(db, {
         id,
         agent: QC_AUTHOR,
@@ -137,11 +141,13 @@ export function notifyUnreviewed(db: Database, now: Date = new Date()): Unreview
         target: u.taskId,
         detail: `report=#${u.reportId} agent=${u.agent} waited_min=${waitedMin}`,
       });
-      sent.push(u);
-    }
+      return true;
+    });
+    if (delivered) sent.push(u);
     if (now.getTime() - Date.parse(u.createdAt) >= UNREVIEWED_ESCALATE_MS) {
       const kid = `msg_unreviewed_${u.taskId}_r${u.reportId}_karo`;
-      if (!db.query('SELECT 1 FROM inbox WHERE id = ?').get(kid)) {
+      tx(db, () => {
+        if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(kid)) return;
         deliver(db, {
           id: kid,
           agent: ASSIGNER,
@@ -159,7 +165,7 @@ export function notifyUnreviewed(db: Database, now: Date = new Date()): Unreview
           target: u.taskId,
           detail: `report=#${u.reportId} waited_min=${waitedMin}`,
         });
-      }
+      });
     }
   }
 
@@ -167,8 +173,9 @@ export function notifyUnreviewed(db: Database, now: Date = new Date()): Unreview
   // 案内は submitQc の門と同じ言葉に揃える（読む者が同じ手順へ辿り着くように）。
   for (const u of findRereported(db, now)) {
     const rid = `msg_requeue_${u.taskId}_r${u.reportId}`;
-    if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(rid)) continue;
-    deliver(db, {
+    tx(db, () => {
+      if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(rid)) return;
+      deliver(db, {
       id: rid,
       agent: ASSIGNER,
       at: now.toISOString(),
@@ -180,11 +187,12 @@ export function notifyUnreviewed(db: Database, now: Date = new Date()): Unreview
         `直しの報告が上がったままでは誰にも読まれぬ。\n` +
         `やり直させるなら新しい仕事として振り直されよ（現行の Redo Protocol と同じ）。`,
     });
-    journal(db, {
-      actor: 'core',
-      action: 'report.requeue.notice',
-      target: u.taskId,
-      detail: `report=#${u.reportId} agent=${u.agent}`,
+      journal(db, {
+        actor: 'core',
+        action: 'report.requeue.notice',
+        target: u.taskId,
+        detail: `report=#${u.reportId} agent=${u.agent}`,
+      });
     });
   }
   return sent;

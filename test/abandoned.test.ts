@@ -130,6 +130,19 @@ describe('期限切れとの区別', () => {
 });
 
 describe('家老への報せ', () => {
+  test('台帳が落ちれば報せも巻き戻り、次の周で改めて鳴る', () => {
+    const { db, cmdId } = seeded();
+    abandon(db, cmdId);
+    db.run(`CREATE TRIGGER fail_ledger BEFORE INSERT ON ledger
+            WHEN NEW.action = 'cmd.abandoned.notice'
+            BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END`);
+    expect(() => notifyAbandoned(db, after())).toThrow();
+    expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'cmd_abandoned'").get()).toBeNull();
+    db.run('DROP TRIGGER fail_ledger');
+    expect(notifyAbandoned(db, after()).length).toBe(1);
+    expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'cmd_abandoned'").get()).not.toBeNull();
+  });
+
   test('見つけたら家老の受け箱へ届き、同じ見捨てに二度は鳴らさぬ', () => {
     const { db, cmdId } = seeded();
     abandon(db, cmdId);

@@ -36,7 +36,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
-import { journal } from './store';
+import { journal, tx } from './store';
 import { deliver } from './inbox';
 import { DEFAULT_LEASE_MINUTES } from './lease';
 import { ASSIGNER } from './dispatch';
@@ -101,8 +101,11 @@ export function notifyAbandoned(db: Database, now: Date = new Date()): Abandoned
   const sent: Abandoned[] = [];
   for (const a of found) {
     const id = `msg_abandoned_${a.cmdId}_c${a.lastClaimId}`;
-    if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) continue;
-    deliver(db, {
+    // 在るかの確かめ・報せ・台帳を一つの取引で確定する。台帳だけが落ちて
+    // inbox が残ると、重複抑止の鍵が既に在ることになり二度と鳴らぬ。
+    const delivered = tx(db, () => {
+      if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) return false;
+      deliver(db, {
       id,
       agent: ASSIGNER,
       at: now.toISOString(),
@@ -114,13 +117,15 @@ export function notifyAbandoned(db: Database, now: Date = new Date()): Abandoned
         `（最後の跡から ${Math.round((now.getTime() - Date.parse(a.lastTraceAt)) / 60_000)} 分）。\n` +
         `振り直すか、閉じるか、差配されよ。経緯は honden history と honden cmd show ${a.cmdId} で辿れる。`,
     });
-    journal(db, {
-      actor: 'core',
-      action: 'cmd.abandoned.notice',
-      target: a.cmdId,
-      detail: `跡=${a.agents} 最後の跡=${a.lastTraceAt}`,
+      journal(db, {
+        actor: 'core',
+        action: 'cmd.abandoned.notice',
+        target: a.cmdId,
+        detail: `跡=${a.agents} 最後の跡=${a.lastTraceAt}`,
+      });
+      return true;
     });
-    sent.push(a);
+    if (delivered) sent.push(a);
   }
   return sent;
 }

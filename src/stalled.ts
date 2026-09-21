@@ -12,7 +12,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { deliver } from './inbox';
-import { journal } from './store';
+import { journal, tx } from './store';
 import { DEFAULT_LEASE_MINUTES } from './lease';
 import { ASSIGNER } from './dispatch';
 
@@ -65,11 +65,16 @@ export function notifyStalled(
   const sent: StalledLease[] = [];
   for (const s of found) {
     const id = `msg_stalled_${s.taskId}_u${Date.parse(s.leaseUntil)}`;
-    if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) continue;
+    const already = db.query('SELECT 1 FROM inbox WHERE id = ?').get(id);
+    if (already) continue;
     const expiredMinutes = Math.floor((now.getTime() - Date.parse(s.leaseUntil)) / 60_000);
     const assignee = s.holder === s.agent ? s.agent : `${s.agent}（holder: ${s.holder}）`;
     const divider = s.holder === s.agent ? ' / ' : '/ ';
-    deliver(db, {
+    // 在るかの確かめ・報せ・台帳を一つの取引で確定する（重複抑止の鍵が
+    // inbox の id ゆえ、台帳だけ落ちて id が残ると二度と鳴らぬ）。
+    const delivered = tx(db, () => {
+      if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) return false;
+      deliver(db, {
       id,
       agent: ASSIGNER,
       at: now.toISOString(),
@@ -81,14 +86,16 @@ export function notifyStalled(
         `直近の活動も pane の処理中表示も見つからぬ。\n` +
         `振り直すか、貸与を解くか、長い処理と確かめてそのまま待つか差配されよ。`,
     });
-    journal(db, {
+      journal(db, {
       actor: 'core',
       action: 'lease.stalled.notice',
       target: s.taskId,
       detail: `agent=${s.agent} holder=${s.holder} lease_until=${s.leaseUntil}`,
       at: now,
+      });
+      return true;
     });
-    sent.push(s);
+    if (delivered) sent.push(s);
   }
   return sent;
 }
