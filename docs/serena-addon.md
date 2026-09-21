@@ -9,7 +9,8 @@ Serena はアドオンである。**標準でも必須でもない。**
 [oraios/serena](https://github.com/oraios/serena)。無料・OSS。
 LSP を背にした symbol 単位の読み書きを MCP server として提供する。
 
-手順は上流の書に従う（2026-09-21 時点）:
+手順は上流の書に従う（2026-09-21 に当たった。同日、`serena --help` と
+`serena setup --help` の実測でも命と副命令の在る無しを確かめてある）:
 
 - <https://oraios.github.io/serena/02-usage/010_installation.html>
 - <https://oraios.github.io/serena/02-usage/030_clients.html>
@@ -27,15 +28,35 @@ uv tool install -p 3.13 serena-agent
 serena init
 ```
 
-客（client）ごとに繋ぎを打つ。我らで使いうるのは三つ:
+客（client）ごとに繋ぐ。我らで使いうるのは三つだが、繋ぎ方は二通りある。
+
+Claude Code と Codex は `serena setup` が受ける:
 
 ```bash
 serena setup claude-code   # Claude Code
 serena setup codex         # Codex
-serena setup cursor        # Cursor
 ```
 
-IDE 寄りの使い方なら `--context ide` を添える。
+Cursor は `serena setup` の対象に無い（受けるのは claude-code・codebuddy・
+codex・grok の四つ——`serena setup --help` で実測）。上流は Cursor を
+「MCP を受ける IDE 系の客」として扱う。`~/.cursor/mcp.json` の
+`mcpServers` へ手で書く:
+
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "command": "serena",
+      "args": ["start-mcp-server", "--project-from-cwd", "--context", "ide"]
+    }
+  }
+}
+```
+
+`--context` は `start-mcp-server` の旗である（`setup` には付かぬ）。
+IDE 系の客には上流が `ide` の context を勧めておる——道具の重なりを
+減らすためである。`scripts/setup_addons.sh` の cursor の繋ぎも
+この形（`~/.cursor/mcp.json` へ `--context ide` で書き足す）である。
 
 外す時:
 
