@@ -92,6 +92,20 @@ describe('止まった持ち場の定め', () => {
 });
 
 describe('家老への報せ', () => {
+  test('台帳が落ちれば報せも巻き戻り、次の周で改めて鳴る', () => {
+    const { db } = seeded();
+    setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
+    db.run("UPDATE ledger SET at = '2000-01-01T00:00:00.000Z'");
+    db.run(`CREATE TRIGGER fail_ledger BEFORE INSERT ON ledger
+            WHEN NEW.action = 'lease.stalled.notice'
+            BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END`);
+    expect(() => notifyStalled(db)).toThrow();
+    expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).toBeNull();
+    db.run('DROP TRIGGER fail_ledger');
+    expect(notifyStalled(db).length).toBe(1);
+    expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).not.toBeNull();
+  });
+
   test('別種の報せを家老へ一度だけ送り、同じ止まりには二度鳴らさぬ', () => {
     const { db, taskId } = seeded();
     setLease(db, new Date(NOW.getTime() - STALLED_AFTER_MS - 60_000));
