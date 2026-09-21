@@ -188,7 +188,7 @@ describe('家老への報せ', () => {
               WHEN NEW.msg_type = 'cmd_abandoned'
               BEGIN SELECT RAISE(ABORT, 'forced abandoned notice failure'); END`);
 
-      const r = await runNudge(path, false, false, undefined, 'core');
+      const r = await runNudge(path, false, false, undefined, 'core', () => new Map(), undefined, undefined, async () => ({ ok: true as const }));
       expect(r.code).toBe(0);
       expect(r.out).toContain('next_wake_ms');
       const led = db
@@ -214,7 +214,7 @@ describe('家老への報せ', () => {
       const past = new Date(Date.now() - ABANDONED_AFTER_MS - 60_000).toISOString();
       db.run('UPDATE claim SET at = ?, released_at = ?', [past, past]);
 
-      const r = await runNudge(path, false, false, undefined, 'core');
+      const r = await runNudge(path, false, false, undefined, 'core', () => new Map(), undefined, undefined, async () => ({ ok: true as const }));
       expect(r.code).toBe(0);
       const led = db
         .query("SELECT action FROM ledger WHERE action = 'cmd.abandoned.notice.error'")

@@ -39,6 +39,11 @@ function setLease(db: ReturnType<typeof seeded>['db'], leaseUntil: Date) {
   db.run('UPDATE task SET lease_until = ? WHERE agent = ?', [leaseUntil.toISOString(), 'ashigaru9']);
 }
 
+// 試験は実在の pane へ命を送らぬ。既定の paneReader は実陣を写し、既定の
+// sender は tmux へ撃つ——両方を注ぎ替え、造りの側で送信を封ずる。
+const NO_PANES = () => new Map();
+const NO_SEND = async () => ({ ok: true as const });
+
 function lendToKaro(db: ReturnType<typeof seeded>['db']) {
   db.run("UPDATE task SET holder = 'karo' WHERE agent = 'ashigaru9'");
 }
@@ -141,7 +146,7 @@ describe('家老への報せ', () => {
               WHEN NEW.msg_type = 'lease_stalled'
               BEGIN SELECT RAISE(ABORT, 'forced stalled notice failure'); END`);
 
-      const result = await runNudge(path, false, false, undefined, 'core');
+      const result = await runNudge(path, false, false, undefined, 'core', NO_PANES, undefined, undefined, NO_SEND);
       expect(result.code).toBe(0);
       expect(result.out).toContain('next_wake_ms');
       const row = db
@@ -161,7 +166,7 @@ describe('家老への報せ', () => {
       setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
       db.run('UPDATE ledger SET at = ? WHERE actor = ?', [new Date().toISOString(), 'ashigaru9']);
 
-      const result = await runNudge(path, false, false, undefined, 'core');
+      const result = await runNudge(path, false, false, undefined, 'core', NO_PANES, undefined, undefined, NO_SEND);
       expect(result.code).toBe(0);
       expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).toBeNull();
       expect(db.query("SELECT 1 FROM ledger WHERE action = 'lease.stalled.notice'").get()).toBeNull();
@@ -177,7 +182,7 @@ describe('家老への報せ', () => {
       lendToKaro(db);
       setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
 
-      const result = await runNudge(path, false, false, undefined, 'core', () => new Map());
+      const result = await runNudge(path, false, false, undefined, 'core', NO_PANES, undefined, undefined, NO_SEND);
       expect(result.code).toBe(0);
       expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).toBeNull();
     } finally {
@@ -193,7 +198,7 @@ describe('家老への報せ', () => {
       setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
       db.run("UPDATE ledger SET actor = 'ashigaru9', at = ?", [new Date().toISOString()]);
 
-      const result = await runNudge(path, false, false, undefined, 'core', () => new Map());
+      const result = await runNudge(path, false, false, undefined, 'core', NO_PANES, undefined, undefined, NO_SEND);
       expect(result.code).toBe(0);
       expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).not.toBeNull();
     } finally {
@@ -208,8 +213,8 @@ describe('家老への報せ', () => {
       setLease(db, new Date(Date.now() - STALLED_AFTER_MS - 60_000));
       db.run("UPDATE ledger SET at = '2000-01-01T00:00:00.000Z'");
 
-      const paneReader = () => new Map([['ashigaru9', { id: '%9', label: 'honden:agents.9' }]]);
-      const result = await runNudge(path, false, false, undefined, 'core', paneReader, () => true);
+      const paneReader = () => new Map([['ashigaru9', { id: '%2147483647', label: 'fake:agents.9' }]]);
+      const result = await runNudge(path, false, false, undefined, 'core', paneReader, () => true, undefined, NO_SEND);
       expect(result.code).toBe(0);
       expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).toBeNull();
     } finally {
@@ -230,8 +235,10 @@ describe('家老への報せ', () => {
         false,
         undefined,
         'core',
-        () => new Map(),
+        NO_PANES,
         () => { throw new Error('pane が無ければ captureBusy を呼んではならぬ'); },
+        undefined,
+        NO_SEND,
       );
       expect(result.code).toBe(0);
       expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'lease_stalled'").get()).not.toBeNull();
