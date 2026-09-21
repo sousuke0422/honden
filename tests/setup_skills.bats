@@ -76,13 +76,23 @@ setup() {
 }
 
 @test "--codex は各人段へ skill ごとに繋ぎ、Claude 側を触らぬ" {
-  run bash "$ROOT/scripts/setup_skills.sh" --codex honden-coder skill-creator
+  FAKE="$HOME/root"
+  mkdir -p "$FAKE/scripts" "$FAKE/.claude/skills"
+  cp "$ROOT/scripts/setup_skills.sh" "$FAKE/scripts/"
+  cp -r "$ROOT/skills" "$FAKE/skills"
+  echo claude-owned > "$FAKE/.claude/skills/mine"
+  before="$(find "$FAKE/.claude/skills" -mindepth 1 -maxdepth 1 -printf '%f %y\n' | sort)"
+
+  run bash "$FAKE/scripts/setup_skills.sh" --codex honden-coder skill-creator
   [ "$status" -eq 0 ]
   [ -L "$HOME/.agents/skills/honden-coder" ]
   [ -f "$HOME/.agents/skills/honden-coder/SKILL.md" ]
   [ -L "$HOME/.agents/skills/skill-creator" ]
   [[ "$(readlink -f "$HOME/.agents/skills/skill-creator")" == */skills/vendor/skill-creator ]]
-  [ ! -e "$ROOT/.claude/skills/honden-coder" ]
+  after="$(find "$FAKE/.claude/skills" -mindepth 1 -maxdepth 1 -printf '%f %y\n' | sort)"
+  [ "$after" = "$before" ]
+  run cat "$FAKE/.claude/skills/mine"
+  assert_output "claude-owned"
 }
 
 @test "--codex --all は棚の直下と vendor の近道を各人段へ並べる" {
@@ -127,6 +137,72 @@ setup() {
   run bash "$ROOT/scripts/setup_skills.sh" --codex --unlink shogun
   [ "$status" -eq 0 ]
   [ -L "$HOME/.codex/skills/shogun" ]
+}
+
+@test "--codex は他所を指す link を繋ぎ直さぬ" {
+  other="$HOME/other"
+  mkdir -p "$other" "$HOME/.agents/skills"
+  ln -s "$other" "$HOME/.agents/skills/skill-creator"
+
+  run bash "$ROOT/scripts/setup_skills.sh" --codex skill-creator
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"他所の link を指しておる。触らぬ"* ]]
+  [ "$(readlink -f "$HOME/.agents/skills/skill-creator")" = "$other" ]
+}
+
+@test "--codex --unlink は他所を指す link を外さぬ" {
+  other="$HOME/other"
+  mkdir -p "$other" "$HOME/.agents/skills"
+  ln -s "$other" "$HOME/.agents/skills/skill-creator"
+
+  run bash "$ROOT/scripts/setup_skills.sh" --codex --unlink skill-creator
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"他所の link を指しておる。触らぬ"* ]]
+  [ -L "$HOME/.agents/skills/skill-creator" ]
+  [ "$(readlink -f "$HOME/.agents/skills/skill-creator")" = "$other" ]
+}
+
+@test "繋ぎ先を作れなければ非0で止まり、成功を述べぬ" {
+  : > "$HOME/.agents"
+
+  run bash "$ROOT/scripts/setup_skills.sh" --codex honden-coder
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"honden-coder を繋いだ"* ]]
+  [[ "$output" != *"繋ぎ先:"* ]]
+}
+
+@test "書けぬ繋ぎ先では link 作成に失敗して非0で止まる" {
+  mkdir -p "$HOME/.agents/skills"
+  chmod 500 "$HOME/.agents/skills"
+
+  run bash "$ROOT/scripts/setup_skills.sh" --codex honden-coder
+  chmod 700 "$HOME/.agents/skills"
+  [ "$status" -ne 0 ]
+  [ ! -e "$HOME/.agents/skills/honden-coder" ]
+  [[ "$output" != *"honden-coder を繋いだ"* ]]
+}
+
+@test "外せぬ link では非0で止まり、外したと述べぬ" {
+  bash "$ROOT/scripts/setup_skills.sh" --codex honden-coder >/dev/null
+  chmod 500 "$HOME/.agents/skills"
+
+  run bash "$ROOT/scripts/setup_skills.sh" --codex --unlink honden-coder
+  chmod 700 "$HOME/.agents/skills"
+  [ "$status" -ne 0 ]
+  [ -L "$HOME/.agents/skills/honden-coder" ]
+  [[ "$output" != *"honden-coder を外した"* ]]
+}
+
+@test "繋ぎ直しの置換に失敗しても旧 link を失わぬ" {
+  mkdir -p "$HOME/.agents/skills" "$HOME/bin"
+  ln -s "$ROOT/skills/honden-coder" "$HOME/.agents/skills/skill-creator"
+  printf '#!/usr/bin/env bash\nexit 71\n' > "$HOME/bin/mv"
+  chmod +x "$HOME/bin/mv"
+
+  run env PATH="$HOME/bin:$PATH" bash "$ROOT/scripts/setup_skills.sh" --codex skill-creator
+  [ "$status" -ne 0 ]
+  [[ "$output" != *"繋ぎ直した"* ]]
+  [ "$(readlink -f "$HOME/.agents/skills/skill-creator")" = "$ROOT/skills/honden-coder" ]
 }
 
 @test "--project と --codex の曖昧な併用は書く前に拒む" {

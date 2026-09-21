@@ -33,6 +33,8 @@ bash scripts/setup_skills.sh --project <道> --all       # その repo で直に
 ```
 
 繋ぎ先に実体（link でない物）があれば触らない。繋ぎは machine-local で git には載らない。
+既存の link も、解決先がこの棚の外なら他人の物として触らない。
+接続し直す場合も `--unlink` で外す場合も、script が管理するのは棚の下を指す link だけである。
 
 Codex は公式の user scope である `$HOME/.agents/skills/` へ、skill ごとに繋ぐ。
 棚そのものには `SKILL.md` がなく、一段深い namespace として置くより、Codex が

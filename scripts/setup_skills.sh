@@ -91,26 +91,42 @@ if [ ${#PICK[@]} -eq 0 ]; then
   exit 0
 fi
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" || die "繋ぎ先を作れぬ: $DEST"
 for n in "${PICK[@]}"; do
-  src=$(resolve "$n")
+  src=$(resolve "$n" || true)
   [ -n "$src" ] || { warn "$n は棚に無い。飛ばす"; continue; }
   tgt="$DEST/$n"
+
+  if [ -L "$tgt" ]; then
+    cur=$(readlink -f "$tgt" 2>/dev/null || true)
+    case "$cur" in
+      "$SHELF"/*) ;;
+      *) warn "$n は他所の link を指しておる。触らぬ"; continue ;;
+    esac
+  fi
   if [ "$UNLINK" = 1 ]; then
-    if [ -L "$tgt" ]; then rm "$tgt"; ok "$n を外した"
+    if [ -L "$tgt" ]; then
+      rm "$tgt" || die "$n を外せぬ: $tgt"
+      ok "$n を外した"
     elif [ -e "$tgt" ]; then warn "$n は link でない（案件の実体）。触らぬ"
     else info "$n は繋がっておらぬ"; fi
     continue
   fi
   if [ -L "$tgt" ]; then
-    cur=$(readlink -f "$tgt" 2>/dev/null || true)
     if [ "$cur" = "$src" ]; then ok "$n は繋ぎ済み"; else
-      rm "$tgt" && ln -s "$src" "$tgt" && ok "$n を繋ぎ直した（→ $src）"
+      replacement="$DEST/.${n}.honden.$$"
+      ln -s "$src" "$replacement" || die "$n の仮 link を作れぬ: $replacement"
+      if ! mv -Tf "$replacement" "$tgt"; then
+        rm -f "$replacement"
+        die "$n の link を置き換えられぬ: $tgt"
+      fi
+      ok "$n を繋ぎ直した（→ $src）"
     fi
   elif [ -e "$tgt" ]; then
     warn "$n: 案件が己の実体を持っておる。触らぬ（要るなら手で除いてから）"
   else
-    ln -s "$src" "$tgt" && ok "$n を繋いだ"
+    ln -s "$src" "$tgt" || die "$n を繋げぬ: $tgt"
+    ok "$n を繋いだ"
   fi
 done
 info "繋ぎ先: $DEST（machine-local・git には載らぬ）"
