@@ -226,6 +226,20 @@ setup() {
   [ ! -e "$ADDON_CLAUDE_CFG" ]
 }
 
+@test "**roster が引けなんだ時は化かさず止まる**——正本の言い分を見せて非 0" {
+  { echo '#!/usr/bin/env bash'
+    echo 'echo "db が壊れておる" >&2'
+    echo 'exit 3'
+  } > "$STUB/honden"; chmod +x "$STUB/honden"
+  run bash "$ROOT/scripts/setup_addons.sh" --yes deepwiki
+  assert_failure
+  assert_output --partial "正本を読めなんだ"
+  assert_output --partial "db が壊れておる"      # 悲鳴を捨てておらぬ
+  refute_output --partial "対応する客（claude / codex / cursor）が居らぬ"  # 零件の言葉と混ぜぬ
+  [ ! -e "$ADDON_CODEX_CFG" ]
+  [ ! -e "$ADDON_CURSOR_CFG" ]
+}
+
 @test "陰性対照: honden が居らねば従来どおり三つへ倒れ、幾つか返せばその分だけ" {
   export ADDON_HONDEN_BIN=honden-not-here
   run bash "$ROOT/scripts/setup_addons.sh" --check deepwiki

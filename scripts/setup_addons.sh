@@ -63,7 +63,16 @@ done
 # 結果をそのまま正とし、対応する客（claude / codex / cursor）が零件なら
 # 何も変えずに終う——在りもせぬ客の設定へ手を出さぬ。
 if have "$HONDEN_BIN"; then
-  CLIENTS=$("$HONDEN_BIN" roster 2>/dev/null | grep -oE '\b(claude|codex|cursor)\b' | sort -u)
+  # 引く段と選ぶ段を分ける。引けなんだ（非 0）は「無い」ではない——
+  # 正本の悲鳴を見せて止まる。零件は引けた上での事実ゆえ、静かに終う。
+  ROSTER_ERR=$(mktemp)
+  if ! ROSTER_OUT=$("$HONDEN_BIN" roster 2>"$ROSTER_ERR"); then
+    msg=$(head -c 500 "$ROSTER_ERR"); rm -f "$ROSTER_ERR"
+    die "正本を読めなんだ（$HONDEN_BIN roster が非 0 で落ちた）。何も変えておらぬ。
+      正本の言い分: ${msg:-（何も言わなんだ）}"
+  fi
+  rm -f "$ROSTER_ERR"
+  CLIENTS=$(printf '%s\n' "$ROSTER_OUT" | grep -oE '\b(claude|codex|cursor)\b' | sort -u)
   if [ -z "$CLIENTS" ]; then
     info "roster に対応する客（claude / codex / cursor）が居らぬ。何も変えず終う"
     exit 0
