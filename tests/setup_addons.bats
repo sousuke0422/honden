@@ -19,6 +19,26 @@ setup() {
   # 外の道具はみな贋物。curl も置いて、呼ばれたら記録に残す（呼ばれぬのが正）
   stub uv 0
   stub serena 0
+  # 贋 codex は本物と同じく TOML を正しく解いて答える（引用符つきの区画も見える）。
+  # add は ADDON_CODEX_CFG へ書く——本物が己の config へ書くのと同じ流れ
+  { echo '#!/usr/bin/env bash'
+    echo 'printf "codex" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"'
+    echo 'if [ "${1:-}" = mcp ] && [ "${2:-}" = get ]; then'
+    echo '  python3 - "$ADDON_CODEX_CFG" "${3:-}" <<PY'
+    echo 'import sys, tomllib, os'
+    echo 'p, name = sys.argv[1], sys.argv[2]'
+    echo 'if not os.path.exists(p): sys.exit(1)'
+    echo 'try: cfg = tomllib.load(open(p, "rb"))'
+    echo 'except Exception: sys.exit(1)'
+    echo 'sys.exit(0 if name in (cfg.get("mcp_servers") or {}) else 1)'
+    echo 'PY'
+    echo '  exit $?'
+    echo 'elif [ "${1:-}" = mcp ] && [ "${2:-}" = add ]; then'
+    echo '  mkdir -p "$(dirname "$ADDON_CODEX_CFG")"'
+    echo '  printf "\n[mcp_servers.%s]\nurl = \"%s\"\n" "${3:-}" "${5:-}" >> "$ADDON_CODEX_CFG"'
+    echo 'fi'
+    echo 'exit 0'
+  } > "$STUB/codex"; chmod +x "$STUB/codex"
   # 贋 claude は本物と同じく、mcp add で己の設定（正しい JSON の user scope）へ
   # 名を書き残す。判じが JSON を読む以上、字面の追記では検められぬ
   { echo '#!/usr/bin/env bash'
@@ -137,6 +157,50 @@ setup() {
   assert_success
   assert_output --partial "context7 / claude: 据わっておる（触れぬ）"
   ! called_with "claude" "mcp add -s user -t http context7"
+}
+
+@test "**引用符つきの区画を見逃さぬ**——codex は CLI に問う" {
+  mkdir -p "$(dirname "$ADDON_CODEX_CFG")"
+  printf '[mcp_servers."context7"]\nurl = "https://mcp.context7.com/mcp"\n' > "$ADDON_CODEX_CFG"
+  before=$(cat "$ADDON_CODEX_CFG")
+  run bash "$ROOT/scripts/setup_addons.sh" --yes context7
+  assert_success
+  assert_output --partial "context7 / codex: 据わっておる（触れぬ）"
+  [ "$before" = "$(cat "$ADDON_CODEX_CFG")" ]  # 二重に書いておらぬ
+  python3 -c "import tomllib,sys; tomllib.load(open(sys.argv[1],'rb'))" "$ADDON_CODEX_CFG"  # TOML は読めるまま
+}
+
+@test "codex CLI が無ければ手で config を書かず「据えられなんだ」と報じる" {
+  export ADDON_CODEX_BIN=codex-not-here
+  run bash "$ROOT/scripts/setup_addons.sh" --yes deepwiki
+  assert_failure
+  assert_output --partial "codex CLI が無い。据えられなんだ"
+  [ ! -e "$ADDON_CODEX_CFG" ]  # 手書きしておらぬ
+}
+
+@test "serena は --no-python-downloads つきで据え、python が無ければ案内して止まる" {
+  rm "$STUB/serena"
+  run bash "$ROOT/scripts/setup_addons.sh" --yes serena
+  called_with "uv" "tool install --no-python-downloads -p 3.13 serena-agent"
+  # python 3.13 が無い形（uv が落ちる）
+  stub uv 1
+  run bash "$ROOT/scripts/setup_addons.sh" --yes serena
+  assert_failure
+  assert_output --partial "python 3.13 が無いなら先に据えられよ"
+}
+
+@test "**書けぬ先でも人の cursor 設定はそのまま**——仮の file だけで倒れる" {
+  mkdir -p "$(dirname "$ADDON_CURSOR_CFG")"
+  printf '{"mcpServers":{"mine":{"url":"https://example.invalid"}}}' > "$ADDON_CURSOR_CFG"
+  before=$(cat "$ADDON_CURSOR_CFG")
+  chmod 555 "$(dirname "$ADDON_CURSOR_CFG")"
+  run bash "$ROOT/scripts/setup_addons.sh" --yes deepwiki
+  chmod 755 "$(dirname "$ADDON_CURSOR_CFG")"
+  assert_failure
+  assert_output --partial "deepwiki / cursor: 繋げなんだ"
+  [ "$before" = "$(cat "$ADDON_CURSOR_CFG")" ]  # 原形のまま
+  # 仮の file の残骸も無い
+  [ -z "$(ls "$(dirname "$ADDON_CURSOR_CFG")" | grep '^\.mcp\.json\.' || true)" ]
 }
 
 @test "Linux 以外は正直に断る" {

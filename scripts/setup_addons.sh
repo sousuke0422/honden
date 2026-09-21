@@ -30,6 +30,8 @@ set -uo pipefail
 CLAUDE_CFG="${ADDON_CLAUDE_CFG:-$HOME/.claude.json}"
 CODEX_CFG="${ADDON_CODEX_CFG:-$HOME/.codex/config.toml}"
 CURSOR_CFG="${ADDON_CURSOR_CFG:-$HOME/.cursor/mcp.json}"
+# 試験が「codex CLI が無い」形を作れるよう、呼び名だけ差し替えられるようにする
+CODEX_BIN="${ADDON_CODEX_BIN:-codex}"
 CTX7_URL="https://mcp.context7.com/mcp"
 DEEPWIKI_URL="https://mcp.deepwiki.com/mcp"
 
@@ -81,9 +83,10 @@ sys.exit(0 if sys.argv[2] in (cfg.get('mcpServers') or {}) else 1)
 PY
 }
 in_claude(){ [ -f "$CLAUDE_CFG" ] && json_has_server "$CLAUDE_CFG" "$1"; }
-# codex は toml。区画見出しは行頭の固定字面（^[mcp_servers.<名>]）で、
-# 値や註の中に同じ行頭形は現れず、案件ごとの段も持たぬゆえ grep のまま。
-in_codex(){  [ -f "$CODEX_CFG" ]  && grep -q "^\[mcp_servers\.$1\]" "$CODEX_CFG"; }
+# codex は CLI に問う。toml の字面読みは引用符つきの区画
+# （[mcp_servers."名"]）を見逃す。CLI が無ければ「判じられぬ」（偽を返す）
+# ——据えの側は have codex を先に見て「据えられなんだ」と報じる。
+in_codex(){ have "$CODEX_BIN" && "$CODEX_BIN" mcp get "$1" >/dev/null 2>&1; }
 # cursor の mcp.json は claude と同じ形の平ら一枚。同じ手で見る。
 in_cursor(){ [ -f "$CURSOR_CFG" ] && json_has_server "$CURSOR_CFG" "$1"; }
 codex_key(){ [ -f "$CODEX_CFG" ] && grep -q "^\[mcp_servers\.$1\.http_headers\]" "$CODEX_CFG"; }
@@ -92,7 +95,8 @@ state_line() { # <tool> <client> → 一行
   local t="$1" cl="$2" s=""
   case "$cl" in
     claude) in_claude "$t" && s="据わっておる" || s="据わっておらぬ" ;;
-    codex)  in_codex  "$t" && s="据わっておる" || s="据わっておらぬ"
+    codex)  if ! have "$CODEX_BIN"; then s="判じられぬ（codex CLI が無い）"
+            else in_codex "$t" && s="据わっておる" || s="据わっておらぬ"; fi
             [ "$t" = context7 ] && codex_key "$t" && s="$s（鍵: 在る）" ;;
     cursor) in_cursor "$t" && s="据わっておる" || s="据わっておらぬ" ;;
   esac
@@ -123,7 +127,7 @@ plan_lines() {
     case "$t" in
       serena)
         if [ "$UNINSTALL" = 1 ]; then echo "serena を外す（uv tool uninstall serena-agent）"; continue; fi
-        have serena || echo "serena を uv で据える（uv tool install -p 3.13 serena-agent）"
+        have serena || echo "serena を uv で据える（uv tool install --no-python-downloads -p 3.13 serena-agent。python は降ろさぬ）"
         while read -r cl; do
           case "$cl" in
             claude) in_claude serena || echo "serena を claude へ繋ぐ（serena setup claude-code）" ;;
@@ -137,7 +141,7 @@ plan_lines() {
         while read -r cl; do
           case "$cl" in
             claude) in_claude "$t" || echo "$t を claude へ繋ぐ（claude mcp add -s user -t http $t $url）" ;;
-            codex)  in_codex  "$t" || echo "$t を codex へ繋ぐ（$CODEX_CFG へ url を書き足す・鍵は書かぬ）" ;;
+            codex)  in_codex  "$t" || echo "$t を codex へ繋ぐ（codex mcp add $t --url <url>・鍵は書かぬ）" ;;
             cursor) in_cursor "$t" || echo "$t を cursor へ繋ぐ（$CURSOR_CFG へ url を書き足す）" ;;
           esac
         done <<< "$CLIENTS" ;;
@@ -156,27 +160,50 @@ if [ "$YES" != 1 ]; then
 fi
 
 # ── cursor の mcp.json へ一区画だけ書き足す（既に在れば呼ばれぬ） ──
+#
+# **不可分に置き換える。** 開いたまま書き戻すと、途中で落ちた時に人の設定が
+# 半端な姿で残る。同じ dir へ仮の file を書き、flush と fsync を済ませ、
+# 読み直して JSON として妥当なことを確かめてから os.replace で載せ替える。
+# 既存の権（mode）は引き継ぎ、しくじった時は仮の file だけを消す。
 cursor_add() { # <名> <json 断片（servers の値）>
   local name="$1" frag="$2"
   mkdir -p "$(dirname "$CURSOR_CFG")"
-  [ -f "$CURSOR_CFG" ] || echo '{"mcpServers":{}}' > "$CURSOR_CFG"
   python3 - "$CURSOR_CFG" "$name" "$frag" <<'PY' || return 1
-import json, sys
+import json, os, sys, tempfile
 path, name, frag = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
-with open(path) as f: cfg = json.load(f)
+cfg = {"mcpServers": {}}
+if os.path.exists(path):
+    with open(path) as f: cfg = json.load(f)
 servers = cfg.setdefault('mcpServers', {})
 if name in servers:  # 二重に守る——呼び手も見ておるが、ここでも触らぬ
     sys.exit(0)
 servers[name] = frag
-with open(path, 'w') as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.', prefix='.mcp.json.')
+try:
+    if os.path.exists(path):
+        os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    with open(tmp) as f:
+        json.load(f)  # 読み直して妥当な JSON であることを確かめる
+    os.replace(tmp, path)
+except BaseException:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
 PY
 }
 
-# ── codex の config.toml の尻へ一区画だけ書き足す（既に在れば呼ばれぬ） ──
+# ── codex は CLI に問い、CLI に書かせる ──
+#
+# config.toml を字面で読むと `[mcp_servers."context7"]` の引用符つきを
+# 見逃し、二重に書いて TOML を壊す。在る無しは codex mcp get で問い、
+# 足すのは codex mcp add --url で行う（上流の書 developers.openai.com/codex/mcp）。
+# CLI が無ければ手で書かぬ——「据えられなんだ」と正直に報じる。
 codex_add() { # <名> <url>
-  mkdir -p "$(dirname "$CODEX_CFG")"
-  touch "$CODEX_CFG"
-  printf '\n[mcp_servers.%s]\nurl = "%s"\n' "$1" "$2" >> "$CODEX_CFG"
+  "$CODEX_BIN" mcp add "$1" --url "$2" >/dev/null 2>&1
 }
 
 failed=0
@@ -195,7 +222,9 @@ for t in "${PICK[@]}"; do
         # PyPI の配布は uv が数（hash）を検める。上流は署名を出しておらぬゆえ、
         # 身元の検めはできておらぬ——その旨を正直に述べる（黙って据えぬ）
         info "serena を据える（uv が数を検める。上流は署名を出しておらぬ——身元までは検められぬ）"
-        uv tool install -p 3.13 serena-agent || { warn "serena を据えられなんだ。置いておらぬ"; failed=1; continue; }
+        # python は黙って降ろさぬ（--no-python-downloads・上流の旗）。
+        uv tool install --no-python-downloads -p 3.13 serena-agent \
+          || { warn "serena を据えられなんだ。置いておらぬ。python 3.13 が無いなら先に据えられよ（例: uv python install 3.13）"; failed=1; continue; }
         have serena || { warn "据えたはずの serena が道に無い（uv tool の道が PATH に在るか）"; failed=1; continue; }
         ok "serena を据えた（$(serena --version 2>/dev/null || echo '版は答えぬ')）"
       else
@@ -236,7 +265,8 @@ for t in "${PICK[@]}"; do
                 && ok "$t / claude: 繋いだ（鍵なし）" || { warn "$t / claude: 繋げなんだ"; failed=1; }
             fi ;;
           codex)
-            if in_codex "$t"; then ok "$t / codex: 据わっておる（触れぬ）"; else
+            if ! have "$CODEX_BIN"; then warn "$t / codex: codex CLI が無い。据えられなんだ（手で config は書かぬ）"; failed=1
+            elif in_codex "$t"; then ok "$t / codex: 据わっておる（触れぬ）"; else
               codex_add "$t" "$url" && ok "$t / codex: 繋いだ（鍵なし）" || { warn "$t / codex: 繋げなんだ"; failed=1; }
             fi ;;
           cursor)
