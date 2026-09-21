@@ -10,7 +10,7 @@ description: |
   PR に紐づかぬ課題の起票（task の通常タスクを使え）、
   GitHub へのインラインコメント投稿（**仕様で禁じられている**）。
 allowed-tools: Bash
-argument-hint: "<PR番号> [--project <キー>]"
+argument-hint: "[PR番号] [--project project] [--repo owner/name]"
 ---
 
 # honden-review-to-task — レビュー指摘を task へ移す
@@ -39,11 +39,48 @@ Do NOT use for:
 - `task` CLI が使えること（`task review submit` があること）
 - `honden` が道に在ること（投入前の検めに使う）
 
+## 引数
+
+- `$0`：PR 番号。必須。
+- `--project <project>`：task の project key または UUID。必須。
+- `--repo <owner/name>`：対象 repo。省略時は cwd の repo を使う。
+  対象 repo の木の外から実行するときは必ず渡す。
+
+## task CLI の設定
+
+この skill は `task` を直接呼ぶため、shell に次の三つが要る。
+
+```bash
+export TASK_API_URL=https://task.koyori.app/api
+export TASK_TOKEN=...
+export TASK_TENANT=...
+task auth whoami --json
+```
+
+honden の木では秘密を git に載せず `.envrc` に書き、`direnv allow` で読む。
+`TASK_TENANT` は推測しない。PAT の `/personal_tokens/me` は `tenant_id` を返さず、
+同名の陣を推すと 403 になることを 2026-09-21 に実測したため、明示するほかない。
+
+`TASK_API_URL` の末尾の `/api` は必須である。2026-09-22 に PR #768 で、
+`https://task.koyori.app` は `Resource not found`、
+`https://task.koyori.app/api` は成功することを実測した。前者の表示から
+口の違いは分からないため、鍵・陣・案件を疑う前に `/api` を確かめる。
+
+同じ実測で `/api/v1/personal_tokens/me` は 200 でも tenant_id を返さず、
+`/api/v1/tenants` は 403、`/api/v1/users/me` と `/me` は 401、
+`/api/v1/tenants/me` は UUID として読めず 400 だった。
+review の口は `/tenants/{tenant}/projects/{project}/…` なので、陣の UUID は明示する。
+
+honden 自身が `cmd done` で使う review gate は別経路である。
+その tenant は `settings.yaml` の `review.gate.tenant`、案件別なら
+`review.gates.<id>.tenant` に書く。直接 `task` を呼ぶこの skill の
+`TASK_TENANT` を settings が自動で shell へ出すわけではない。
+
 ---
 
 ## 手順
 
-### Step 1: head SHA を取る
+### Step 1: 対象 repo と head SHA を取る
 
 **40 桁の小文字 16 進でなければならない。** 短縮 SHA を渡すと、そのラウンドは
 指摘を全部解消しても通らなくなる（ゲートが `latest_head_sha` を厳密一致で
@@ -51,10 +88,30 @@ Do NOT use for:
 出るので、画面から原因を辿れない。
 
 ```bash
-gh pr view <PR番号> --json headRefOid -q .headRefOid
+pr="$0"
+project="…" # --project で受けた project key または UUID
+repo_arg="…" # --repo で受けた owner/name。省略時は空文字
+if [[ -n "$repo_arg" ]]; then
+  repo="$repo_arg"
+else
+  repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+fi
+pr_json=$(gh pr view "$pr" --repo "$repo" --json headRefOid,url)
+head_sha=$(jq -r .headRefOid <<<"$pr_json")
+pr_url=$(jq -r .url <<<"$pr_json")
+[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+[[ "$pr_url" == "https://github.com/$repo/pull/$pr" ]] || {
+  printf 'repo 不一致: %s\n' "$pr_url" >&2
+  exit 1
+}
 ```
 
-`gh` が使えないなら `git rev-parse <ref>`。
+`head_sha` はここで一度だけ取り、findings JSON と Step 7 の `--head` に使い回す。
+`git rev-parse HEAD` は cwd の checkout を写すだけで、PR の head とは限らない。
+`repo` と `pr_url` が食い違えば、別 repo の同番号 PR なので投入せず止める。
+
+`gh` が使えないなら、PR 自身の `headRefOid` を取れないので止める。
+cwd の ref を代用しない。
 
 > **`git log` の表示を根拠にしてはならない。** merge commit を黙って除外する
 > ことがあり、件数が合ってしまうので欠落に気づけない（honden の
@@ -63,8 +120,17 @@ gh pr view <PR番号> --json headRefOid -q .headRefOid
 ### Step 2: 既に同じラウンドが無いか見る
 
 ```bash
-task review rounds --project <キー> --pr <PR番号>
+task --version
+task auth whoami --json
+task review rounds --project "$project" --pr "$pr" --repo "$repo"
 ```
+
+`whoami` は review command より先に打つ。403 は PAT が偽とは限らず、
+scope、tenant、project authorization の不足でも起きるためである。
+
+PR 番号は引数、head SHA は Step 1 の GitHub `headRefOid`、round 番号と
+finding ID は `task review submit` / `task review rounds` の応答から取る。
+cwd の Git の状態や表示順から推測しない。
 
 **同じ head SHA のラウンドが既にあれば、そこで止める。** 二度投入すると
 R2（第二ラウンド）ができ、「同じ commit を二度レビューした」ことになる。
@@ -109,6 +175,7 @@ task は `deferred` にした指摘から通常タスクを自動で起票する
 }
 ```
 
+- `head_sha` は Step 1 の `$head_sha` をそのまま書く。cwd の HEAD や取り直した値を混ぜない
 - `title` はレビューの指摘タイトルをそのまま
 - `body` に**説明と `→` の対処法**を入れる。ここが薄いと直す者が困る
 - `file` / `line` は分かる時だけ。`line` は 1 以上の整数
@@ -139,7 +206,7 @@ honden review check findings.json --expect high=2,medium=3,low=1,nit=0
 ### Step 6: 投入する
 
 ```bash
-task review submit findings.json --project <キー> --pr <PR番号>
+task review submit findings.json --project "$project" --pr "$pr"
 ```
 
 一括で 1 回だけ呼ぶ（1 件ずつ送らない）。
@@ -147,11 +214,39 @@ task review submit findings.json --project <キー> --pr <PR番号>
 ### Step 7: マージ可否を見て、そのまま報告する
 
 ```bash
-task review summary --project <キー> --pr <PR番号>
+if summary_json=$(task review summary \
+  --project "$project" --pr "$pr" --repo "$repo" --head "$head_sha" --json); then
+  summary_exit=0
+else
+  summary_exit=$?
+fi
+summary_json_valid=false
+if printf '%s\n' "$summary_json" | jq -e . >/dev/null; then
+  summary_json_valid=true
+fi
 ```
 
-**未解決の High/Medium が残っていれば終了コード 1** になる。これがマージ可否の
-答えであり、`/honden-review` の総合判定はその要約に添える形で伝える。
+`task review summary` は `--head` を省くと cwd の `git rev-parse HEAD` を比較対象にする。
+別 repo の木から叩けば、無関係な SHA と比べて偽の `blocked` を返す。
+この罠は 2026-09-17 に `honden-review-check` で実測し、2026-09-21 には
+PR #749 を honden の木から調べて honden の main HEAD と比較する形で再発した。
+ゆえに cwd にかかわらず、Step 1 の PR `headRefOid` を `--head` に必ず渡す。
+
+**未解決の High/Medium が残っていれば終了コード 1** になる。ただし、
+有効な summary JSON を取れない exit 1 は通信障害等であり `blocked` ではない。
+隣の `honden-review-check` と同じく、次の語で報告する。
+
+| exit | JSON | 報告 |
+|---:|---|---|
+| 0 | 有効 | `mergeable` |
+| 1 | 有効 | `blocked`。未解決、未検証、古い SHA を列挙 |
+| 1 | 無効 | `判定不能: task 側未読` |
+| 2 | — | 設定不足または入力不正。stderr で分ける |
+| 3 | — | 認証失敗（401） |
+| 4 | — | 権限不足（403） |
+| 5 | — | 対象なし（404） |
+
+`/honden-review` の総合判定は、この task 側の要約に添える形で伝える。
 
 ```
 レビュー指摘を task へ入れた（R1 / <head SHA の先頭 7 桁>）
