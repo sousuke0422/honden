@@ -1020,7 +1020,7 @@ async function runNudgeInner(
     if (working) {
       busy.add(p.agent);
       busyReason.set(p.agent, working);
-    } else if (p.pane && captureBusy(p.pane, p.cli)) {
+    } else if (p.pane && busyReader(p.pane, p.cli)) {
       busy.add(p.agent);
       busyReason.set(p.agent, '画面が処理中');
     }

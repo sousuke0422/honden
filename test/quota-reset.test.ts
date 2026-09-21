@@ -7,7 +7,7 @@
  * 従来の読み手では null となり、この守りが素通しになっておった。
  */
 import { describe, expect, test } from 'bun:test';
-import { unlinkSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openStore, tx } from '../src/store';
@@ -54,7 +54,7 @@ describe('枠切れの相手へ段梯子を上げぬ（日付つきの旗）', (
   const paneReader = () => new Map([['ashigaru9', { id: FAKE_PANE, label: 'fake:agents.9' }]]);
   // 実物の旗を実際の読み手（limitedWaitMs）へ通す。刻は採取当夜 21:00 に固定
   const limitedReader = () => limitedWaitMs(DATED_PANE, new Date(2026, 8, 20, 21, 0));
-  // 送る手は注ぎ替える。試験は tmux へ一つも命を出さぬ——
+  // 送る手は注ぎ替える。読み取り命は出るが、tmux への送信は行わぬ——
   // dryRun=false で実装の送信路を通しつつ、送られた中身は spy が受ける
   const spy = () => {
     const sent: { pane: string; text: string }[] = [];
@@ -65,6 +65,109 @@ describe('枠切れの相手へ段梯子を上げぬ（日付つきの旗）', (
     return { sent, sender };
   };
 
+  const fakeTmux = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'quota-reset-tmux-'));
+    const trace = join(dir, 'trace');
+    const executable = join(dir, 'tmux');
+    writeFileSync(executable, [
+      '#!/bin/sh',
+      'printf "%s\\n" "$*" >> "$HONDEN_TEST_TMUX_TRACE"',
+      'if [ "$1" = "capture-pane" ]; then',
+      "  printf '%s\\n' 'Working... (esc to interrupt)'",
+      'fi',
+    ].join('\n'));
+    chmodSync(executable, 0o755);
+    return {
+      dir,
+      trace,
+      restore: () => {
+        rmSync(dir, { recursive: true, force: true });
+      },
+    };
+  };
+
+  test('段3の busy 判じは注いだ読み手を使い、実体の capture-pane を呼ばぬ', async () => {
+    const path = join(tmpdir(), `quota-busy-reader-${Date.now()}.db`);
+    const tmux = fakeTmux();
+    try {
+      const db = seeded(path);
+      db.close();
+      const source = `
+        import { runNudge } from ${JSON.stringify(join(process.cwd(), 'src/main.ts'))};
+        const paneReader = () => new Map([['ashigaru9', { id: ${JSON.stringify(FAKE_PANE)}, label: 'fake:agents.9' }]]);
+        const sent = [];
+        let busyReads = 0;
+        const r = await runNudge(
+          ${JSON.stringify(path)}, false, false, undefined, 'core', paneReader,
+          () => { busyReads += 1; return false; },
+          () => null,
+          async (p) => { sent.push({ pane: p.pane?.id ?? '', text: p.text }); return { ok: true }; },
+        );
+        console.log(JSON.stringify({ code: r.code, busyReads, sent }));
+      `;
+      const child = Bun.spawnSync({
+        cmd: [process.execPath, '-e', source],
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PATH: `${tmux.dir}:${process.env.PATH ?? ''}`,
+          HONDEN_TEST_TMUX_TRACE: tmux.trace,
+        },
+      });
+      expect(child.success).toBe(true);
+      const result = JSON.parse(child.stdout.toString()) as {
+        code: number;
+        busyReads: number;
+        sent: { text: string }[];
+      };
+      expect(result.code).toBe(0);
+      const tmuxCalls = existsSync(tmux.trace) ? readFileSync(tmux.trace, 'utf8') : '';
+      expect(tmuxCalls).not.toContain('capture-pane');
+      expect(result.busyReads).toBe(1);
+      expect(result.sent[0]?.text).toBe('/new');
+    } finally {
+      tmux.restore();
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
+  });
+
+  test('陰性対照: 既定の busy 読み手は capture-pane で段3を止める', async () => {
+    const path = join(tmpdir(), `quota-default-busy-${Date.now()}.db`);
+    const tmux = fakeTmux();
+    try {
+      const db = seeded(path);
+      db.close();
+      const source = `
+        import { runNudge } from ${JSON.stringify(join(process.cwd(), 'src/main.ts'))};
+        const paneReader = () => new Map([['ashigaru9', { id: ${JSON.stringify(FAKE_PANE)}, label: 'fake:agents.9' }]]);
+        const sent = [];
+        const r = await runNudge(
+          ${JSON.stringify(path)}, false, false, undefined, 'core', paneReader,
+          undefined,
+          () => null,
+          async (p) => { sent.push({ pane: p.pane?.id ?? '', text: p.text }); return { ok: true }; },
+        );
+        console.log(JSON.stringify({ code: r.code, sent }));
+      `;
+      const child = Bun.spawnSync({
+        cmd: [process.execPath, '-e', source],
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          PATH: `${tmux.dir}:${process.env.PATH ?? ''}`,
+          HONDEN_TEST_TMUX_TRACE: tmux.trace,
+        },
+      });
+      expect(child.success).toBe(true);
+      const result = JSON.parse(child.stdout.toString()) as { code: number; sent: { text: string }[] };
+      expect(result.code).toBe(0);
+      expect(readFileSync(tmux.trace, 'utf8')).toContain(`capture-pane -t ${FAKE_PANE} -p`);
+      expect(result.sent.some((s) => s.text === '/new')).toBe(false);
+    } finally {
+      tmux.restore();
+      try { unlinkSync(path); } catch { /* 消えておればよい */ }
+    }
+  });
   test('nudge は撃たず、段も覚えも進まず、文脈消しへ進まぬ', async () => {
     const path = join(tmpdir(), `quota-dated-${Date.now()}.db`);
     try {
