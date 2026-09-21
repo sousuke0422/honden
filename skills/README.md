@@ -21,7 +21,7 @@ skills/
   skill-creator -> vendor/skill-creator                  近道
 ```
 
-## 拾わせる（.claude/skills へ繋ぐ）
+## 拾わせる
 
 この棚はただの置き場で、Claude Code が拾うのは `.claude/skills/` である。
 **繋ぎ先の既定は honden 自身**——陣の session はみな honden の根を cwd に
@@ -35,6 +35,23 @@ bash scripts/setup_skills.sh --project <道> --all       # その repo で直に
 ```
 
 繋ぎ先に実体（link でない物）があれば触らない。繋ぎは machine-local で git には載らない。
+既存の link も、解決先がこの棚の外なら他人の物として触らない。
+接続し直す場合も `--unlink` で外す場合も、script が管理するのは棚の下を指す link だけである。
+
+Codex は公式の user scope である `$HOME/.agents/skills/` へ、skill ごとに繋ぐ。
+棚そのものには `SKILL.md` がなく、一段深い namespace として置くより、Codex が
+定める skill folder を直に並べるほうが選択と `--unlink` の意味も保てる。
+HOME を黙って触らぬよう、こちらは `--codex` の明示を必須とする。
+
+```bash
+bash scripts/setup_skills.sh --codex --all
+bash scripts/setup_skills.sh --codex honden-coder skill-creator
+bash scripts/setup_skills.sh --codex --unlink honden-coder
+```
+
+旧 `~/.codex/skills/` は別の仕組みが持つ namespace であり、この script は触らない。
+Codex は repository scope の `.agents/skills/` も読むが、`--project` は既存の
+Claude Code 用として意味を変えないため、`--codex` とは併用できない。
 
 ## 三つに分ける
 
