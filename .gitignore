@@ -10,22 +10,26 @@
 !*/
 
 # Step 3: OSS公開対象ファイルを許可
-!.gitignore
-!.gitattributes
-!.gitleaks.toml
+#
+# **根の一枚に限る（先頭に /）。** 裸の名は深さを問わず届き、意図せぬ
+# 同名の物まで拾う——実際に深い .gitignore が一枚、紛れて追跡に入った。
+# 意図して載せるのと紛れて載るのは違う。追う物は名指しで開ける。
+!/.gitignore
+!/.gitattributes
+!/.gitleaks.toml
 # 秘密検めの見逃し帳。追跡から漏れると CI が毎回同じ物を釣る
-!.betterleaksignore
-!CLAUDE.md
-!LICENSE
+!/.betterleaksignore
+!/CLAUDE.md
+!/LICENSE
 # 上流（yohey-w/multi-agent-shogun・MIT）の告知。**許しを書き忘れて追跡から
 # 漏れ、謝辞を書いたのに世に出ていなかった**（CI が釣った・2026-09-01）。
 # 免許の紙と同じ扱いにする。
-!NOTICE
-!README.md
-!README_ja.md
-!CHANGELOG.md
-!CONTRIBUTING.md
-!SECURITY.md
+!/NOTICE
+!/README.md
+!/README_ja.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+!/SECURITY.md
 
 # Claude Code settings (spinner verbs only, no secrets)
 !.claude/
@@ -70,7 +74,7 @@
 !lib/stale_task_detect.sh
 
 # Multi-CLI: Codex auto-load file
-!AGENTS.md
+!/AGENTS.md
 
 # Multi-CLI: OpenCode agent file
 !.opencode/agents/*.md
@@ -96,7 +100,7 @@
 !install.bat
 
 # Development tooling
-!Makefile
+!/Makefile
 
 # Config (sample files only, no secrets)
 !config/
@@ -130,7 +134,7 @@
 !memo/README.md
 
 # Python venv
-!requirements.txt
+!/requirements.txt
 
 # Scripts
 !scripts/
@@ -294,6 +298,16 @@ tests/specs/osato_lms_*
 
 # 棚の作法
 !/skills/README.md
+
+# Serena（アドオン）の知。設定と覚えは、秘密が無い限り版に載せる。
+# cache/ と project.local.yml は各人の物で、.serena/.gitignore 自身が
+# 退けておる——白名簿の書き方でそれを拾い上げてはならぬ。
+# 要る物だけを名指しで開ける。丸ごとは開けぬ。
+!/.serena/
+!/.serena/.gitignore
+!/.serena/project.yml
+!/.serena/memories/
+!/.serena/memories/*.md
 
 # 貝の試験（bats）。TypeScript は bun test が見るが、shell は 1000 行を
 # 超えて無試験であった。helper は旧環境と同じ置き方で submodule に繋ぐ

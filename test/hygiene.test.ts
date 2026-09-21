@@ -68,4 +68,23 @@ describe('追跡している品に、育った場所の跡を残さぬ', () => {
     expect(t).not.toContain('config/settings.yaml');
     expect(t).toContain('config/settings.yaml.example');
   });
+
+  test('白名簿が名指しで許しておらぬ .gitignore は追跡に入っておらぬ', () => {
+    // 裸の `!.gitignore` は深さを問わず届き、深い一枚が紛れて追跡に入った。
+    // 意図して載せるのと紛れて載るのは違う——許した物だけをこの列に書く。
+    const allowed = new Set(['.gitignore', '.serena/.gitignore']);
+    const stray = tracked().filter(
+      (f) => (f === '.gitignore' || f.endsWith('/.gitignore')) && !allowed.has(f),
+    );
+    expect(stray).toEqual([]);
+  });
+
+  test('Serena の各人の物（cache と project.local.yml）は追跡に入っておらぬ', () => {
+    // Serena 自身が .serena/.gitignore で退けておる物を、白名簿の書き方で
+    // 拾い上げてはならぬ。入れた者と入れぬ者で版の中身が変わってはならぬ。
+    const bad = tracked().filter(
+      (f) => f.startsWith('.serena/cache') || f === '.serena/project.local.yml',
+    );
+    expect(bad).toEqual([]);
+  });
 });
