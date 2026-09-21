@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 棚の skill を .claude/skills/ へ繋ぎ、project レベルの skill として拾わせる。
+# 棚の skill を Claude Code または Codex が拾う段へ繋ぐ。
 #
 # **既定の繋ぎ先は honden 自身**である。陣の session はみな honden の根を
 # cwd に起きるゆえ、task や vrt など案件側の repo に置いても誰の目にも
@@ -13,6 +13,9 @@
 #   bash scripts/setup_skills.sh --unlink honden-coder      # 外す
 #   bash scripts/setup_skills.sh --project <道> --all       # その repo で直に
 #                                                           # claude を開く時だけ意味を持つ
+#
+# bash scripts/setup_skills.sh --codex --all              # Codex の各人段へ
+# bash scripts/setup_skills.sh --codex --unlink honden-coder
 #
 # 繋ぎ先に**実体（link でない物）が居れば触らぬ**。己の版を持っておるのを、
 # 仕度が黙って壊してはならぬ。
@@ -28,10 +31,12 @@ warn(){ echo "  $(c '1;33' '▲') $*"; }
 die() { echo "  $(c '1;31' '✗') $*" >&2; exit 1; }
 
 PROJ="$ROOT"
+PROJECT_SET=0
 if [ "${1:-}" = "--project" ]; then
   [ -n "${2:-}" ] || die "--project の後に道を"
   [ -d "$2" ] || die "$2 は dir でない"
   PROJ="$(cd "$2" && pwd)"
+  PROJECT_SET=1
   shift 2
 fi
 
@@ -56,17 +61,23 @@ resolve() { # <名> → 実体の道（無ければ空）
   fi
 }
 
-DEST="$PROJ/.claude/skills"
-
-UNLINK=0; ALL=0; PICK=()
+UNLINK=0; ALL=0; CODEX=0; PICK=()
 for a in "$@"; do
   case "$a" in
     --all) ALL=1 ;;
     --unlink) UNLINK=1 ;;
-    --*) die "知らぬ旗: $a（--all / --unlink）" ;;
+    --codex) CODEX=1 ;;
+    --*) die "知らぬ旗: $a（--all / --unlink / --codex）" ;;
     *) PICK+=("$a") ;;
   esac
 done
+
+if [ "$CODEX" = 1 ]; then
+  [ "$PROJECT_SET" = 0 ] || die "--project は Claude Code の段を選ぶ旗。--codex とは併用できぬ"
+  DEST="$HOME/.agents/skills"
+else
+  DEST="$PROJ/.claude/skills"
+fi
 
 if [ "$ALL" = 1 ]; then
   while read -r n; do PICK+=("$n"); done < <(shelf_skills)
