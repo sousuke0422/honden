@@ -90,14 +90,17 @@
 !.cursor/skills/inbox-write/SKILL.md
 
 # Setup and deployment scripts
-!shutsujin_departure.sh
+# （これらも根の一枚のみ。裸名は深さを問わず届き、first_setup.sh の裸名は
+#   scripts/first_setup.sh まで届いておった——深い方は名指しの
+#   !/scripts/first_setup.sh が受ける）
+!/shutsujin_departure.sh
 # 顔ぶれの差し替えの入口（三つ揃えて置く）
-!configure-agents.sh
-!configure-agents.command
-!configure-agents.bat
-!first_setup.sh
-!setup.sh
-!install.bat
+!/configure-agents.sh
+!/configure-agents.command
+!/configure-agents.bat
+!/first_setup.sh
+!/setup.sh
+!/install.bat
 
 # Development tooling
 !/Makefile
