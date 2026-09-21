@@ -69,6 +69,7 @@ import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './repor
 import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
 import { findStalled, notifyStalled } from './stalled';
+import { notifyUnreviewed } from './unreviewed';
 import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
@@ -1124,6 +1125,26 @@ async function runNudgeInner(
           actor: 'core',
           action: 'lease.stalled.notice.error',
           target: 'lease_stalled',
+          detail: e instanceof Error ? e.message : String(e),
+          at: now,
+        });
+      } catch { /* 報せも台帳も次の周で試す */ }
+    }
+  }
+
+  // 上がったまま検められておらぬ報告を軍師へ（長引けば家老へも）報せる。
+  if (!dryRun) {
+    try {
+      const found = notifyUnreviewed(db, now);
+      if (found.length > 0) {
+        lines.push(`  検められておらぬ報告を軍師へ報せた: ${found.map((u) => `#${u.reportId}`).join(', ')}`);
+      }
+    } catch (e) {
+      try {
+        journal(db, {
+          actor: 'core',
+          action: 'report.unreviewed.notice.error',
+          target: 'report_unreviewed',
           detail: e instanceof Error ? e.message : String(e),
           at: now,
         });

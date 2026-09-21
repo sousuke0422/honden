@@ -84,6 +84,9 @@ const URGENT_TYPES = new Set([
   // 叩いた節目で横乗せの一行に出るよう、急ぎに数える (src/abandoned.ts)。
   'cmd_abandoned',
   'lease_stalled',
+  // 検められておらぬ報告も閾値分の時を既に失っておる。軍師（と長引けば
+  // 家老）が次に honden を叩いた節目で目に入るよう、急ぎに数える (src/unreviewed.ts)。
+  'report_unreviewed',
 ]);
 
 /**
