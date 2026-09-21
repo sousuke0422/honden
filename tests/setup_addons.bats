@@ -14,8 +14,9 @@ setup() {
   export ADDON_CLAUDE_CFG="$HOME/.claude.json"
   export ADDON_CODEX_CFG="$HOME/.codex/config.toml"
   export ADDON_CURSOR_CFG="$HOME/.cursor/mcp.json"
-  # 客の名簿は正本でなく贋物から（試験が本物の正本を読んではならぬ）
-  stub honden 0 $'claude\ncodex\ncursor'
+  # 客の名簿は正本でなく贋物から（試験が本物の正本を読んではならぬ）。
+  # 並びは実の roster と同じ「名・役・CLI・模型」の四列
+  stub honden 0 $'  a1  worker  claude m1\n  a3  worker  codex m2\n  karo  commander  cursor m3'
   # 外の道具はみな贋物。curl も置いて、呼ばれたら記録に残す（呼ばれぬのが正）
   stub uv 0
   stub serena 0
@@ -238,6 +239,24 @@ setup() {
   refute_output --partial "対応する客（claude / codex / cursor）が居らぬ"  # 零件の言葉と混ぜぬ
   [ ! -e "$ADDON_CODEX_CFG" ]
   [ ! -e "$ADDON_CURSOR_CFG" ]
+}
+
+@test "**模型の名を客と読まぬ**——CLI の列だけを見る" {
+  # 客は opencode だけ。模型が claude 系でも claude を客と読んではならぬ
+  stub honden 0 $'  karo  commander  opencode claude-sonnet-5'
+  run bash "$ROOT/scripts/setup_addons.sh" --yes deepwiki
+  assert_success
+  assert_output --partial "対応する客（claude / codex / cursor）が居らぬ。何も変えず終う"
+  refute_output --partial "claude へ繋ぐ"
+  [ ! -e "$ADDON_CLAUDE_CFG" ]
+}
+
+@test "名に客の字が紛れても誤らぬ（cursor1 という名の claude 使い）" {
+  stub honden 0 $'  cursor1  worker  claude claude-fable-5'
+  run bash "$ROOT/scripts/setup_addons.sh" --check deepwiki
+  assert_success
+  assert_output --partial "deepwiki / claude"
+  refute_output --partial "deepwiki / cursor:"
 }
 
 @test "陰性対照: honden が居らねば従来どおり三つへ倒れ、幾つか返せばその分だけ" {

@@ -72,7 +72,13 @@ if have "$HONDEN_BIN"; then
       正本の言い分: ${msg:-（何も言わなんだ）}"
   fi
   rm -f "$ROSTER_ERR"
-  CLIENTS=$(printf '%s\n' "$ROSTER_OUT" | grep -oE '\b(claude|codex|cursor)\b' | sort -u)
+  # CLI の列（三列目）だけを見る。行全体を拾うと模型の名（claude-sonnet-5 等）
+  # から客を読み違える。roster に機械向けの口は無い（--json は黙って表のまま・
+  # 実測 2026-09-21）ゆえ列で読む。並びは「名・役・CLI・模型」（実測で確認）。
+  # 並びが後に変われば拾いは零件へ倒れ、「対応する客が居らぬ」で何も変えず終う
+  # ——黙って壊れはするが、書かずに終う安全側である。
+  CLIENTS=$(printf '%s\n' "$ROSTER_OUT" \
+    | awk '$3 == "claude" || $3 == "codex" || $3 == "cursor" { print $3 }' | sort -u)
   if [ -z "$CLIENTS" ]; then
     info "roster に対応する客（claude / codex / cursor）が居らぬ。何も変えず終う"
     exit 0
