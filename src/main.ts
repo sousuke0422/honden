@@ -956,14 +956,15 @@ export async function runNudge(
   paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
   busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
   limitedReader: (pane: Pane, now: Date) => number | null = captureLimitedWaitMs,
+  sender: typeof send = send,
 ): Promise<RunResult> {
   // 二つの手が同時に撃つのを止める。芯は前の子が終わる前に次を起こすゆえ、
   // 錠が無ければ両方が「まだ撃っておらぬ」と読んで揃って撃つ（実害を見た）。
   // --dry-run は書かぬゆえ錠を要さぬ。
-  if (dryRun) return runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader, limitedReader);
+  if (dryRun) return runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader, limitedReader, sender);
   const lockPath = `${dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH}.nudge.lock`;
   const r = await withNudgeLock(lockPath, () =>
-    runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader, limitedReader),
+    runNudgeInner(dbPath, dryRun, wakeShogun, reason, selfId, paneReader, busyReader, limitedReader, sender),
   );
   if (r === null) {
     // 撃たぬのが正しい。芯へは「次は普通の間で」と返す。
@@ -981,6 +982,7 @@ async function runNudgeInner(
   paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
   busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
   limitedReader: (pane: Pane, now: Date) => number | null = captureLimitedWaitMs,
+  sender: typeof send = send,
 ): Promise<RunResult> {
   const db = openStore({ path: dbPath });
 
@@ -1062,7 +1064,7 @@ async function runNudgeInner(
       );
       continue;
     }
-    const r = await send(p);
+    const r = await sender(p);
     if (r.ok) {
       record(db, p, now, reason, selfId);
       lines.push(`${head} → 撃った: ${JSON.stringify(p.text)}${why}`);

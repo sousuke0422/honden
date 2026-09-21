@@ -48,21 +48,35 @@ function seeded(path: string) {
 }
 
 describe('枠切れの相手へ段梯子を上げぬ（日付つきの旗）', () => {
-  const paneReader = () => new Map([['ashigaru9', { id: '%9', label: 'honden:agents.9' }]]);
+  // 実在しえぬ pane 番号を使う。実陣の pane 番号（%9 等）を書けば、
+  // どこかの守りが破れた時に本物の pane へ命が飛ぶ——番号の側でも塞ぐ
+  const FAKE_PANE = '%2147483647';
+  const paneReader = () => new Map([['ashigaru9', { id: FAKE_PANE, label: 'fake:agents.9' }]]);
   // 実物の旗を実際の読み手（limitedWaitMs）へ通す。刻は採取当夜 21:00 に固定
   const limitedReader = () => limitedWaitMs(DATED_PANE, new Date(2026, 8, 20, 21, 0));
+  // 送る手は注ぎ替える。試験は tmux へ一つも命を出さぬ——
+  // dryRun=false で実装の送信路を通しつつ、送られた中身は spy が受ける
+  const spy = () => {
+    const sent: { pane: string; text: string }[] = [];
+    const sender = async (p: { pane?: { id: string } | null; text: string }) => {
+      sent.push({ pane: p.pane?.id ?? '', text: p.text });
+      return { ok: true as const };
+    };
+    return { sent, sender };
+  };
 
   test('nudge は撃たず、段も覚えも進まず、文脈消しへ進まぬ', async () => {
     const path = join(tmpdir(), `quota-dated-${Date.now()}.db`);
     try {
       const db = seeded(path);
-      const r = await runNudge(path, false, false, undefined, 'core', paneReader, () => false, limitedReader);
+      const { sent, sender } = spy();
+      const r = await runNudge(path, false, false, undefined, 'core', paneReader, () => false, limitedReader, sender);
       expect(r.code).toBe(0);
-      // 撃たぬ——理由に使用枠が出る
+      // 撃たぬ——理由に使用枠が出て、送る手は一度も呼ばれぬ
       expect(r.out).toContain('使用枠が尽きておる');
       expect(r.out).toContain('撃たぬ');
-      expect(r.out).not.toContain('撃った:'); // 何も送られておらぬ（理由文の言及は送信ではない）
       expect(r.out).toContain('再訪'); // 明けの刻の直後に見に戻る
+      expect(sent).toEqual([]);
       // 段の覚えが進んでおらぬ（record が呼ばれておらぬ）
       const row = db
         .query('SELECT last_level, last_reset_at FROM nudge WHERE agent = ?')
@@ -81,13 +95,22 @@ describe('枠切れの相手へ段梯子を上げぬ（日付つきの旗）', (
       // 同じ実物の旗を、明けた後（09-22 09:00）の刻で読む——scroll-back の残骸
       const pastReader = () => limitedWaitMs(DATED_PANE, new Date(2026, 8, 22, 9, 0));
       expect(pastReader()).toBeNull(); // 前提の確認: 旗はもう枠切れと読まれぬ
-      const r = await runNudge(path, false, false, undefined, 'core', paneReader, () => false, pastReader);
+      const { sent, sender } = spy();
+      const r = await runNudge(path, false, false, undefined, 'core', paneReader, () => false, pastReader, sender);
       expect(r.code).toBe(0);
-      // 梯子は動く——「使用枠」で据え置かれず、送信まで進む
-      // （試験環境に実 tmux pane が無いゆえ「撃てぬ」まで。据え置きなら「撃たぬ」が出る）
+      // 梯子は動く——「使用枠」で据え置かれず、送信まで進む。
+      // 何番の pane へ何を送ろうとしたかまで spy で検める
       expect(r.out).not.toContain('使用枠が尽きておる');
       expect(r.out).not.toContain('撃たぬ');
-      expect(r.out).toMatch(/撃った|撃てぬ/);
+      expect(r.out).toContain('撃った');
+      expect(sent.length).toBe(1);
+      expect(sent[0]!.pane).toBe(FAKE_PANE);
+      expect(sent[0]!.text).toBe('/new'); // 段 3・codex の文脈消し
+      // 段の覚えが進む（record が呼ばれた）
+      const row = db
+        .query('SELECT last_level FROM nudge WHERE agent = ?')
+        .get('ashigaru9') as { last_level: number | null };
+      expect(row.last_level).not.toBeNull();
       db.close();
     } finally {
       try { unlinkSync(path); } catch { /* 消えておればよい */ }
