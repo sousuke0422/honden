@@ -104,13 +104,11 @@ function tailOf(capture: string, n = 8): string {
 }
 
 /**
- * 枠切れか否かは**刻で決まる**。案内された刻が過ぎておれば枠は既に戻っておる。
- *
- * 判定は `limitedWaitMs` の一本に集める——「切れておるか」と「いつ明けるか」を
- * 別々に判ずると、字面では切れておるのに待ちが無い、という食い違いが生まれる。
+ * 復帰時刻付きの旗、または既知の時刻なし通知を判定する。
+ * limitState の数値と undated を区別し、時刻なしの通知に復帰時刻を作らない。
  */
 export function isLimitedText(capture: string, now: Date = new Date()): boolean {
-  return limitedWaitMs(capture, now) !== null;
+  return limitState(capture, now) !== null;
 }
 
 /** 実際に pane を写して見立てる。写せぬなら「切れておらぬ」扱い（撃つ側の判断へ譲る）。 */
@@ -153,6 +151,9 @@ export function isWorking(db: Database, agent: string, now: Date = new Date()): 
 }
 
 /**
+ * この関数は時刻付き通知の待ち時間だけを返す。
+ * 時刻なし通知を含めた判断には limitState を使う。
+ *
  * 枠切れの旗から「明ける刻」を読む（殿の求め・2026-09-10）。
  *
  * 実物の旗は刻を刷る:
@@ -267,4 +268,23 @@ export function captureLimitedWaitMs(pane: Pane, now: Date = new Date()): number
   const r = Bun.spawnSync(['tmux', 'capture-pane', '-t', pane.id, '-p']);
   if (!r.success) return null;
   return limitedWaitMs(r.stdout.toString(), now);
+}
+
+/** 復帰時刻が無い場合は、既知の完全な通知行だけを認める。 */
+const UNDATED_LIMIT = /^\s*(?:[●■!⚠]\s*)?(?:(?:you['’]ve|you have)\s+)?reached your Fable limit[.!]?\s*$/im;
+
+export type LimitState = number | 'undated' | null;
+
+/** 数値は復帰までの待ち、undated は解除を人に委ねる通知。 */
+export function limitState(capture: string, now: Date): LimitState {
+  const wait = limitedWaitMs(capture, now);
+  if (wait !== null) return wait;
+  const tail = tailOf(capture);
+  return !NOT_LIMITED.test(tail) && UNDATED_LIMIT.test(tail) ? 'undated' : null;
+}
+
+export function captureLimitState(pane: Pane, now: Date): LimitState {
+  const r = Bun.spawnSync(['tmux', 'capture-pane', '-t', pane.id, '-p']);
+  if (!r.success) return null;
+  return limitState(r.stdout.toString(), now);
 }
