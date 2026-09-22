@@ -24,6 +24,9 @@ honden inbox ack --all     # 処理したものを既読にする
 
 既読にできるのは己の分だけである。他人の分を既読にすれば、相手は永久に気づけぬ。
 
+**報せと状態の違い**: inbox の報せは既読にすれば消える。`honden status` と
+`honden cmd list` は正本の状態を映すゆえ、検め待ちの報告は既読にせず残る。
+
 **急ぎの報せ**（範囲の増減など）は honden のほとんどの副命令の出力に
 `⚠ 急ぎの未読` として一行載る（`inbox` 系と `nudge` には載らぬ）。
 作業の節目で honden を叩けば気づける。
@@ -31,8 +34,8 @@ honden inbox ack --all     # 処理したものを既読にする
 ## 様子を見る
 
 ```
-honden status        # 布陣一枚（誰が居り、何を握り、何が未読か）
-honden cmd list      # 動いておる司令
+honden status        # 布陣一枚（誰が居り、何を握り、何が未読か、検め待ちの報告）
+honden cmd list      # 動いておる司令（検め待ちの報告があれば印つき）
 honden decisions     # 殿の裁可を待っておるもの
 ```
 
