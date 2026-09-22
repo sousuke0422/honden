@@ -12,8 +12,9 @@
  *       見れば、検めが出た task は最新行に verdict が立ち、自然に外れる。
  *       後から差し替わった古い報告も、最新でないゆえ同じ理屈で外れる
  *   二、その最新行の verdict が NULL —— 検めがまだ出ておらぬ
- *   三、司令が閉じておらぬ —— status が pending / in_progress。閉じた司令に
- *       残った報告は、もう誰の検めも待っておらぬ
+ *   三、cmd_id があり、その司令が閉じておらぬ —— status が pending / in_progress。
+ *       cmd_id の無い旧報告は司令の状態を判じられず、閉じた司令に残った
+ *       報告も、もう誰の検めも待っておらぬ
  *   四、origin が native —— import は旧陣の YAML の写しで、検めの流れの外に居る
  *   五、上がってから閾値を過ぎておる
  *
@@ -61,8 +62,9 @@ const BASE_WHERE = `
          AND r.origin = 'native'
          AND r.task_id IS NOT NULL
          AND r.id = (SELECT MAX(r2.id) FROM report r2 WHERE r2.task_id = r.task_id)
-         AND (r.cmd_id IS NULL OR EXISTS (
-               SELECT 1 FROM cmd c WHERE c.id = r.cmd_id AND c.status IN ('pending','in_progress')))`;
+         AND r.cmd_id IS NOT NULL
+         AND EXISTS (
+               SELECT 1 FROM cmd c WHERE c.id = r.cmd_id AND c.status IN ('pending','in_progress'))`;
 
 export function findUnreviewed(db: Database, now: Date = new Date()): Unreviewed[] {
   // 検め済みの task への直しの報告は数えぬ——軍師は同じ task を二度検められぬ
