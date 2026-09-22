@@ -148,14 +148,37 @@ interface State {
   last_level: number | null;
   last_reset_at: string | null;
   reset_count: number;
+  limited_until: string | null;
 }
 
 export function stateOf(db: Database, agent: string): State {
   return (
-    (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count FROM nudge WHERE agent = ?').get(agent) as
+    (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count, limited_until FROM nudge WHERE agent = ?').get(agent) as
       | State
-      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0 }
+      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0, limited_until: null }
   );
+}
+
+/**
+ * 枠切れの旗を読んだら、明ける刻を正本へ刻む。
+ *
+ * 旗は pane の写しにしか無く、/clear や再描画で消える。消えた後に画面を
+ * もう一度読みに行っても無い物は読めぬ——読めた時に覚えるほかない。
+ * 覚えは nudge の行に同居させる: 覚えの生き死にが未読の山と揃い、
+ * 山が片付けば forget が行ごと消す（別表にすると掃除が別に要り、
+ * 台帳から読み直す形は追記の記録を状態の正本に使うことになる）。
+ *
+ * 既に未来の刻を覚えておるなら、より遠い方だけ残す——古い旗の残骸を
+ * 読み直して覚えを縮め、明ける前に撃ち始める形を作らぬ。
+ */
+export function markLimited(db: Database, agent: string, until: Date): void {
+  db.prepare(
+    `INSERT INTO nudge(agent, limited_until) VALUES (?,?)
+     ON CONFLICT(agent) DO UPDATE SET
+       limited_until = CASE
+         WHEN nudge.limited_until IS NULL OR excluded.limited_until > nudge.limited_until
+         THEN excluded.limited_until ELSE nudge.limited_until END`,
+  ).run(agent, until.toISOString());
 }
 
 export function levelFor(elapsedMs: number): Level {
@@ -221,6 +244,29 @@ export function plan(
         send = false;
         reason = `${Math.round((REPEAT_MS - sinceLast) / 1000)} 秒後まで撃ち直さぬ`;
       }
+    }
+
+    // 枠切れの覚えが明けておらぬなら撃たぬ。旗が画面から消えておっても
+    // （/clear・再描画で写しは消える）、覚えた刻が正である。文脈消しの
+    // 段にも入らぬ——待つべき相手を殴らぬ。明ける刻を過ぎれば、この分岐は
+    // 素通りになり通常の梯子が再開する。
+    if (st.limited_until && new Date(st.limited_until).getTime() > now.getTime()) {
+      const untilMs = new Date(st.limited_until).getTime() - now.getTime();
+      const pl = build(
+        entry.id,
+        entry.cli,
+        pane,
+        s,
+        level,
+        false,
+        `使用枠が尽きておる（${st.limited_until} に明けると覚えた）。明けるまで撃たず、文脈も消させぬ`,
+        now,
+        st,
+        level,
+      );
+      pl.nextInMs = Math.max(1000, untilMs);
+      out.push(mark(pl));
+      continue;
     }
 
     // 三度消させても応えぬなら退く。**撃ち続けて良いことは無い。**
