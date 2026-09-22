@@ -76,7 +76,10 @@ task --version
 task auth whoami --json
 ```
 
-task CLI v0.1.24 以降の `auth whoami` は PAT で動き、scopes、allowed_project_ids、tenant、期限を返す。
+task CLI v0.1.24 以降の `auth whoami` は PAT で動き、scopes、allowed_project_ids、期限を返す。
+**tenant は返さない**（2026-09-23 実測。返る鍵は id / name / user_id / username /
+scopes / allowed_project_ids / expires_at のみ）。tenant の値は環境
+（`TASK_TENANT`）か設定の側の事実として扱う。
 `write:review` の有無と対象 project への到達可否を、review command より先に確認する。
 
 `403` を直ちに「PAT が偽」と結論しない。
@@ -211,7 +214,7 @@ JSON を取れていない exit=1 は通信障害等の失敗であり、task �
 | 1 | 二義: ゲート不成立（blocked）と、通信障害・HTTP 500 等の未分類の失敗 | 有効な summary の JSON を取れたかで分ける | JSON 有: blocked として未解決 finding、未検証 finding、古い review SHA を列挙する。JSON 無: 判定不能・task 側未読と報告する |
 | 2 | 二義: 鍵・設定が無い、と引数の検証に落ちた | stderr か JSON の中身で「設定不足」と「入力不正」を分ける | 設定不足: 不足した設定名を示す。入力不正: 誤った引数を示す。いずれも task 側は未読と報告する |
 | 3 | 鍵が偽（401） | — | `task auth whoami` の結果とともに認証更新を求める |
-| 4 | 権限不足（403） | — | scope、tenant、project authorization を whoami の事実で照合する |
+| 4 | 権限不足（403） | — | scope、project authorization を whoami の事実で、tenant は環境の値で照合する |
 | 5 | 対象が無い（404。project に限らぬ） | stderr で何が見つからなかったかを読む | project key、tenant、allowed_project_ids、PR 番号を照合する |
 
 この表は 2026-09-18 に task CLI v0.1.24 の `review summary` で実測した物である。
@@ -316,7 +319,7 @@ date -u +%Y-%m-%dT%H:%M:%SZ
 
 ### task
 
-- whoami: tenant、scopes、allowed_project_ids、期限
+- whoami: scopes、allowed_project_ids、期限（tenant は返らない——環境の値を書く）
 - summary: exit code と理由
 - findings: ID、severity、state、title
 - rounds: R番号、SHA、reviewer、件数

@@ -10,6 +10,9 @@ export TASK_TOKEN=
 export TASK_TENANT=
 
 # PAT は tenant_id を返さないため、TASK_TENANT は陣の UUID を明示する。
+# （tenant_id を返す変更 #769 は 2026-09-22 に merge されたが、2026-09-23 の
+#   実測で task auth whoami --json は依然 tenant_id を返さない。返るように
+#   なったかは同じ命で確かめられる。）
 # honden の review gate は別経路。tenant は settings.yaml の review.gate.tenant
 # （案件別は review.gates.<id>.tenant）にも書く。秘密でなく案件の属性である。
 # 手元に別の task を立てる時は TASK_API_URL をその URL へ変える。

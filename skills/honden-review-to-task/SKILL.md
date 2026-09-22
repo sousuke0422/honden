@@ -60,6 +60,13 @@ task auth whoami --json
 honden の木では秘密を git に載せず `.envrc` に書き、`direnv allow` で読む。
 `TASK_TENANT` は推測しない。PAT の `/personal_tokens/me` は `tenant_id` を返さず、
 同名の陣を推すと 403 になることを 2026-09-21 に実測したため、明示するほかない。
+`tenant_id` を返す変更（#769）は 2026-09-22 に merge されたが、
+**merge と本番 API が返すことは別である**——2026-09-23 に task 0.1.24 で
+`task auth whoami --json` を実測したところ、返る鍵は id / name / user_id /
+username / scopes / allowed_project_ids / expires_at のみで `tenant_id` は
+無かった。いつ返るようになるかは分からない。読む者は同じ命を打って
+`tenant_id` の鍵の有無を己で確かめよ——現れたら `TASK_TENANT` の明示を
+落とす検討ができる（それまでは要る）。
 
 `TASK_API_URL` の末尾の `/api` は必須である。2026-09-22 に PR #768 で、
 `https://task.koyori.app` は `Resource not found`、
@@ -99,7 +106,10 @@ fi
 pr_json=$(gh pr view "$pr" --repo "$repo" --json headRefOid,url)
 head_sha=$(jq -r .headRefOid <<<"$pr_json")
 pr_url=$(jq -r .url <<<"$pr_json")
-[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'head_sha が 40 桁の sha でない: %s\n' "$head_sha" >&2
+  exit 1
+}
 [[ "$pr_url" == "https://github.com/$repo/pull/$pr" ]] || {
   printf 'repo 不一致: %s\n' "$pr_url" >&2
   exit 1
@@ -205,8 +215,41 @@ honden review check findings.json --expect high=2,medium=3,low=1,nit=0
 
 ### Step 6: 投入する
 
+**`task review submit` に `--repo` は無い**（0.1.24 の `--help` で実測。旗は
+`--json` / `--project` / `--pr` のみ）。投入先の repo は project の
+GitHub 連携先（current integration）から決まる——`rounds --help` の
+`--repo` の既定が「the current integration」と明言している。
+ゆえに `--project` と `--repo` の組を誤ると、Step 1 は指定 repo の PR を
+正しく検めたのに、round は連携先側の同番号 PR へ立つ。読み返す先
+（`--repo "$repo"`）には現れないので、誤投入したのに「round なし」に
+見えて気づけない。
+
+連携先の repo 名を投入前に引ければ照合で止められるが、0.1.24 には
+その口が無い（2026-09-23 実測: `task projects show --json` の返す鍵に
+連携先は無く、round の JSON にも repo の欄は無い）。ゆえに**投入直後に
+同じ `--repo` で読み返し、round が現れなければ止める**。CLI が連携先を
+返すようになったら、投入前の照合へ改めること。
+
 ```bash
+rounds_before=$(task review rounds --project "$project" --pr "$pr" --repo "$repo" --json | jq length)
+
 task review submit findings.json --project "$project" --pr "$pr"
+
+rounds_json=$(task review rounds --project "$project" --pr "$pr" --repo "$repo" --json)
+rounds_after=$(jq length <<<"$rounds_json")
+[[ "$rounds_after" -gt "$rounds_before" ]] || {
+  printf '投入した round が %s の PR #%s に現れぬ（%s 件のまま）。\n' "$repo" "$pr" "$rounds_after" >&2
+  printf '--project %s の GitHub 連携先が %s と違う疑いが濃い。盤の project 設定で連携先を確かめ、\n' "$project" "$repo" >&2
+  printf '連携先側の同番号 PR に誤投入の round が立っておらぬか検分して始末した上で、正しい組で投入し直せ。\n' >&2
+  exit 1
+}
+latest_head=$(jq -r 'max_by(.round).head_sha' <<<"$rounds_json")
+[[ "$latest_head" == "$head_sha" ]] || {
+  printf '読み返した最新 round の head_sha (%s) が投入した %s と違う。別の投入と交錯した疑いがある。\n' \
+    "$latest_head" "$head_sha" >&2
+  printf 'rounds の一覧を目で検分し、己の round がどれかを確かめてから先へ進め。\n' >&2
+  exit 1
+}
 ```
 
 一括で 1 回だけ呼ぶ（1 件ずつ送らない）。
