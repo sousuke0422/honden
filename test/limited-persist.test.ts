@@ -12,7 +12,7 @@ import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { deliver } from '../src/inbox';
 import { limitedWaitMs } from '../src/busy';
-import { stateOf } from '../src/nudge';
+import { stateOf, revive } from '../src/nudge';
 import { runNudge } from '../src/main';
 
 // 実物の旗（殿採取・2026-09-05・claude）
@@ -105,6 +105,38 @@ describe('枠切れの覚え（陽性対照——今宵の形）', () => {
     expect(r3.code).toBe(0);
     expect(s3.sent.length).toBe(1);
     expect(s3.sent[0]!.pane).toBe(FAKE_PANE);
+  }, 20_000);
+});
+
+describe('見放された者が revive の後に合図を受ける（軍師の形）', () => {
+  test('reset_count>=3 は撃たれぬが、revive で覚えが落ちれば次の周から届く', async () => {
+    const path = join(tmpdir(), `limited-revive-${Date.now()}.db`);
+    const db = seeded(path);
+    // 見放しの覚え（三度の文脈消し）——今の軍師と同じ形。枠切れの覚えは無い
+    db.run('UPDATE nudge SET reset_count = 3 WHERE agent = ?', ['ashigaru9']);
+    db.close();
+
+    // 見放されておる間は撃たれぬ（枠切れの分岐とは別で、直しの影響を受けぬ）
+    const s1 = spy();
+    const r1 = await runNudge(path, false, false, undefined, 'core', paneReader,
+      () => false, () => null, s1.sender);
+    expect(r1.code).toBe(0);
+    expect(s1.sent).toEqual([]);
+    expect((r1.out ?? '').includes('撃つのをやめた')).toBe(true);
+
+    // 人の手（家老の revive）で覚えを落とす
+    const db2 = openStore({ path });
+    const rv = revive(db2, { agent: 'ashigaru9', by: 'karo', reason: 'pane は生きておるが応えぬ。人の手で確かめた' });
+    db2.close();
+    expect(rv.ok).toBe(true);
+
+    // 次の周から合図が届く——明けた後の軍師へ合図が届く形は壊れておらぬ
+    const s2 = spy();
+    const r2 = await runNudge(path, false, false, undefined, 'core', paneReader,
+      () => false, () => null, s2.sender);
+    expect(r2.code).toBe(0);
+    expect(s2.sent.length).toBe(1);
+    expect(s2.sent[0]!.pane).toBe(FAKE_PANE);
   }, 20_000);
 });
 
