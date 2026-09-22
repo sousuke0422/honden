@@ -224,13 +224,37 @@ GitHub 連携先（current integration）から決まる——`rounds --help` �
 （`--repo "$repo"`）には現れないので、誤投入したのに「round なし」に
 見えて気づけない。
 
-連携先の repo 名を投入前に引ければ照合で止められるが、0.1.24 には
-その口が無い（2026-09-23 実測: `task projects show --json` の返す鍵に
-連携先は無く、round の JSON にも repo の欄は無い）。ゆえに**投入直後に
-同じ `--repo` で読み返し、round が現れなければ止める**。CLI が連携先を
-返すようになったら、投入前の照合へ改めること。
+0.1.24 の `task review summary --project "$project" --pr "$pr" --json` は、
+`--repo` を渡さなければ current integration を使い、JSON の `repository` に
+その repo 名を返す（2026-09-23 実測）。`summary` は未レビュー等でも有効な
+JSON を出して exit 1 になるため、exit 0 と 1 の双方を受け入れた上で
+`repository` を**投入前に** `$repo` と厳密比較する。欠落、不正な JSON、
+食い違いのいずれでも投入せず止める。
 
 ```bash
+if integration_json=$(task review summary \
+  --project "$project" --pr "$pr" --json); then
+  integration_exit=0
+else
+  integration_exit=$?
+fi
+[[ "$integration_exit" -eq 0 || "$integration_exit" -eq 1 ]] || {
+  printf 'project の GitHub 連携先を取得できぬ（task review summary exit=%s）。\n' \
+    "$integration_exit" >&2
+  exit 1
+}
+integration_repo=$(jq -er \
+  '.repository | select(type == "string" and length > 0)' \
+  <<<"$integration_json") || {
+  printf 'task review summary の JSON に有効な repository が無い。投入せず止める。\n' >&2
+  exit 1
+}
+[[ "$integration_repo" == "$repo" ]] || {
+  printf 'repo 不一致: --project %s の GitHub 連携先は %s、対象は %s。投入せず止める。\n' \
+    "$project" "$integration_repo" "$repo" >&2
+  exit 1
+}
+
 rounds_before=$(task review rounds --project "$project" --pr "$pr" --repo "$repo" --json | jq length)
 
 task review submit findings.json --project "$project" --pr "$pr"
@@ -239,7 +263,7 @@ rounds_json=$(task review rounds --project "$project" --pr "$pr" --repo "$repo" 
 rounds_after=$(jq length <<<"$rounds_json")
 [[ "$rounds_after" -gt "$rounds_before" ]] || {
   printf '投入した round が %s の PR #%s に現れぬ（%s 件のまま）。\n' "$repo" "$pr" "$rounds_after" >&2
-  printf '--project %s の GitHub 連携先が %s と違う疑いが濃い。盤の project 設定で連携先を確かめ、\n' "$project" "$repo" >&2
+  printf -- '--project %s の GitHub 連携先が %s と違う疑いが濃い。盤の project 設定で連携先を確かめ、\n' "$project" "$repo" >&2
   printf '連携先側の同番号 PR に誤投入の round が立っておらぬか検分して始末した上で、正しい組で投入し直せ。\n' >&2
   exit 1
 }
