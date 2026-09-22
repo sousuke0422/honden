@@ -53,7 +53,7 @@ function seeded(path = ':memory:') {
 function addReport(
   db: ReturnType<typeof seeded>['db'],
   taskId: string,
-  cmdId: string,
+  cmdId: string | null,
   agoMs: number,
   opts: { agent?: string; verdict?: string | null; origin?: string } = {},
 ): number {
@@ -109,6 +109,14 @@ describe('検められておらぬ報告の定め', () => {
     addReport(db, taskId, cmdId, 120 * MIN);
     db.run("UPDATE cmd SET status = 'done' WHERE id = ?", [cmdId]);
     expect(findUnreviewed(db)).toEqual([]);
+  });
+
+  test('陰性対照五: cmd_id の無い旧報告は、司令の状態を判じられぬゆえ検知せぬ', () => {
+    const { db, taskId } = seeded();
+    addReport(db, taskId, null, 123 * 24 * 60 * MIN);
+    expect(findUnreviewed(db)).toEqual([]);
+    expect(notifyUnreviewed(db)).toEqual([]);
+    expect(db.query("SELECT 1 FROM inbox WHERE msg_type = 'report_unreviewed'").get()).toBeNull();
   });
 
   test('import の報告（旧陣の写し）は検知せぬ', () => {
