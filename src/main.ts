@@ -66,7 +66,7 @@ import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
-import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
+import { plan, send, record, startClocks, withNudgeLock, revive, markLimited } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
 import { findStalled, notifyStalled } from './stalled';
 import { notifyUnreviewed } from './unreviewed';
@@ -1039,6 +1039,11 @@ async function runNudgeInner(
     if (wait !== null) {
       // 旗に明ける刻が書いてあれば、その刻の直後（+2 分）に再訪する。
       // 読めねば 5 分の盲目再訪。段も reset の刻印も進めぬのは従前どおり。
+      //
+      // 明ける刻は正本へ刻む（plan が次の周から使う）。旗は /clear や
+      // 再描画で写しから消えるゆえ、画面だけを頼ると消えた次の周から
+      // 梯子が再開し、枠切れの相手へ文脈消しまで届く。読めた今、覚える。
+      if (!dryRun) markLimited(db, p.agent, new Date(now.getTime() + wait));
       p.send = false;
       p.reason = `使用枠が尽きておる（pane に案内あり）。約${Math.round(wait / 60_000)}分後に再訪——/clear で仕掛かりを焼かぬ`;
       p.nextInMs = wait;
