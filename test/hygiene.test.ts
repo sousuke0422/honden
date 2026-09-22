@@ -27,6 +27,26 @@ const body = (p: string) => {
 };
 
 describe('追跡している品に、育った場所の跡を残さぬ', () => {
+  test('追跡している品に、merge conflict の印を残さぬ', () => {
+    // `=======` は正当な区切り線にもなる。固有性の高い開き・閉じの印を見れば、
+    // 偽陽性を避けつつ、片側だけ残った不完全な conflict も咎められる。
+    const bad = tracked().filter((f) => /^(?:<<<<<<< |>>>>>>> )/m.test(body(f)));
+    expect(bad).toEqual([]);
+  });
+
+  test('設定の YAML 雛形は、すべて YAML として読める', () => {
+    // conflict 以外の書き損じも雛形を使えなくするため、依存を足さず Bun 自身で読む。
+    const bad: string[] = [];
+    for (const f of readdirSync('config').filter((name) => name.endsWith('.yaml.example'))) {
+      try {
+        Bun.YAML.parse(body(join('config', f)));
+      } catch (e) {
+        bad.push(`${f}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   test('絶対の道で `/mnt/c/Users/<名>` を指す品は無い', () => {
     // `example` は例として置いたもの（大小を問わぬ）。実在の名だけを咎める。
     const bad: string[] = [];

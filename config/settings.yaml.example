@@ -89,7 +89,6 @@ capability_tiers:
 #     base: https://ntfy.example.org   # 省けば https://ntfy.sh
 #     topic: honden-9f3a2b7c1d5e
 
-<<<<<<< HEAD
 # ── 隔離（床）─────────────────────────────────────────
 #
 # 足軽の CLI を、網を縛った名前空間の中で起こす。
@@ -132,7 +131,6 @@ capability_tiers:
 #     write:
 #       - /path/to/repo
 #       - ~/.honden
-=======
 # ── 司令を閉じる前に、外の review 台帳へ伺う門 ────────────────────
 #
 # `honden cmd done` は、受け入れ条件が覆われ軍師の是が在るかを見る。
@@ -164,4 +162,3 @@ capability_tiers:
 #       api_url: http://127.0.0.1:3400   # 書かねば暗黙で https://task.koyori.app/api
 #       tenant: t_xxx
 #       token_env: TASK_TOKEN_MYPROJ
->>>>>>> feat/review-gate
