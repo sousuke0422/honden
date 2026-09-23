@@ -39,8 +39,8 @@
  */
 
 import type { Database } from 'bun:sqlite';
-import { journal } from './store';
-import { summarize, nudgeText, type Summary } from './inbox';
+import { journal, tx } from './store';
+import { deliver, summarize, nudgeText, type Summary } from './inbox';
 import { roster, roleOrNull } from './roster';
 import { panes, type Pane } from './pane';
 import { isAutonomous } from './mode';
@@ -68,6 +68,7 @@ export const RESET_COOLDOWN_MS = 5 * 60_000;
  * 三度消させて駄目なら退く。人（家老）へ回すのが筋である——
  * 機械が直せぬものを機械が抱え込むな。
  */
+// 現行の runNudge は最初の消去前に確認へ回す。過去の回数も保持する。
 export const GIVE_UP_AFTER_RESETS = 3;
 
 /**
@@ -148,13 +149,15 @@ interface State {
   last_level: number | null;
   last_reset_at: string | null;
   reset_count: number;
+  hold_reason: string | null;
+  hold_at: string | null;
 }
 
 export function stateOf(db: Database, agent: string): State {
   return (
-    (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count FROM nudge WHERE agent = ?').get(agent) as
+    (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count, hold_reason, hold_at FROM nudge WHERE agent = ?').get(agent) as
       | State
-      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0 }
+      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0, hold_reason: null, hold_at: null }
   );
 }
 
@@ -221,6 +224,14 @@ export function plan(
         send = false;
         reason = `${Math.round((REPEAT_MS - sinceLast) / 1000)} 秒後まで撃ち直さぬ`;
       }
+    }
+
+    if (st.hold_reason) {
+      const held = build(entry.id, entry.cli, pane, s, 1, false,
+        `上役の確認待ち（${st.hold_reason} / ${st.hold_at}）。nudge revive で解除`, now, st, level);
+      held.nextInMs = HOLD_RECHECK_MS;
+      out.push(held);
+      continue;
     }
 
     // 三度消させても応えぬなら退く。**撃ち続けて良いことは無い。**
@@ -378,7 +389,7 @@ export function revive(
     };
   }
   const st = stateOf(db, opts.agent);
-  if (st.since === null && st.reset_count === 0) {
+  if (st.since === null && st.reset_count === 0 && !st.hold_reason) {
     return { ok: false, message: `${opts.agent} の覚えは無い。見放されておらぬ。` };
   }
   const bad = checkReason(opts.reason, `${opts.agent} の pane は生きておるが応えぬ。人の手で確かめた`);
@@ -391,6 +402,7 @@ export function revive(
     detail:
       `reset_count=${st.reset_count} since=${st.since ?? 'なし'} ` +
       `last_level=${st.last_level ?? 'なし'} last_reset_at=${st.last_reset_at ?? 'なし'} ` +
+      `hold_reason=${st.hold_reason ?? 'なし'} hold_at=${st.hold_at ?? 'なし'} ` +
       `reason=${JSON.stringify(opts.reason)}`,
   });
   const s: Summary = summarize(db, opts.agent);
@@ -401,7 +413,7 @@ export function revive(
       : '';
   return {
     ok: true,
-    message: `${opts.agent} への合図を戻した（${st.reset_count} 度の文脈消しの覚えを落とした）。跡は台帳に残る。${tail}`,
+    message: `${opts.agent} への合図を戻した（${st.reset_count} 度の文脈消しの覚えと確認待ちを落とした）。跡は台帳に残る。${tail}`,
   };
 }
 
@@ -427,7 +439,7 @@ export function markSince(db: Database, agent: string, now: Date): void {
       .get(agent) as { t: string | null };
     if (oldest.t && oldest.t > cur.since) {
       // いま在る未読はどれも since より新しい ＝ 前の山は片付いた。時計を戻す。
-      db.prepare('UPDATE nudge SET since = ?, last_level = NULL WHERE agent = ?').run(now.toISOString(), agent);
+      db.prepare('UPDATE nudge SET since = ?, last_level = NULL, hold_reason = NULL, hold_at = NULL WHERE agent = ?').run(now.toISOString(), agent);
       return;
     }
   }
@@ -552,4 +564,31 @@ export function withNudgeLock<T>(lockPath: string, fn: () => T, opts: { staleMs?
       /* 消せずとも古くなれば奪われる */
     }
   }
+}
+
+/** 確認待ちの間も未読の片付きを確認する。自動解除の期限ではない。 */
+export const HOLD_RECHECK_MS = 5 * 60_000;
+export type HoldReason = 'undated-limit' | 'unresponsive';
+
+/** 通知と保留を同じ取引で確定し、再起動後も同じ相手へ重ねて報せない。 */
+export function holdForReview(db: Database, agent: string, reason: HoldReason, now: Date): void {
+  tx(db, () => {
+    if (stateOf(db, agent).hold_reason) return;
+    const recipient = agent === 'karo' ? 'shogun' : 'karo';
+    const explanation = reason === 'undated-limit'
+      ? '復帰時刻の無い枠切れ通知を検知した'
+      : '未読が続き、働いている印も確認できず、原因を判別できない';
+    deliver(db, {
+      id: `msg_nudge_hold_${crypto.randomUUID()}`,
+      agent: recipient, at: now.toISOString(), type: 'cmd_update', sender: 'core',
+      body: `${agent}: ${explanation}ため合図を保留した。文脈消去は行わない。` +
+        `\n画面と契約枠を確認し、復帰できるなら honden nudge revive ${agent} --reason "確認した内容" で解除する。` +
+        '\n本人が未読を片付ければ保留も解除される。通知行が消えただけでは解除しない。',
+    });
+    db.run(`INSERT INTO nudge(agent, hold_reason, hold_at) VALUES (?,?,?)
+      ON CONFLICT(agent) DO UPDATE SET hold_reason=excluded.hold_reason, hold_at=excluded.hold_at`,
+      [agent, reason, now.toISOString()]);
+    journal(db, { actor: 'core', action: 'nudge.hold', target: agent,
+      detail: `reason=${reason} recipient=${recipient}`, at: now });
+  });
 }

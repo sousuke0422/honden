@@ -461,7 +461,9 @@ CREATE TABLE IF NOT EXISTS nudge (
   -- 応えぬ相手（受け手が死んでおる・CLI が落ちておる）に二時間半で
   -- 150 回の合図と 30 回の文脈消しを撃ち続けた（2026-08-28 一巡試験・実測）。
   -- 実機であれば五分ごとに文脈を焼かれ続ける。**諦める段が要る。**
-  reset_count   INTEGER NOT NULL DEFAULT 0
+  reset_count   INTEGER NOT NULL DEFAULT 0,
+  hold_reason   TEXT,   -- 復帰時刻の無い枠切れ、または原因不明の無応答
+  hold_at       TEXT    -- 上役へ判断を委ねた時刻
 );
 
 -- 禁じ手の門の通行手形（OTP）。
@@ -630,6 +632,8 @@ function migrate(db: Database): void {
   addColumn(db, 'report', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'inbox', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'nudge', 'reset_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn(db, 'nudge', 'hold_reason', 'TEXT');
+  addColumn(db, 'nudge', 'hold_at', 'TEXT');
   // 貸与の三欄。型へ足した折に**移行を書き忘れ**、先に建った正本では
   // `honden status` が「no such column: holder」で倒れておった
   // （本番の正本で実見・2026-08-29）。`CREATE TABLE IF NOT EXISTS` は

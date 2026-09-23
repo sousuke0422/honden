@@ -124,7 +124,7 @@ describe('枠切れの相手へ段梯子を上げぬ（日付つきの旗）', (
       const tmuxCalls = existsSync(tmux.trace) ? readFileSync(tmux.trace, 'utf8') : '';
       expect(tmuxCalls).not.toContain('capture-pane');
       expect(result.busyReads).toBe(1);
-      expect(result.sent[0]?.text).toBe('/new');
+      expect(result.sent).toEqual([]); // busy でなくても、無応答なら消去前に確認へ回す
     } finally {
       tmux.restore();
       try { unlinkSync(path); } catch { /* 消えておればよい */ }
@@ -191,10 +191,12 @@ describe('枠切れの相手へ段梯子を上げぬ（日付つきの旗）', (
     }
   });
 
-  test('陰性対照: 旗が過ぎておれば従来どおり撃つ——「いつも待つ」に倒れぬ', async () => {
+  test('陰性対照: 旗が過ぎておれば通常の合図を撃つ', async () => {
     const path = join(tmpdir(), `quota-dated-past-${Date.now()}.db`);
     try {
       const db = seeded(path);
+      // 通常の合図で比較する。無応答の段3は上役の確認待ちになる。
+      db.run('UPDATE nudge SET since = ? WHERE agent = ?', [new Date().toISOString(), 'ashigaru9']);
       // 同じ実物の旗を、明けた後（09-22 09:00）の刻で読む——scroll-back の残骸
       const pastReader = () => limitedWaitMs(DATED_PANE, new Date(2026, 8, 22, 9, 0));
       expect(pastReader()).toBeNull(); // 前提の確認: 旗はもう枠切れと読まれぬ
@@ -208,7 +210,7 @@ describe('枠切れの相手へ段梯子を上げぬ（日付つきの旗）', (
       expect(r.out).toContain('撃った');
       expect(sent.length).toBe(1);
       expect(sent[0]!.pane).toBe(FAKE_PANE);
-      expect(sent[0]!.text).toBe('/new'); // 段 3・codex の文脈消し
+      expect(sent[0]!.text).toContain('inbox_notice'); // 通常の合図は戻る
       // 段の覚えが進む（record が呼ばれた）
       const row = db
         .query('SELECT last_level FROM nudge WHERE agent = ?')
