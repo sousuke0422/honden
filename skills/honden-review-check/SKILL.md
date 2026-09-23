@@ -76,13 +76,10 @@ task --version
 task auth whoami --json
 ```
 
-task CLI v0.1.24 以降の `auth whoami` は PAT で動き、scopes、allowed_project_ids、
-**`tenant_id`、期限**を返す（2026-09-24 実測・task 0.1.26。返る鍵は id / name /
-user_id / username / scopes / allowed_project_ids / expires_at / tenant_id）。
-ただし **whoami を打つには依然 `TASK_TENANT` が要る**——`env -u TASK_TENANT
-task auth whoami --json` は exit 2。2026-09-23 までは `tenant_id` 鍵は載らなかった。
-**PR #786（task）が merge されれば後者は消える**——同じ `env -u TASK_TENANT` の
-命で己で確かめよ。
+task CLI v0.1.24 以降の `auth whoami` は PAT で動き、scopes、allowed_project_ids、期限を返す。
+**tenant は返さない**（2026-09-23 実測。返る鍵は id / name / user_id / username /
+scopes / allowed_project_ids / expires_at のみ）。tenant の値は環境
+（`TASK_TENANT`）か設定の側の事実として扱う。
 `write:review` の有無と対象 project への到達可否を、review command より先に確認する。
 
 `403` を直ちに「PAT が偽」と結論しない。
@@ -322,7 +319,7 @@ date -u +%Y-%m-%dT%H:%M:%SZ
 
 ### task
 
-- whoami: scopes、allowed_project_ids、**tenant_id**、期限（打つには TASK_TENANT が要る——`env -u TASK_TENANT` で確かめよ）
+- whoami: scopes、allowed_project_ids、期限（tenant は返らない——環境の値を書く）
 - summary: exit code と理由
 - findings: ID、severity、state、title
 - rounds: R番号、SHA、reviewer、件数

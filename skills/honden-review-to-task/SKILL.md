@@ -60,14 +60,13 @@ task auth whoami --json
 honden の木では秘密を git に載せず `.envrc` に書き、`direnv allow` で読む。
 `TASK_TENANT` は推測しない。PAT の `/personal_tokens/me` は `tenant_id` を返さず、
 同名の陣を推すと 403 になることを 2026-09-21 に実測したため、明示するほかない。
-**2026-09-24 時点**（task 0.1.26）の `task auth whoami --json` については次の二つ。
-(a) 応答に **`tenant_id` 鍵が載る**（id / name / user_id / username / scopes /
-allowed_project_ids / expires_at とともに）。
-(b) その `whoami` を打つには **依然 `TASK_TENANT` が要る**——`env -u TASK_TENANT
-task auth whoami --json` は exit 2（tenant_id 未設定）になる。
-2026-09-23 までは (a) が成り立たず「返らない」と書いてあった——当時正しかった。
-**PR #786（task）が merge されれば (b) は消える**——その時点かどうかは上の
-`env -u TASK_TENANT` の命を己で打てば判る。
+`tenant_id` を返す変更（#769）は 2026-09-22 に merge されたが、
+**merge と本番 API が返すことは別である**——2026-09-23 に task 0.1.24 で
+`task auth whoami --json` を実測したところ、返る鍵は id / name / user_id /
+username / scopes / allowed_project_ids / expires_at のみで `tenant_id` は
+無かった。いつ返るようになるかは分からない。読む者は同じ命を打って
+`tenant_id` の鍵の有無を己で確かめよ——現れたら `TASK_TENANT` の明示を
+落とす検討ができる（それまでは要る）。
 
 `TASK_API_URL` の末尾の `/api` は必須である。2026-09-22 に PR #768 で、
 `https://task.koyori.app` は `Resource not found`、
