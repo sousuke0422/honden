@@ -280,15 +280,15 @@ export async function createPrReview(
   repo: string,
   pr: number,
   payload: { commit_id: string; body: string; event: string; comments: { path: string; line: number; body: string }[] },
-): Promise<{ url: string }> {
+): Promise<{ url: string; id: number }> {
   const r = await f(`${API}/repos/${repo}/pulls/${pr}/reviews`, {
     method: 'POST',
     headers: auth(token),
     body: JSON.stringify(payload),
   });
   if (!r.ok) await fail(r, 'PR review の投稿');
-  const j = (await r.json()) as { html_url: string };
-  return { url: j.html_url };
+  const j = (await r.json()) as { html_url: string; id: number };
+  return { url: j.html_url, id: j.id };
 }
 
 /** PR の review の履歴（現在地の材料）。頁を繰る——listLabels と同じ理由。 */

@@ -63,8 +63,10 @@ const USAGE = `honden-bot — GitHub App（shogun-bot 名義・Issues:write の�
       task:   round + findings（語彙が同じゆえそのまま）。司令層のみ
   honden-bot review status --pr N [--repo OWNER/REPO | --project <id>] [--to github|task] [--dry-run]
       レビューの現在地を読む。github は review 履歴と数、task は rounds と summary。司令層のみ
-  honden-bot finding move --id UUID --state open|fixed|verified|deferred|rejected [--note 訳] [--project <id>] [--dry-run]
-      finding の状態を運ぶ（台帳固有。github に対応物が無いゆえ --to を取らぬ）。司令層のみ
+  honden-bot task finding move --id UUID --state open|fixed|verified|deferred|rejected [--note 訳] [--project <id>] [--dry-run]
+      finding の状態を運ぶ（task 固有。github に対応物が無いゆえ宛先の階層の下に住み、--to を取らぬ）。司令層のみ
+  作成の命（issue create / review submit / task finding move）は成功時に実装の返した物を返す。
+      github は番号（id）と URL、task は task CLI の出をそのまま。--json で実装の JSON
 
   布陣（tmux）の pane の中からのみ使える。名乗りは系譜で錨を取る——
   環境変数では偽れぬ。司令層（shogun/karo/gunshi）は無条件、それ以外は
@@ -399,6 +401,7 @@ async function main(argv: string[]): Promise<number> {
     if (!ge.ok) { console.error(`  ${ge.message}`); return EXIT_INVALID; }
     const argv = [...cfg.bin, 'tasks', 'create', '--project', cfg.project, '--title', title, '--description-file', bodyFile];
     if (flags['priority']) argv.push('--priority', flags['priority']!);
+    if (flags['json'] === 'true') argv.push('--json'); // 実装の返り（task の id・採番）をそのまま通す
     if (dryRun) {
       console.log(`  [dry-run] ${argv.join(' ')}`);
       if (ge.env) console.log(`  env: ${Object.keys(ge.env).join(' ')}（値は出さぬ）`);
@@ -469,7 +472,10 @@ async function main(argv: string[]): Promise<number> {
       }
 
       const made = await createIssue(fetch, token, repo, title, body, labels);
-      console.log(made.url);
+      // 実装（GitHub API）が返した物を返す——包みが組み直した文ではない。
+      // --json は API の返り（number と html_url）をそのまま、無印は番号と URL。
+      if (flags['json'] === 'true') console.log(JSON.stringify({ number: made.number, url: made.url }));
+      else console.log(`#${made.number} ${made.url}`);
       audit({ action: 'issue_create', actor, repo, title, url: made.url, status: 'SUCCESS' });
       return EXIT_OK;
     });
@@ -514,11 +520,13 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
-  // ── review の口（共通の命）と finding の口（台帳固有・--to を取らぬ） ──
+  // ── review の口（共通の命）と、宛先の階層（宛先に固有の命の住み処） ──
   //
   // どちらも司令層のみ。github の review 書きは issue の許状（create/comment）
   // と別の力で、task の書きは --to task と同じく App の許状では写せぬ。
-  if (rest[0] === 'review' || rest[0] === 'finding') {
+  // 宛先の階層は名で増やす——gitlab 固有の命が出たら 'gitlab' を足すだけ。
+  const DEST_NAMESPACES = new Set(['task']);
+  if (rest[0] === 'review' || DEST_NAMESPACES.has(rest[0]!)) {
     if (rank !== 'commander') {
       console.error(`  ${rest[0]} の口は司令層のみ。issue の許状は create/comment にしか効かぬ。将軍に願われよ。`);
       audit({ action: rest.slice(0, 2).join('_'), actor, status: 'RANK_DENIED' });
@@ -575,6 +583,7 @@ async function main(argv: string[]): Promise<number> {
       const t = taskGate();
       if (!t.ok) return EXIT_INVALID;
       const argv = [...t.bin, 'review', 'submit', '-', '--project', t.project, '--pr', String(pr)];
+      if (flags['json'] === 'true') argv.push('--json'); // 実装の返り（round の id・採番）をそのまま通す
       if (dryRun) {
         console.log(`  [dry-run] ${argv.join(' ')}（stdin に findings JSON・${parsed.input.findings.length} 件）`);
         audit({ action: 'review_submit_dry_run', actor, dest: 'task', pr: String(pr), status: 'DRY_RUN_OK' });
@@ -603,7 +612,9 @@ async function main(argv: string[]): Promise<number> {
     }
     return onRepo(cfg, repo, async (token) => {
       const made = await createPrReview(fetch, token, repo, pr, payload);
-      console.log(made.url);
+      // 実装（GitHub API）が返した review の id と URL をそのまま返す
+      if (flags['json'] === 'true') console.log(JSON.stringify({ id: made.id, url: made.url }));
+      else console.log(`#${made.id} ${made.url}`);
       audit({ action: 'review_submit', actor, dest: 'github', repo, pr: String(pr), url: made.url, status: 'SUCCESS' });
       return EXIT_OK;
     }).catch((e: unknown) => {
@@ -660,10 +671,15 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
-  if (rest[0] === 'finding' && rest[1] === 'move') {
-    // 台帳固有ゆえ --to を取らぬ。名は task 自身の help の言葉
-    // （resolve = "Move a finding to a new state"）から採った——
-    // github の thread resolve と紛れる resolve の名は避ける。
+  if (rest[0] === 'task' && rest[1] === 'finding' && rest[2] === 'move') {
+    // 宛先に固有の命は、その宛先の階層の下に住む（殿の下知）。
+    // `honden-bot task <名詞> <動詞>` の形で、github / gitlab に固有の命が
+    // 出た時も `honden-bot github …` `honden-bot gitlab …` と同じ形で生やせる
+    // ——階層は DEST_NAMESPACES（下の門）と rest[0] の分岐だけで増える。
+    // `--to task`（共通の命の宛先の旗）とは位置が違う: `--to` は旗の値、
+    // `task` はここでは命の頭の語である。旗を取らぬゆえ間違えようが無い。
+    // 名は task 自身の help の言葉（resolve = "Move a finding to a new state"）
+    // から採った——github の thread resolve と紛れる resolve の名は避ける。
     const id = flags['id'] ?? '';
     const state = flags['state'] ?? '';
     if (!id) { console.error('  [入力] --id が要る（finding の UUID）'); return EXIT_INVALID; }
@@ -675,6 +691,7 @@ async function main(argv: string[]): Promise<number> {
     if (!t.ok) return EXIT_INVALID;
     const argv = [...t.bin, 'review', 'resolve', id, '--project', t.project, '--state', state];
     if (flags['note']) argv.push('--note', flags['note']!);
+    if (flags['json'] === 'true') argv.push('--json'); // 実装の返り（JSON）をそのまま通す
     if (dryRun) {
       console.log(`  [dry-run] ${argv.join(' ')}`);
       audit({ action: 'finding_move_dry_run', actor, id, state, status: 'DRY_RUN_OK' });
