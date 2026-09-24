@@ -269,6 +269,47 @@ export async function explainRepoAccess(f: FetchLike, token: string, repo: strin
   );
 }
 
+/**
+ * PR へ review を一束で出す（body + event + inline comments）。
+ * 写しの規則は src/botreview.ts が持ち、ここは運ぶだけ。
+ * 失敗文の段名は呼び手が付ける（ここは github の言葉のまま返す）。
+ */
+export async function createPrReview(
+  f: FetchLike,
+  token: string,
+  repo: string,
+  pr: number,
+  payload: { commit_id: string; body: string; event: string; comments: { path: string; line: number; body: string }[] },
+): Promise<{ url: string; id: number }> {
+  const r = await f(`${API}/repos/${repo}/pulls/${pr}/reviews`, {
+    method: 'POST',
+    headers: auth(token),
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) await fail(r, 'PR review の投稿');
+  const j = (await r.json()) as { html_url: string; id: number };
+  return { url: j.html_url, id: j.id };
+}
+
+/** PR の review の履歴（現在地の材料）。頁を繰る——listLabels と同じ理由。 */
+export async function listPrReviews(
+  f: FetchLike,
+  token: string,
+  repo: string,
+  pr: number,
+  maxPages = 5,
+): Promise<{ state: string; user?: string; submittedAt?: string }[]> {
+  const out: { state: string; user?: string; submittedAt?: string }[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await f(`${API}/repos/${repo}/pulls/${pr}/reviews?per_page=100&page=${page}`, { headers: auth(token) });
+    if (!r.ok) await fail(r, 'PR review 履歴の取得');
+    const j = (await r.json()) as { state: string; user?: { login?: string }; submitted_at?: string }[];
+    out.push(...j.map((x) => ({ state: x.state, user: x.user?.login, submittedAt: x.submitted_at })));
+    if (j.length < 100) break;
+  }
+  return out;
+}
+
 export async function createIssue(
   f: FetchLike,
   token: string,
