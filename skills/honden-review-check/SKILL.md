@@ -81,8 +81,10 @@ task CLI v0.1.24 以降の `auth whoami` は PAT で動き、scopes、allowed_pr
 user_id / username / scopes / allowed_project_ids / expires_at / tenant_id）。
 ただし **whoami を打つには依然 `TASK_TENANT` が要る**——`env -u TASK_TENANT
 task auth whoami --json` は exit 2。2026-09-23 までは `tenant_id` 鍵は載らなかった。
-**PR #786（task）が merge されれば後者は消える**——同じ `env -u TASK_TENANT` の
-命で己で確かめよ。
+#786 を含む **task CLI のリリース**を入れれば後者は消える見込みだが、
+**merge は版の公開ではない**——2026-09-24 実測の最新 release tag は **v0.1.26** のままで、
+その版は #786 を含まない。確かめ手: `task --version` と同じ `env -u TASK_TENANT` の命
+（**0.1.26 では exit 2**。版が出たら tag 名をここへ書き換えてよい）。
 `write:review` の有無と対象 project への到達可否を、review command より先に確認する。
 
 `403` を直ちに「PAT が偽」と結論しない。
