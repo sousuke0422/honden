@@ -29,11 +29,12 @@ import { findCharter, useCharter } from './charter';
 import {
   guardBot, parseAppConfig, mintJwt, tokenFresh, mintInstallationToken, appInfo,
   validRepo, dupMatch, searchIssues, filterLabels, listLabels, createIssue, commentIssue,
-  normalizeRepoUrl, resolveRepo, resolveDest,
+  normalizeRepoUrl, resolveRepo, resolveDest, createPrReview, listPrReviews,
   installationRepos, explainRepoAccess, pemPermWarning,
   type InstallationToken, type BotRank,
 } from './bot';
 import { gateConfig, gateEnv } from './reviewgate';
+import { parseReviewInput, renderGithubReview, renderTaskRound, summarizeReviews, FINDING_STATES } from './botreview';
 import { get as configGet } from './config';
 
 const APP_DIR = process.env['SHOGUN_GH_APP_DIR'] ?? join(homedir(), '.shogun', 'github-app');
@@ -56,6 +57,14 @@ const USAGE = `honden-bot — GitHub App（shogun-bot 名義・Issues:write の�
       --no-dup-check     重複探しを飛ばす
       --dry-run          token 鋳造まで。起票せぬ
   honden-bot issue comment --repo OWNER/REPO --number N --body-file 道 [--dry-run]
+  honden-bot review submit --pr N --body-file 道 [--repo OWNER/REPO | --project <id>] [--to github|task] [--dry-run]
+      レビューの結果を一束で出す。入力は findings JSON（head_sha/summary/findings）
+      github: PR review（summary→body・severity→記号・file+line→inline・state/round は出さぬ）
+      task:   round + findings（語彙が同じゆえそのまま）。司令層のみ
+  honden-bot review status --pr N [--repo OWNER/REPO | --project <id>] [--to github|task] [--dry-run]
+      レビューの現在地を読む。github は review 履歴と数、task は rounds と summary。司令層のみ
+  honden-bot finding move --id UUID --state open|fixed|verified|deferred|rejected [--note 訳] [--project <id>] [--dry-run]
+      finding の状態を運ぶ（台帳固有。github に対応物が無いゆえ --to を取らぬ）。司令層のみ
 
   布陣（tmux）の pane の中からのみ使える。名乗りは系譜で錨を取る——
   環境変数では偽れぬ。司令層（shogun/karo/gunshi）は無条件、それ以外は
@@ -503,6 +512,177 @@ async function main(argv: string[]): Promise<number> {
       audit({ action: 'issue_comment', actor, repo, number: String(num), url: made.url, status: 'SUCCESS' });
       return EXIT_OK;
     });
+  }
+
+  // ── review の口（共通の命）と finding の口（台帳固有・--to を取らぬ） ──
+  //
+  // どちらも司令層のみ。github の review 書きは issue の許状（create/comment）
+  // と別の力で、task の書きは --to task と同じく App の許状では写せぬ。
+  if (rest[0] === 'review' || rest[0] === 'finding') {
+    if (rank !== 'commander') {
+      console.error(`  ${rest[0]} の口は司令層のみ。issue の許状は create/comment にしか効かぬ。将軍に願われよ。`);
+      audit({ action: rest.slice(0, 2).join('_'), actor, status: 'RANK_DENIED' });
+      return EXIT_INVALID;
+    }
+  }
+
+  /** task CLI を起こす支度（gate の設定と env）。落ちれば段名つきで報せる。 */
+  const taskGate = (): { ok: true; bin: string[]; project: string; env?: Record<string, string> } | { ok: false } => {
+    const db = openStore({ path: dbPath });
+    const cfg = gateConfig((k) => {
+      const rr = configGet(db, k);
+      return rr.ok ? rr.value : undefined;
+    }, flags['project']?.trim() || undefined);
+    if (!cfg) {
+      console.error('  [宛先] task の宛先が設定に無い。settings.yaml の review.gate.project（か gates.<案件>.project）を書かれよ。');
+      return { ok: false };
+    }
+    const ge = gateEnv(cfg);
+    if (!ge.ok) {
+      console.error(`  [宛先] ${ge.message}`);
+      return { ok: false };
+    }
+    return { ok: true, bin: cfg.bin, project: cfg.project, ...(ge.env ? { env: ge.env } : {}) };
+  };
+
+  /** task CLI を回す。素の命を先に見せる——どの段で落ちたかを文の頭で判らせる。 */
+  const runTask = (argv: string[], env: Record<string, string> | undefined, stdin?: string): number => {
+    console.error(`  [task cli] ${argv.join(' ')}`);
+    const p = Bun.spawnSync(argv, {
+      stdout: 'inherit',
+      stderr: 'inherit',
+      ...(stdin !== undefined ? { stdin: new TextEncoder().encode(stdin) } : {}),
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    });
+    if (p.exitCode !== 0) console.error(`  [task cli] exit=${p.exitCode}（上の出がそのままの理由である）`);
+    return p.exitCode ?? EXIT_SYSTEM;
+  };
+
+  if (rest[0] === 'review' && rest[1] === 'submit') {
+    const d = resolveDest({
+      flag: flags['to'],
+      projectDefault: projectIssueToOf(dbPath, flags['project']?.trim() || undefined),
+    });
+    if (!d.ok) { console.error(`  [宛先] ${d.message}`); return EXIT_INVALID; }
+    const pr = Number(flags['pr'] ?? '');
+    const bodyFile = flags['body-file'] ?? '';
+    if (!Number.isInteger(pr) || pr <= 0) { console.error('  [入力] --pr は正の整数で'); return EXIT_INVALID; }
+    if (!bodyFile) { console.error('  [入力] --body-file が要る（findings JSON。- で標準入力）'); return EXIT_INVALID; }
+    const parsed = parseReviewInput(readBody(bodyFile));
+    if (!parsed.ok) { console.error(`  ${parsed.message}`); return EXIT_INVALID; }
+
+    if (d.dest === 'task') {
+      const t = taskGate();
+      if (!t.ok) return EXIT_INVALID;
+      const argv = [...t.bin, 'review', 'submit', '-', '--project', t.project, '--pr', String(pr)];
+      if (dryRun) {
+        console.log(`  [dry-run] ${argv.join(' ')}（stdin に findings JSON・${parsed.input.findings.length} 件）`);
+        audit({ action: 'review_submit_dry_run', actor, dest: 'task', pr: String(pr), status: 'DRY_RUN_OK' });
+        return EXIT_OK;
+      }
+      const code = runTask(argv, t.env, renderTaskRound(parsed.input));
+      audit({ action: 'review_submit', actor, dest: 'task', pr: String(pr), status: code === 0 ? 'SUCCESS' : `EXIT_${code}` });
+      return code;
+    }
+
+    const repo = resolveRepoFlag(flags, dbPath) ?? '';
+    if (!validRepo(repo)) { console.error('  [宛先] --repo は OWNER/REPO の形で'); return EXIT_INVALID; }
+    const payload = renderGithubReview(parsed.input);
+    const cfg = loadConfig();
+    if (dryRun) {
+      return withToken(cfg, async (token) => {
+        const why = await explainRepoAccess(fetch, token, repo);
+        if (why) { console.error(`  [鋳造] ${why}`); return EXIT_INVALID; }
+        console.log(
+          `  [dry-run] ${repo}#${pr} へ review を出す所まで来ておる` +
+            `（event=${payload.event}・inline ${payload.comments.length} 件・body ${payload.body.length} 字）`,
+        );
+        audit({ action: 'review_submit_dry_run', actor, dest: 'github', repo, pr: String(pr), status: 'DRY_RUN_OK' });
+        return EXIT_OK;
+      });
+    }
+    return onRepo(cfg, repo, async (token) => {
+      const made = await createPrReview(fetch, token, repo, pr, payload);
+      console.log(made.url);
+      audit({ action: 'review_submit', actor, dest: 'github', repo, pr: String(pr), url: made.url, status: 'SUCCESS' });
+      return EXIT_OK;
+    }).catch((e: unknown) => {
+      console.error(`  [github] ${e instanceof Error ? e.message : String(e)}`);
+      return EXIT_SYSTEM;
+    });
+  }
+
+  if (rest[0] === 'review' && rest[1] === 'status') {
+    const d = resolveDest({
+      flag: flags['to'],
+      projectDefault: projectIssueToOf(dbPath, flags['project']?.trim() || undefined),
+    });
+    if (!d.ok) { console.error(`  [宛先] ${d.message}`); return EXIT_INVALID; }
+    const pr = Number(flags['pr'] ?? '');
+    if (!Number.isInteger(pr) || pr <= 0) { console.error('  [入力] --pr は正の整数で'); return EXIT_INVALID; }
+
+    if (d.dest === 'task') {
+      const t = taskGate();
+      if (!t.ok) return EXIT_INVALID;
+      const repoFlag = flags['repo']?.trim();
+      const roundsArgv = [...t.bin, 'review', 'rounds', '--project', t.project, '--pr', String(pr), '--json'];
+      const summaryArgv = [...t.bin, 'review', 'summary', '--project', t.project, '--pr', String(pr), '--json'];
+      if (repoFlag) {
+        roundsArgv.push('--repo', repoFlag);
+        summaryArgv.push('--repo', repoFlag);
+      }
+      if (dryRun) {
+        console.log(`  [dry-run] ${roundsArgv.join(' ')}`);
+        console.log(`  [dry-run] ${summaryArgv.join(' ')}`);
+        return EXIT_OK;
+      }
+      // 読むだけの二本。素の命と素の出をそのまま見せる（段名は runTask が刷る）。
+      // summary は「未レビュー」等でも exit 1 を返す仕様ゆえ、rounds の exit を返す。
+      const code = runTask(roundsArgv, t.env);
+      runTask(summaryArgv, t.env);
+      return code;
+    }
+
+    const repo = resolveRepoFlag(flags, dbPath) ?? '';
+    if (!validRepo(repo)) { console.error('  [宛先] --repo は OWNER/REPO の形で'); return EXIT_INVALID; }
+    const cfg = loadConfig();
+    return withToken(cfg, async (token) => {
+      const reviews = await listPrReviews(fetch, token, repo, pr);
+      const s = summarizeReviews(reviews);
+      console.log(`  ${repo}#${pr} の review 履歴（${reviews.length} 件）:`);
+      for (const l of s.lines) console.log(`   - ${l}`);
+      console.log(`  数: ${Object.entries(s.counts).map(([k, v]) => `${k}=${v}`).join(' ') || '（一件も無い）'}`);
+      console.log('  ※ 現在値（reviewDecision）は GraphQL の物ゆえここには出ぬ。履歴と数から判ぜよ。');
+      return EXIT_OK;
+    }).catch((e: unknown) => {
+      console.error(`  [github] ${e instanceof Error ? e.message : String(e)}`);
+      return EXIT_SYSTEM;
+    });
+  }
+
+  if (rest[0] === 'finding' && rest[1] === 'move') {
+    // 台帳固有ゆえ --to を取らぬ。名は task 自身の help の言葉
+    // （resolve = "Move a finding to a new state"）から採った——
+    // github の thread resolve と紛れる resolve の名は避ける。
+    const id = flags['id'] ?? '';
+    const state = flags['state'] ?? '';
+    if (!id) { console.error('  [入力] --id が要る（finding の UUID）'); return EXIT_INVALID; }
+    if (!FINDING_STATES.has(state)) {
+      console.error(`  [入力] --state は ${[...FINDING_STATES].join('/')} のいずれかで`);
+      return EXIT_INVALID;
+    }
+    const t = taskGate();
+    if (!t.ok) return EXIT_INVALID;
+    const argv = [...t.bin, 'review', 'resolve', id, '--project', t.project, '--state', state];
+    if (flags['note']) argv.push('--note', flags['note']!);
+    if (dryRun) {
+      console.log(`  [dry-run] ${argv.join(' ')}`);
+      audit({ action: 'finding_move_dry_run', actor, id, state, status: 'DRY_RUN_OK' });
+      return EXIT_OK;
+    }
+    const code = runTask(argv, t.env);
+    audit({ action: 'finding_move', actor, id, state, status: code === 0 ? 'SUCCESS' : `EXIT_${code}` });
+    return code;
   }
 
   console.error(USAGE);
