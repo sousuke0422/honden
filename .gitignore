@@ -16,6 +16,8 @@
 # 意図して載せるのと紛れて載るのは違う。追う物は名指しで開ける。
 !/.gitignore
 !/.gitattributes
+!/.githooks/
+!/.githooks/**
 !/.gitleaks.toml
 # 秘密検めの見逃し帳。追跡から漏れると CI が毎回同じ物を釣る
 !/.betterleaksignore
@@ -345,6 +347,7 @@ tests/specs/osato_lms_*
 # 落ちておった——公開した書が、公開しておらぬ書を呼ぶ形になっておった。
 !/scripts/shutsujin.sh
 !/scripts/first_setup.sh
+!/scripts/setup_githooks.sh
 !/scripts/switch_cli.sh
 !/scripts/testenv.sh
 !/scripts/testenv/

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+COMMIT_MSG_FILE=$1
+
+if grep -qE '^Co-authored-by: Cursor <cursoragent@cursor.com>[[:space:]]*$' "$COMMIT_MSG_FILE"; then
+  printf '%s\n' 'commit-msg: Cursor の Co-authored-by が残っている。commit を止めた。' >&2
+  exit 1
+fi
+if grep -qE '^Co-authored-by: Cursor[[:space:]]*$' "$COMMIT_MSG_FILE"; then
+  printf '%s\n' 'commit-msg: Cursor の Co-authored-by が残っている。commit を止めた。' >&2
+  exit 1
+fi
