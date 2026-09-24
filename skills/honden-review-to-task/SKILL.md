@@ -216,6 +216,10 @@ honden review check findings.json --expect high=2,medium=3,low=1,nit=0
 
 ### Step 6: 投入する
 
+**取れなかった物を、取れたことにするな。** `$(task … | jq …)` は `task` が落ちても
+`jq` が空入力で黙って通る——`jq -e` だけでは足りぬ（`[]` は有効な JSON である）。
+`task` の exit と、JSON が**配列**であることの両方を見てから数えよ。
+
 **`task review submit` に `--repo` は無い**（0.1.24 の `--help` で実測。旗は
 `--json` / `--project` / `--pr` のみ）。投入先の repo は project の
 GitHub 連携先（current integration）から決まる——`rounds --help` の
@@ -256,12 +260,35 @@ integration_repo=$(jq -er \
   exit 1
 }
 
-rounds_before=$(task review rounds --project "$project" --pr "$pr" --repo "$repo" --json | jq length)
+rounds_before_json=$(task review rounds \
+  --project "$project" --pr "$pr" --repo "$repo" --json) || {
+  rounds_exit=$?
+  printf 'task review rounds（投入前）が失敗（exit=%s）。投入せず止める。\n' "$rounds_exit" >&2
+  exit 1
+}
+if ! jq -e 'type == "array"' <<<"$rounds_before_json" >/dev/null; then
+  printf 'task review rounds（投入前）の応答が JSON 配列でない。投入せず止める。\n' >&2
+  exit 1
+fi
+rounds_before=$(jq 'length' <<<"$rounds_before_json")
 
-task review submit findings.json --project "$project" --pr "$pr"
+task review submit findings.json --project "$project" --pr "$pr" || {
+  submit_exit=$?
+  printf 'task review submit が失敗（exit=%s）。投入せず止める。\n' "$submit_exit" >&2
+  exit 1
+}
 
-rounds_json=$(task review rounds --project "$project" --pr "$pr" --repo "$repo" --json)
-rounds_after=$(jq length <<<"$rounds_json")
+rounds_json=$(task review rounds \
+  --project "$project" --pr "$pr" --repo "$repo" --json) || {
+  rounds_exit=$?
+  printf 'task review rounds（投入後）が失敗（exit=%s）。投入せず止める。\n' "$rounds_exit" >&2
+  exit 1
+}
+if ! jq -e 'type == "array"' <<<"$rounds_json" >/dev/null; then
+  printf 'task review rounds（投入後）の応答が JSON 配列でない。投入せず止める。\n' >&2
+  exit 1
+fi
+rounds_after=$(jq 'length' <<<"$rounds_json")
 [[ "$rounds_after" -gt "$rounds_before" ]] || {
   printf '投入した round が %s の PR #%s に現れぬ（%s 件のまま）。\n' "$repo" "$pr" "$rounds_after" >&2
   printf -- '--project %s の GitHub 連携先が %s と違う疑いが濃い。盤の project 設定で連携先を確かめ、\n' "$project" "$repo" >&2
