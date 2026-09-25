@@ -393,3 +393,34 @@ describe('経過の言い方（ago）', () => {
     expect(ago('ではない', now)).toBe('？');
   });
 });
+
+describe('宛先が名簿の外の時の言葉', () => {
+  // 弾く条件は変えぬ——変わるのは言葉だけである。
+  // 打ち間違い（--to shgun）と布陣外の相手（--to review_session）で
+  // 現に違う言葉が出ることを釘にする。片方だけでは、
+  // 常に同じ言葉を返す実装でも通ってしまう。
+  test('報せの届いた事実が在る名には、布陣の外の相手と言う', () => {
+    const h = openStore({ path: db });
+    tx(h, () => {
+      h.prepare(
+        'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
+      ).run('o1', 'karo', '2026-09-25T10:00', 'report_received', 'review_session', '外より', );
+    });
+    const r = run({ to: 'review_session', from: 'shogun', type: 'cmd_new', body: '返し' });
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('布陣の外の相手である');
+    expect(r.err).toContain('inbox では届かぬ');
+    expect(r.err).toContain('殿');
+    expect(r.err).toContain('書き込みは行っておらぬ');
+  });
+
+  test('届いた事実の無い名（打ち間違い）には、布陣の外と断じぬ', () => {
+    const r = run({ to: 'shgun', from: 'shogun', type: 'cmd_new', body: '打ち間違い' });
+    expect(r.code).toBe(EXIT_INVALID);
+    expect(r.err).toContain('取りうる値の外');
+    expect(r.err).not.toContain('布陣の外の相手である');
+    expect(r.err).toContain('近いのは shogun');
+    // まだ一度も書いておらぬ布陣外の相手にも嘘にならぬ言い方が添う。
+    expect(r.err).toContain('打ち間違いでなく布陣の外の相手ならば');
+  });
+});
