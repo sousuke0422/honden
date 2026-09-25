@@ -109,7 +109,7 @@ import { normsRoot, setSetting } from './settings';
 import { resolve as resolvePath } from 'node:path';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
-import { roster as rosterOf, roleOf as roleOfId, isWorker } from './roster';
+import { roster as rosterOf, roleOf as roleOfId, isWorker, isKnown } from './roster';
 import { leaseState, expired, release, renew, DEFAULT_LEASE_MINUTES } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
@@ -502,8 +502,13 @@ export function runInboxRead(
   const body = msgs
     .map((m) => {
       const mark = m.read ? '  ' : '● ';
+      // 名簿の外からの報せは返せぬ（inbox write --to は名簿に縛られる）。
+      // 読んだ者がそれと分かるよう、表示にだけ @no-reply を添える。
+      // 正本の from は変えぬ。名簿は動くゆえ、覚えずに読むたびに引く——
+      // 差出人が後から名簿へ入れば、同じ報せが印無しで出る。
+      const sender = isKnown(db, m.sender) ? m.sender : `${m.sender} @no-reply`;
       return (
-        `\n  ${mark}${m.id}  [${m.type}] ${m.sender} → ${m.agent}  ${m.createdAt}\n` +
+        `\n  ${mark}${m.id}  [${m.type}] ${sender} → ${m.agent}  ${m.createdAt}\n` +
         m.body
           .split('\n')
           .map((l) => `      ${l}`)
