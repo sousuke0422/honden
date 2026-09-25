@@ -49,10 +49,12 @@ Co-authored-by: Alice <alice@example.com>
   test('commit-msg: Cursor が残れば拒否、Assisted-by だけは通る', async () => {
     await withMsg('fix: x\n\nAssisted-by: multi-agent-shogun-aki-tweak\n', async (file) => {
       const ok = spawnSync(COMMIT_MSG, [file], { encoding: 'utf8' });
+      expect(ok.error).toBeUndefined();
       expect(ok.status).toBe(0);
     });
     await withMsg('fix: x\n\nCo-authored-by: Cursor <cursoragent@cursor.com>\n', async (file) => {
       const bad = spawnSync(COMMIT_MSG, [file], { encoding: 'utf8' });
+      expect(bad.error).toBeUndefined();
       expect(bad.status).toBe(1);
     });
   });
@@ -68,6 +70,7 @@ Co-authored-by: Cursor <cursoragent@cursor.com>
         env: { ...process.env, HONDEN_PREPARE_COMMIT_MSG_CHAIN: '/nonexistent' },
         encoding: 'utf8',
       });
+      expect(r.error).toBeUndefined();
       expect(r.status).toBe(0);
       const after = await readFile(file, 'utf8');
       expect(after).not.toContain('cursoragent@cursor.com');
