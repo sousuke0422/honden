@@ -34,6 +34,7 @@ honden はそれらを起こす側で、中身は問わない。
 git clone --recurse-submodules https://github.com/sousuke0422/honden
 cd honden
 bash scripts/first_setup.sh
+bash scripts/setup_githooks.sh   # Cursor が差す Co-authored-by を落とす（任意・local のみ）
 ```
 
 道具を確かめ、本体を用意し、設定と正本を整えて一覧で結ぶ。
