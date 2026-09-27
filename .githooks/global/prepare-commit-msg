@@ -1,0 +1,41 @@
+#!/bin/sh
+COMMIT_MSG_FILE=$1
+TRAILER_KEY="Assisted-by"
+TRAILER_VALUE="multi-agent-shogun-aki-tweak"
+TRAILER="$TRAILER_KEY: $TRAILER_VALUE"
+SENTINEL="Co-authored-by: multi-agent-shogun-aki-tweak <multi-agent-shogun-aki-tweak@users.noreply.github.com>"
+
+case "$COMMIT_MSG_FILE" in
+  "") exit 0 ;;
+esac
+
+tmp_file=$(mktemp "${COMMIT_MSG_FILE}.XXXXXX") || exit 1
+awk -v sentinel="$SENTINEL" -v trailer="$TRAILER" '
+  $0 == sentinel {
+    print trailer
+    next
+  }
+  { print }
+' "$COMMIT_MSG_FILE" > "$tmp_file" && cat "$tmp_file" > "$COMMIT_MSG_FILE"
+status=$?
+rm -f "$tmp_file"
+[ "$status" -eq 0 ] || exit "$status"
+
+if ! git interpret-trailers --in-place --if-exists=addIfDifferent --trailer "$TRAILER" "$COMMIT_MSG_FILE"; then
+  printf '%s\n' "prepare-commit-msg: failed to apply $TRAILER_KEY trailer" >&2
+  exit 1
+fi
+
+tmp_file=$(mktemp "${COMMIT_MSG_FILE}.XXXXXX") || exit 1
+awk -v trailer="$TRAILER" '
+  $0 == trailer {
+    if (seen) {
+      next
+    }
+    seen = 1
+  }
+  { print }
+' "$COMMIT_MSG_FILE" > "$tmp_file" && cat "$tmp_file" > "$COMMIT_MSG_FILE"
+status=$?
+rm -f "$tmp_file"
+exit "$status"
