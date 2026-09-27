@@ -495,6 +495,13 @@ GitHub の `/releases/latest` は prerelease を外して返すので、`honden 
 
 ---
 
+## global の git hooks
+
+全 repo に効く `~/.git-hooks` の hook（Assisted-by の付与・Cursor の共著落とし）は `.githooks/global/` と `.githooks/lib/` が正本である。
+据え方・戻し方は `scripts/setup_global_githooks.sh --help` に在る。
+
+---
+
 ## 困ったとき
 
 | | |

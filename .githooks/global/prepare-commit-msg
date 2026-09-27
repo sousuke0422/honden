@@ -1,4 +1,14 @@
 #!/bin/sh
+# global の prepare-commit-msg。正本は honden repo の .githooks/global/ に在り、
+# scripts/setup_global_githooks.sh が ~/.git-hooks/ へ配る（手で写すな）。
+#
+# 三つの仕事をする。
+#   1. Cursor の agent が差し込む Co-authored-by trailer を落とす
+#      （lib/strip-cursor-trailers.sh。setup が隣へ配る）
+#   2. 旧 sentinel（Co-authored-by: multi-agent-shogun-aki-tweak <…>）を
+#      Assisted-by へ置き換える（古い書き方の名残を写経で残さぬため）
+#   3. Assisted-by trailer を一つだけ持たせる（無ければ足し、重なれば先頭だけ残す）
+
 COMMIT_MSG_FILE=$1
 TRAILER_KEY="Assisted-by"
 TRAILER_VALUE="multi-agent-shogun-aki-tweak"
@@ -9,6 +19,19 @@ case "$COMMIT_MSG_FILE" in
   "") exit 0 ;;
 esac
 
+# --- 1. Cursor trailer を落とす -------------------------------------------
+# global hook は全 repo の commit を握る。lib が配られておらぬ環境でも
+# commit 自体は止めぬ——警告だけ出して先へ進む。
+HOOK_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+if [ -f "$HOOK_DIR/lib/strip-cursor-trailers.sh" ]; then
+  # shellcheck source=../lib/strip-cursor-trailers.sh
+  . "$HOOK_DIR/lib/strip-cursor-trailers.sh"
+  strip_cursor_trailers "$COMMIT_MSG_FILE" || exit 1
+else
+  printf '%s\n' "prepare-commit-msg: lib/strip-cursor-trailers.sh が見つからぬ（strip を飛ばす）" >&2
+fi
+
+# --- 2. 旧 sentinel を Assisted-by へ置き換える -----------------------------
 tmp_file=$(mktemp "${COMMIT_MSG_FILE}.XXXXXX") || exit 1
 awk -v sentinel="$SENTINEL" -v trailer="$TRAILER" '
   $0 == sentinel {
@@ -21,6 +44,7 @@ status=$?
 rm -f "$tmp_file"
 [ "$status" -eq 0 ] || exit "$status"
 
+# --- 3. Assisted-by を一つだけ持たせる --------------------------------------
 if ! git interpret-trailers --in-place --if-exists=addIfDifferent --trailer "$TRAILER" "$COMMIT_MSG_FILE"; then
   printf '%s\n' "prepare-commit-msg: failed to apply $TRAILER_KEY trailer" >&2
   exit 1
