@@ -72,10 +72,9 @@ describe('門自身の単独呼び出しは平面の紋様を免除する', () =
     expect(judgeStructured(cmd, run).permission).toBe('deny');
   });
 
-  test('引用外のパイプ・向き替え・置換・改行は免除せぬ', () => {
+  test('引用外のパイプの先・置換・改行の後の命は免除せぬ', () => {
     const unsafe = [
       "honden guard appeal --cmd 'tmux send-keys -t %9 x' | sh",
-      "honden guard appeal --cmd 'tmux send-keys -t %9 x' > /tmp/result",
       "honden guard appeal --cmd 'tmux send-keys -t %9 x' $(rm -rf /)",
       "honden guard appeal --cmd 'tmux send-keys -t %9 x'\nrm -rf /",
     ];
@@ -94,6 +93,82 @@ describe('門自身の単独呼び出しは平面の紋様を免除する', () =
     ]) {
       expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
     }
+  });
+});
+
+describe('門への問いは単純命令ごとに免除する（出力を絞っても問える）', () => {
+  // 免除を raw 全体ではなく単純命令ごとに判ずる。出力を絞るのは当たり前の
+  // 作法であり、そこで免除が外れると問い（とりわけ直訴）が門に閉じる。
+  const D014 = "'tmux send-keys -t %9 x'";
+
+  test('出力を絞る・file へ落とす形は通す', () => {
+    const pass = [
+      `honden guard check --cmd ${D014} 2>&1 | tail -4`,
+      `honden guard check --cmd ${D014} > /tmp/guard-check.out 2>&1`,
+      `honden guard appeal --cmd ${D014} --reason 'test' 2>&1 | head -20`,
+      `honden guard facts --cmd ${D014} | head -5`,
+      `honden guard check --cmd ${D014} |& grep -c D014`,
+      `bin/honden guard check --cmd ${D014} 2>/dev/null | cat`,
+    ];
+    for (const cmd of pass) {
+      expect(judge(cmd).rule, cmd).toBe('D014'); // 平面だけなら止まる陽性対照
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+    }
+  });
+
+  test('改行で継いだ無害な命は、それぞれ別の単純命令として通す', () => {
+    const cmd = `honden guard check --cmd ${D014}\necho done`;
+    expect(judgeStructured(cmd, run).permission).toBe('allow');
+  });
+
+  test('同じ行に継いだ禁じ手は、どの継ぎ方でも止まる', () => {
+    const stop: [string, string][] = [
+      [`honden guard check --cmd 'ls' ; tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd 'ls' && tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd 'ls' || tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd 'ls' & tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd ${D014} | xargs -I{} tmux send-keys -t %9 {}`, 'D014'],
+      [`tmux send-keys -t %9 x ; honden guard check --cmd 'ls'`, 'D014'],
+      [`honden guard check --cmd 'ls'\ntmux send-keys -t %9 x`, 'D014'],
+    ];
+    for (const [cmd, rule] of stop) {
+      const v = judgeStructured(cmd, run);
+      expect(v.permission, cmd).toBe('deny');
+      expect(v.rule, cmd).toBe(rule);
+    }
+  });
+
+  test('問いの出力を shell へ流す形は免除せぬ', () => {
+    for (const cmd of [
+      `honden guard check --cmd ${D014} | sh`,
+      `honden guard check --cmd ${D014} | bash -s`,
+      `honden guard check --cmd ${D014} 2>&1 | xargs sh -c`,
+    ]) {
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+
+  test('二重引用の中の命令置換は免除せぬ（置換は現に走る）', () => {
+    for (const cmd of [
+      `honden guard check --cmd "$(tmux send-keys -t %9 x)" | tail -4`,
+      'honden guard check --cmd "`tmux send-keys -t %9 x`" | tail -4',
+    ]) {
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+
+  test('向き替えの先は免除せぬ（門そのものへ書く形は止まる）', () => {
+    const cmd = `honden guard check --cmd ${D014} > .claude/settings.json`;
+    const v = judgeStructured(cmd, run);
+    expect(v.permission).toBe('deny');
+    expect(v.rule).toBe('D012');
+  });
+
+  test('解き手が無くても、単独の問いは従来どおり通す', () => {
+    const none = () => ({ ok: false, stdout: '' });
+    expect(judgeStructured(`honden guard check --cmd ${D014}`, none).permission).toBe('allow');
+    // 絞った形は構文を解かねば命の境が判らぬ。解けねば拒む
+    expect(judgeStructured(`honden guard check --cmd ${D014} | tail -4`, none).permission).toBe('deny');
   });
 });
 
