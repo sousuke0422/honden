@@ -28,7 +28,12 @@ import {
   substUnits,
   heredocUnits,
   type Runner as ParseRunner,
+  type Cmd,
+  type Parsed,
   execUnits,
+  baseName,
+  SHELLS,
+  WRAPPERS,
 } from './parse';
 import { journal } from './store';
 
@@ -322,9 +327,15 @@ const RULES: Rule[] = [
     // シェル経由の細工だけを止める。道具（Edit/Write）経由は CLI 側の
     // 権限設定と hook の matcher が受け持つ——ここでは届かぬ。
     // それでも置くのは、届く範囲を空けておく理由が無いからである。
+    // 書き換えの道具は `>` の類だけではない。patch を当てる形（git apply・patch）
+    // や、入れ替える形（install・ln・rsync・git checkout/restore）も同じ害である
+    // （将軍が見つけた・2026-09-30）。日常の語でもある patch・install などは
+    // 命令位置に立つ時だけ当てる。
+    // 先の列の `.claude/hooks` は claude の門の入口（hooks/guard.sh）である。
+    // cursor・codex と同じく前置きで当て、hooks.json と hooks/ の両方を覆う。
     id: 'D012',
     pattern:
-      /(?:>|>>|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\bchmod\b|\brm\b|\btruncate\b)[^;&|]*(?:\.cursor\/hooks|\.codex\/hooks|\.claude\/settings\.json|bin\/honden|\bguard\.ts(?![\w.]))/,
+      /(?:>|>>|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\bchmod\b|\brm\b|\btruncate\b|\bgit\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:apply|am|checkout|restore)\b|(?:^|[;&|(]\s*)(?:patch|install|ln|rsync)\b)[^;&|]*(?:\.cursor\/hooks|\.codex\/hooks|\.claude\/hooks|\.claude\/settings\.json|bin\/honden|\bguard\.ts(?![\w.]))/,
     reason: '門そのものを書き換える形である。門は門で守れぬゆえ、ここで止める',
   },
   {
@@ -375,8 +386,14 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
   // 置換・改行は別の命を走らせうるため、免除しない。閉じぬ引用も同じである。
   if (isStandaloneGuardInvocation(raw)) return { permission: 'allow' };
 
+  // 出力を絞る（`2>&1 | tail`）・file へ落とす形でも問えるよう、免除は
+  // **単純命令ごと**に判ずる。免除するのは門への問いそのものの語だけで、
+  // 同じ行の他の命・向き替えの先は従来どおり裁く（exemptGuardSegments）。
+  const exempt = exemptGuardSegments(raw);
+
   // 一、紋様の層。取りこぼしはあれど、取り過ぎはせぬ。
-  const flat = judge(cmd);
+  // 免除した問いの語だけを伏せた姿を照らす。他の命と向き替えは伏せぬ。
+  const flat = judge(exempt ? exempt.masked : cmd);
   if (flat.permission === 'deny') return flat;
 
   // 二、構造の層。**生の姿を解かせる。**
@@ -391,10 +408,23 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
     };
   }
 
+  // 免除した問いは構造の側でも外す。文字で数えた問いと構造で見つけた問いの
+  // 数が食い違えば、境の読みが割れておる——免除を降ろし、元の姿で照らし直す。
+  let target: Parsed = parsed;
+  if (exempt) {
+    const kept = parsed.commands.filter((c) => !isGuardQueryCommand(c));
+    if (parsed.commands.length - kept.length === exempt.count) {
+      target = { ...parsed, commands: kept };
+    } else {
+      const whole = judge(cmd);
+      if (whole.permission === 'deny') return whole;
+    }
+  }
+
   // **実際に走る命を取り出す。** 単純命令をそのまま見るだけでは足りぬ——
   // `sh -c '…'` の引用の中も、`find -exec` の後ろも、包みの中も命である
   // （二度目の監査が釣った・2026-09-01）。
-  const scan = execUnits(parsed, run);
+  const scan = execUnits(target, run);
   if (scan.unresolved !== undefined) {
     // **解けぬなら通さぬ。** 一度目の直しは候補の上限に達したら通しており、
     // 無害な候補で枠を食い潰す形で素通りできた（実測）。
@@ -426,6 +456,217 @@ const GUARD_EXEMPT_SUBCOMMANDS = new Set([
   'selftest',
   'hook',
 ]);
+
+/** 門への問いと数える単純命令か（構造の側）。文字の側の判定と対にする。 */
+function isGuardQueryCommand(c: Cmd): boolean {
+  const [head, sub, name] = c.argv;
+  if (!head || !sub || !name || c.assigns.length > 0) return false;
+  if (head.var || head.cmdsubst || c.argv.some((w) => w.cmdsubst)) return false;
+  return (
+    /(?:^|\/)honden$/.test(head.value) &&
+    sub.value === 'guard' &&
+    GUARD_EXEMPT_SUBCOMMANDS.has(name.value)
+  );
+}
+
+interface GuardTok {
+  /** 引用を剥いだ値 */
+  value: string;
+  start: number;
+  end: number;
+  /** 向き替えの演算子か、その先 */
+  redir: boolean;
+}
+
+/**
+ * 単純命令ごとに、門への問いを見分ける。**免除する語の位置を返す。**
+ *
+ * 出力を絞る（`2>&1 | tail -4`）・file へ落とす（`> out 2>&1`）のは当たり前の
+ * 作法である。raw 全体でしか免除せねば、そこで免除が外れ、`--cmd` の字面ゆえ
+ * 問い（とりわけ直訴）が門に閉じる。
+ *
+ * 免除するのは問いの**語だけ**である。同じ行の他の命も、向き替えの先も、
+ * 伏せずに裁く。境の読みが shell と割れうる形は、**免除を一切掛けぬ**
+ * （undefined を返し、従来どおり全体を裁く）:
+ *
+ * - 置換（引用外の `(` `)` `` ` `` `$(`、二重引用内の `` ` `` `$(`）。二重引用内でも置換は実行される
+ * - `$'…'` `$"…"`・heredoc `<<`・行継ぎ・引用内の改行・閉じぬ引用・語頭の `#`
+ * - 問いの出力を shell や包みへパイプで流す形（出力に `--cmd` の字面が載りうる）
+ *
+ * 引用外の改行は `;` と同じ境として扱う。改行の前後はそれぞれ別の単純命令として
+ * 裁かれるゆえ、改行の後に禁じ手を置いても止まる。
+ */
+function exemptGuardSegments(raw: string): { masked: string; count: number } | undefined {
+  const segments: { toks: GuardTok[]; sep: string }[] = [];
+  let toks: GuardTok[] = [];
+  let value = '';
+  let start = -1;
+  let quote: "'" | '"' | undefined;
+  let redirTarget = false;
+
+  const finishWord = (end: number) => {
+    if (start >= 0) {
+      toks.push({ value, start, end, redir: redirTarget });
+      redirTarget = false;
+    }
+    value = '';
+    start = -1;
+  };
+  const endSegment = (sep: string) => {
+    segments.push({ toks, sep });
+    toks = [];
+  };
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i]!;
+    const next = raw[i + 1];
+
+    if (quote === "'") {
+      if (ch === '\n' || ch === '\r') return undefined;
+      if (ch === "'") quote = undefined;
+      else value += ch;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\n' || ch === '\r') return undefined;
+      if (ch === '`' || (ch === '$' && next === '(')) return undefined;
+      if (ch === '"') {
+        quote = undefined;
+        continue;
+      }
+      if (ch === '\\' && next !== undefined) {
+        if (next === '\n' || next === '\r') return undefined;
+        value += next;
+        i += 1;
+        continue;
+      }
+      value += ch;
+      continue;
+    }
+
+    if (ch === '\\') {
+      if (next === undefined || next === '\n' || next === '\r') return undefined;
+      if (start < 0) start = i;
+      value += next;
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      if (start < 0) start = i;
+      quote = ch;
+      continue;
+    }
+    if (ch === '$' && (next === "'" || next === '"' || next === '(')) return undefined;
+    if ('()`'.includes(ch)) return undefined;
+    if (ch === '#' && start < 0) return undefined;
+
+    if (ch === '\n' || ch === '\r') {
+      finishWord(i);
+      endSegment('\n');
+      continue;
+    }
+    if (ch === ' ' || ch === '\t') {
+      finishWord(i);
+      continue;
+    }
+    if (ch === ';') {
+      finishWord(i);
+      endSegment(';');
+      continue;
+    }
+    if (ch === '|') {
+      finishWord(i);
+      if (next === '|') {
+        endSegment('||');
+        i += 1;
+      } else if (next === '&') {
+        endSegment('|&');
+        i += 1;
+      } else {
+        endSegment('|');
+      }
+      continue;
+    }
+    if (ch === '&' && next !== '>') {
+      finishWord(i);
+      if (next === '&') {
+        endSegment('&&');
+        i += 1;
+      } else {
+        endSegment('&');
+      }
+      continue;
+    }
+    if (ch === '>' || ch === '<' || ch === '&') {
+      // 向き替え。直前の語が数字だけなら fd（`2>`）として演算子に含める
+      let opStart = i;
+      if (start >= 0 && /^\d+$/.test(value) && raw.slice(start, i) === value) {
+        opStart = start;
+        value = '';
+        start = -1;
+      } else {
+        finishWord(i);
+      }
+      if (ch === '<' && next === '<') return undefined; // heredoc・here-string
+      let j = i + 1;
+      if (ch === '&') j += 1; // `&>` / `&>>`
+      while (j < raw.length && '>&|'.includes(raw[j]!)) {
+        if (raw[j] === '&') {
+          j += 1;
+          while (j < raw.length && /[\d-]/.test(raw[j]!)) j += 1;
+          break;
+        }
+        j += 1;
+      }
+      const op = raw.slice(opStart, j);
+      toks.push({ value: op, start: opStart, end: j, redir: true });
+      // `>&1` `>&-` は先を演算子に含んだ。それ以外は次の語が先である
+      redirTarget = !/&[\d-]+$/.test(op);
+      i = j - 1;
+      continue;
+    }
+
+    if (start < 0) start = i;
+    value += ch;
+  }
+  if (quote) return undefined;
+  finishWord(raw.length);
+  endSegment('');
+
+  const words = (seg: { toks: GuardTok[] }) => seg.toks.filter((t) => !t.redir).map((t) => t.value);
+  const isQuery = (seg: { toks: GuardTok[] }) => {
+    const [head, sub, name] = words(seg);
+    return (
+      head !== undefined &&
+      /(?:^|\/)honden$/.test(head) &&
+      sub === 'guard' &&
+      name !== undefined &&
+      GUARD_EXEMPT_SUBCOMMANDS.has(name)
+    );
+  };
+
+  let count = 0;
+  const masked = raw.split('');
+  for (let s = 0; s < segments.length; s += 1) {
+    const seg = segments[s]!;
+    if (!isQuery(seg)) continue;
+    // 問いの出力には `--cmd` の字面が載りうる。それを shell や包みへ流す形は
+    // 問いではなく、別の命を走らせる形である
+    if (seg.sep === '|' || seg.sep === '|&') {
+      const consumer = words(segments[s + 1] ?? { toks: [] })[0];
+      if (consumer === undefined) return undefined;
+      const name = baseName(consumer);
+      if (SHELLS.has(name) || WRAPPERS.has(name)) return undefined;
+    }
+    count += 1;
+    for (const t of seg.toks) {
+      if (t.redir) continue;
+      for (let k = t.start; k < t.end; k += 1) masked[k] = ' ';
+    }
+  }
+  if (count === 0) return undefined;
+  return { masked: masked.join(''), count };
+}
 
 /** 引用を保ったまま、一つの単純命令であるかを検める。 */
 function isStandaloneGuardInvocation(raw: string): boolean {
