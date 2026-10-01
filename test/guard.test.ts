@@ -435,6 +435,44 @@ describe('D012 門そのものへの細工', () => {
       expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
     });
   }
+
+  // claude の門の入口（.claude/hooks/guard.sh）が先の列から漏れておった。
+  // cursor・codex と同じ括り（hooks.json と hooks/ の両方に当たる前置き）で塞ぐ。
+  const claudeHookTampers = [
+    'echo "exit 0" > .claude/hooks/guard.sh',
+    'echo x >> .claude/hooks/session-start.sh',
+    'sed -i s/deny/allow/ .claude/hooks/guard.sh',
+    'rm .claude/hooks/guard.sh',
+    'mv .claude/hooks/guard.sh /tmp/guard.sh',
+    'chmod -x .claude/hooks/guard.sh',
+    'tee .claude/hooks/stop-inbox.sh < /tmp/x',
+    'cp /tmp/x .claude/hooks/guard.sh',
+    'patch .claude/hooks/guard.sh < fix.diff',
+    'git checkout HEAD~3 -- .claude/hooks/guard.sh',
+    'echo "{}" > .claude/hooks.json',
+  ];
+  for (const cmd of claudeHookTampers) {
+    test(`止める（claude の hooks）: ${cmd}`, () => {
+      for (const v of [judge(cmd), judgeStructured(cmd, run)]) {
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe('D012');
+      }
+    });
+  }
+
+  const claudeHookFine = [
+    'cat .claude/hooks/guard.sh',
+    'bash .claude/hooks/guard.sh < /tmp/hook-input.json',
+    'git diff .claude/hooks/guard.sh',
+    'ls -la .claude/hooks',
+    'echo x > .claude/notes.md',
+  ];
+  for (const cmd of claudeHookFine) {
+    test(`通す（claude の hooks を読む・走らせる）: ${cmd}`, () => {
+      expect(judge(cmd).permission, cmd).toBe('allow');
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+    });
+  }
 });
 
 describe('env 前置回避（実弾試験が釣った穴）', () => {
