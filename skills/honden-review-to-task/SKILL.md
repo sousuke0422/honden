@@ -344,7 +344,7 @@ rounds_after=$(jq 'length' <<<"$rounds_json")
     "$repo" "$pr" "$rounds_after" >&2
   printf '読み取りの遅れか別の投入と交錯した疑いがある。submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
   printf '念のため: 投入前に照合した連携先が投入の後で差し替わっておらぬか。\n' >&2
-  printf '--project %s の GitHub 連携先と %s、連携先側の同番号 PR に round が立っておらぬか検分せよ。\n' \
+  printf -- '--project %s の GitHub 連携先と %s、連携先側の同番号 PR に round が立っておらぬか検分せよ。\n' \
     "$project" "$repo" >&2
   exit 1
 }
