@@ -324,25 +324,29 @@ task review submit findings.json --project "$project" --pr "$pr" || {
 rounds_json=$(task review rounds \
   --project "$project" --pr "$pr" --repo "$repo" --json) || {
   rounds_exit=$?
-  printf 'task review rounds（投入後）が失敗（exit=%s）。投入せず止める。\n' "$rounds_exit" >&2
+  printf 'task review submit は成功した。task review rounds（投入後）が失敗（exit=%s）。\n' \
+    "$rounds_exit" >&2
+  printf 'submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
   exit 1
 }
 if ! jq -e 'type == "array"' <<<"$rounds_json" >/dev/null; then
-  printf 'task review rounds（投入後）の応答が JSON 配列でない。投入せず止める。\n' >&2
+  printf 'task review submit は成功した。task review rounds（投入後）の応答が JSON 配列でない。\n' >&2
+  printf 'submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
   exit 1
 fi
 rounds_after=$(jq 'length' <<<"$rounds_json")
 [[ "$rounds_after" -gt "$rounds_before" ]] || {
-  printf '投入した round が %s の PR #%s に現れぬ（%s 件のまま）。\n' "$repo" "$pr" "$rounds_after" >&2
+  printf 'task review submit は成功した。読み返しでは round が増えて見えぬ（%s の PR #%s、%s 件のまま）。\n' \
+    "$repo" "$pr" "$rounds_after" >&2
   printf -- '--project %s の GitHub 連携先が %s と違う疑いが濃い。盤の project 設定で連携先を確かめ、\n' "$project" "$repo" >&2
-  printf '連携先側の同番号 PR に誤投入の round が立っておらぬか検分して始末した上で、正しい組で投入し直せ。\n' >&2
+  printf '連携先側の同番号 PR に round が立っておらぬか検分せよ。submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
   exit 1
 }
 latest_head=$(jq -r 'max_by(.round).head_sha' <<<"$rounds_json")
 [[ "$latest_head" == "$head_sha" ]] || {
-  printf '読み返した最新 round の head_sha (%s) が投入した %s と違う。別の投入と交錯した疑いがある。\n' \
+  printf 'task review submit は成功した。読み返した最新 round の head_sha (%s) が投入した %s と違う。\n' \
     "$latest_head" "$head_sha" >&2
-  printf 'rounds の一覧を目で検分し、己の round がどれかを確かめてから先へ進め。\n' >&2
+  printf 'rounds の一覧を目で検分し、己の round がどれかを確かめてから先へ進め。submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
   exit 1
 }
 ```
@@ -408,6 +412,8 @@ PR #749 を honden の木から調べて honden の main HEAD と比較する形
 | `task review submit` が非ゼロで返り、読み返しで同じ head の round が無い（配列として読めた） | 同じ命令を撃ち直してよい |
 | `task review submit` が非ゼロで返り、rounds の読み返し自体が落ちる | 弾かれたかは分からぬ。exit を報告し、殿へ相談する |
 | `task review submit` が非ゼロで返り、rounds は返ったが JSON 配列でない | 弾かれたかは分からぬ（「撃ち直してよい」には落とさない） |
+| `task review submit` は成功したが、投入後の `rounds` が失敗または JSON 配列でない | submit を撃ち直すな。rounds の読み取りだけを撃ち直せ |
+| `task review submit` は成功したが、読み返しで round が増えない／head が違う | submit を撃ち直すな。連携先・一覧を検分し、rounds の読み取りだけを撃ち直せ |
 | `task` CLI が無い | 投入は諦め、レビュー結果を会話に残したまま殿へ告げる |
 
 ## 注意
