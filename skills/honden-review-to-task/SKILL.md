@@ -146,7 +146,7 @@ if ! jq -e 'type == "array"' <<<"$rounds_before_json" >/dev/null; then
   printf 'task review rounds の応答が JSON 配列でない。\n' >&2
   exit 1
 fi
-if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json" >/dev/null; then
+if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json"; then
   printf 'head %s の round は既にある。新しい round を作らず、task review resolve で個々を動かせ。\n' \
     "$head_sha" >&2
   exit 1
@@ -293,7 +293,7 @@ if ! jq -e 'type == "array"' <<<"$rounds_before_json" >/dev/null; then
 fi
 rounds_before=$(jq 'length' <<<"$rounds_before_json")
 
-if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json" >/dev/null; then
+if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json"; then
   printf 'head %s の round は既にある。新しい round を作らず、task review resolve で個々を動かせ。\n' \
     "$head_sha" >&2
   exit 1
@@ -303,10 +303,8 @@ task review submit findings.json --project "$project" --pr "$pr" || {
   submit_exit=$?
   if rounds_reread_json=$(task review rounds \
     --project "$project" --pr "$pr" --repo "$repo" --json); then
-    if ! jq -e 'type == "array"' <<<"$rounds_reread_json" >/dev/null; then
-      printf 'task review submit が失敗（exit=%s）。rounds は返ったが JSON 配列でない。弾かれたかは分からぬ。\n' \
-        "$submit_exit" >&2
-    elif jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_reread_json" >/dev/null; then
+    if jq -e 'type == "array"' <<<"$rounds_reread_json" >/dev/null \
+      && jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_reread_json"; then
       printf 'task review submit が失敗（exit=%s）。この head の round は既に立っている。撃ち直すな。task review resolve で個々を動かせ。\n' \
         "$submit_exit" >&2
     else
@@ -404,9 +402,8 @@ PR #749 を honden の木から調べて honden の main HEAD と比較する形
 | head SHA が弾かれる | 短縮を渡している。`--json headRefOid` で取り直す |
 | 同じ head SHA のラウンドが既にある（Step 2 / submit 直前の門） | 二度目である。`task review resolve` で個々を動かす |
 | `task review submit` が非ゼロで返り、読み返しで同じ head の round がある | 撃ち直すな。`task review resolve` で個々を動かす |
-| `task review submit` が非ゼロで返り、読み返しで同じ head の round が無い（配列として読めた） | 同じ命令を撃ち直してよい |
+| `task review submit` が非ゼロで返り、読み返しで同じ head の round が無い | 同じ命令を撃ち直してよい |
 | `task review submit` が非ゼロで返り、rounds の読み返し自体が落ちる | 弾かれたかは分からぬ。exit を報告し、殿へ相談する |
-| `task review submit` が非ゼロで返り、rounds は返ったが JSON 配列でない | 弾かれたかは分からぬ（「撃ち直してよい」には落とさない） |
 | `task` CLI が無い | 投入は諦め、レビュー結果を会話に残したまま殿へ告げる |
 
 ## 注意
