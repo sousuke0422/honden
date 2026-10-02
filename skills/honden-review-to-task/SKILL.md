@@ -136,7 +136,21 @@ cwd の ref を代用しない。
 ```bash
 task --version
 task auth whoami --json
-task review rounds --project "$project" --pr "$pr" --repo "$repo"
+rounds_before_json=$(task review rounds \
+  --project "$project" --pr "$pr" --repo "$repo" --json) || {
+  rounds_exit=$?
+  printf 'task review rounds が失敗（exit=%s）。\n' "$rounds_exit" >&2
+  exit 1
+}
+if ! jq -e 'type == "array"' <<<"$rounds_before_json" >/dev/null; then
+  printf 'task review rounds の応答が JSON 配列でない。\n' >&2
+  exit 1
+fi
+if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json"; then
+  printf 'head %s の round は既にある。新しい round を作らず、task review resolve で個々を動かせ。\n' \
+    "$head_sha" >&2
+  exit 1
+fi
 ```
 
 `whoami` は review command より先に打つ。403 は PAT が偽とは限らず、
@@ -146,7 +160,11 @@ PR 番号は引数、head SHA は Step 1 の GitHub `headRefOid`、round 番号�
 finding ID は `task review submit` / `task review rounds` の応答から取る。
 cwd の Git の状態や表示順から推測しない。
 
-**同じ head SHA のラウンドが既にあれば、そこで止める。** 二度投入すると
+**同じ head SHA のラウンドが既にあれば、そこで止める。** 上の
+`jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)'` がその門である。
+Step 6 でも submit の直前に `rounds_before_json` を読み直し、**同じ式**で
+もう一度止める（head が動けば通る。`--force` のような抜け道は要らぬ）。
+二度投入すると
 R2（第二ラウンド）ができ、「同じ commit を二度レビューした」ことになる。
 
 指摘を差し替えたい場合は、新しいラウンドを作るのではなく
@@ -275,9 +293,29 @@ if ! jq -e 'type == "array"' <<<"$rounds_before_json" >/dev/null; then
 fi
 rounds_before=$(jq 'length' <<<"$rounds_before_json")
 
+if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json"; then
+  printf 'head %s の round は既にある。新しい round を作らず、task review resolve で個々を動かせ。\n' \
+    "$head_sha" >&2
+  exit 1
+fi
+
 task review submit findings.json --project "$project" --pr "$pr" || {
   submit_exit=$?
-  printf 'task review submit が失敗（exit=%s）。投入せず止める。\n' "$submit_exit" >&2
+  if rounds_reread_json=$(task review rounds \
+    --project "$project" --pr "$pr" --repo "$repo" --json); then
+    if jq -e 'type == "array"' <<<"$rounds_reread_json" >/dev/null \
+      && jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_reread_json"; then
+      printf 'task review submit が失敗（exit=%s）。この head の round は既に立っている。撃ち直すな。task review resolve で個々を動かせ。\n' \
+        "$submit_exit" >&2
+    else
+      printf 'task review submit が失敗（exit=%s）。この head の round は読み返しでは見つからない。同じ命令を撃ち直してよい。\n' \
+        "$submit_exit" >&2
+    fi
+  else
+    rounds_reread_exit=$?
+    printf 'task review submit が失敗（exit=%s）。rounds を読み返せなかった（exit=%s）。弾かれたかは分からぬ。\n' \
+      "$submit_exit" "$rounds_reread_exit" >&2
+  fi
   exit 1
 }
 
@@ -362,7 +400,10 @@ PR #749 を honden の木から調べて honden の main HEAD と比較する形
 | `honden review check` が件数違いで止まる | レビュー出力を数え直す。**申告のほうが正しいとは限らない** |
 | `severity must be one of` | `critical` を書いている。💥 は `high` へ潰す |
 | head SHA が弾かれる | 短縮を渡している。`--json headRefOid` で取り直す |
-| 同じ head SHA のラウンドが既にある | 二度目である。投入せず、`task review resolve` で個々を動かす |
+| 同じ head SHA のラウンドが既にある（Step 2 / submit 直前の門） | 二度目である。`task review resolve` で個々を動かす |
+| `task review submit` が非ゼロで返り、読み返しで同じ head の round がある | 撃ち直すな。`task review resolve` で個々を動かす |
+| `task review submit` が非ゼロで返り、読み返しで同じ head の round が無い | 同じ命令を撃ち直してよい |
+| `task review submit` が非ゼロで返り、rounds の読み返し自体が落ちる | 弾かれたかは分からぬ。exit を報告し、殿へ相談する |
 | `task` CLI が無い | 投入は諦め、レビュー結果を会話に残したまま殿へ告げる |
 
 ## 注意
