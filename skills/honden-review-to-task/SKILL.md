@@ -403,6 +403,7 @@ PR #749 を honden の木から調べて honden の main HEAD と比較する形
 | `severity must be one of` | `critical` を書いている。💥 は `high` へ潰す |
 | head SHA が弾かれる | 短縮を渡している。`--json headRefOid` で取り直す |
 | 同じ head SHA のラウンドが既にある（Step 2 / submit 直前の門） | 二度目である。`task review resolve` で個々を動かす |
+| 同じ head で新しい指摘を見つけた | head が動くのを待ち、次の round で出す。待てぬなら `/external-to-honden` で殿へ送り、盤の外に残す |
 | `task review submit` が非ゼロで返り、読み返しで同じ head の round がある | 撃ち直すな。`task review resolve` で個々を動かす |
 | `task review submit` が非ゼロで返り、読み返しで同じ head の round が無い（配列として読めた） | 同じ命令を撃ち直してよい |
 | `task review submit` が非ゼロで返り、rounds の読み返し自体が落ちる | 弾かれたかは分からぬ。exit を報告し、殿へ相談する |
