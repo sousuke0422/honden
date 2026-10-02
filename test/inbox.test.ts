@@ -161,12 +161,34 @@ describe('既読にする', () => {
     recordReadSnapshot(db, 'karo', list(db, 'karo'));
     db.prepare(
       'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,?)',
-    ).run('m_new', 'karo', '2026-08-24T12:30', 'cmd_new', 'shogun', '間に届いた', 0);
+    ).run('m_new', 'karo', '2099-01-01T00:00:00.000Z', 'cmd_new', 'shogun', '間に届いた', 0);
     const r = ackAll(db, 'karo');
     expect(r.ok).toBe(false);
     expect(r.message).toContain('m_new');
     expect(summarize(db, 'karo').total).toBe(4);
     expect((db.query('SELECT read FROM inbox WHERE id = ?').get('m_new') as { read: number }).read).toBe(0);
+  });
+
+  test('未読 101 件でも read が見せた 100 件は ack --all できる（101 件目は未読のまま）', () => {
+    const db = openStore({ path: ':memory:' });
+    const ins = db.prepare(
+      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
+    );
+    tx(db, () => {
+      for (let i = 0; i < 101; i++) {
+        const n = String(i).padStart(3, '0');
+        ins.run(`u${n}`, 'karo', `2026-08-24T10:${n}`, 'report_received', 'x', `body ${n}`);
+      }
+    });
+    const shown = list(db, 'karo');
+    expect(shown.length).toBe(100);
+    recordReadSnapshot(db, 'karo', shown);
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(true);
+    expect(r.changed.length).toBe(100);
+    expect(summarize(db, 'karo').total).toBe(1);
+    expect((db.query('SELECT id FROM inbox WHERE agent = ? AND read = 0').all('karo') as { id: string }[])[0]
+      ?.id).toBe('u100');
   });
 
   test('ackFor は read 写しを要らぬ（家老が当人の未読を片付ける）', () => {

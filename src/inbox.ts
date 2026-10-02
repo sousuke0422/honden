@@ -52,12 +52,20 @@ const toMessage = (r: Record<string, unknown>): Message => ({
   read: r['read'] === 1,
 });
 
+/** inbox read の既定表示件数。ack --all の走査上限は別（`INBOX_ACK_SCAN_LIMIT`）。 */
+export const INBOX_LIST_DEFAULT_LIMIT = 100;
+
+/** ack --all が未読を数える上限（read の表示上限より大きい）。 */
+export const INBOX_ACK_SCAN_LIMIT = 1000;
+
 /** 未読、または全件を古い順に返す。 */
 export function list(db: Database, agent: string, opts: { all?: boolean; limit?: number } = {}): Message[] {
   const sql = opts.all
     ? 'SELECT * FROM inbox WHERE agent = ? ORDER BY created_at, id LIMIT ?'
     : 'SELECT * FROM inbox WHERE agent = ? AND read = 0 ORDER BY created_at, id LIMIT ?';
-  return (db.query(sql).all(agent, opts.limit ?? 100) as Record<string, unknown>[]).map(toMessage);
+  return (db.query(sql).all(agent, opts.limit ?? INBOX_LIST_DEFAULT_LIMIT) as Record<string, unknown>[]).map(
+    toMessage,
+  );
 }
 
 export interface Summary {
@@ -222,25 +230,60 @@ export function ack(db: Database, selfId: string, ids: string[]): AckResult {
   return { ok: true, changed: toMark, already };
 }
 
-/** 直近の inbox read（己の未読）が見せた id を正本に残す。 */
+type ReadSnapshot = { ids: string[]; readAt: string };
+
+/** 直近の inbox read（己の未読）が見せた id と read した時刻を正本に残す。 */
 export function recordReadSnapshot(db: Database, agent: string, shown: Message[]): void {
-  const ids = shown.map((m) => m.id);
+  const payload: ReadSnapshot = {
+    ids: shown.map((m) => m.id),
+    readAt: new Date().toISOString(),
+  };
   db.prepare(
     `INSERT INTO inbox_read_snapshot(agent, ids) VALUES (?, ?)
      ON CONFLICT(agent) DO UPDATE SET ids = excluded.ids`,
-  ).run(agent, JSON.stringify(ids));
+  ).run(agent, JSON.stringify(payload));
 }
 
-function loadReadSnapshot(db: Database, agent: string): string[] | null {
+function loadReadSnapshot(db: Database, agent: string): ReadSnapshot | null {
   const row = db.query('SELECT ids FROM inbox_read_snapshot WHERE agent = ?').get(agent) as
     | { ids: string }
     | null;
   if (!row) return null;
   const parsed = JSON.parse(row.ids) as unknown;
-  if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === 'string')) {
-    return null;
+  if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+    return { ids: parsed, readAt: '' };
   }
-  return parsed;
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    Array.isArray((parsed as ReadSnapshot).ids) &&
+    typeof (parsed as ReadSnapshot).readAt === 'string'
+  ) {
+    const p = parsed as ReadSnapshot;
+    if (!p.ids.every((x) => typeof x === 'string')) return null;
+    return p;
+  }
+  return null;
+}
+
+function maxCreatedAtForIds(db: Database, ids: string[]): string {
+  if (ids.length === 0) return '';
+  const rows = db
+    .query(`SELECT created_at FROM inbox WHERE id IN (${ids.map(() => '?').join(',')})`)
+    .all(...ids) as { created_at: string }[];
+  return rows.reduce((max, r) => (r.created_at > max ? r.created_at : max), '');
+}
+
+/** 写しに無い未読のうち、read より後に作られたものだけを「届いた」と見る。 */
+function unreadArrivedSinceRead(db: Database, snap: ReadSnapshot, currentUnread: Message[]): string[] {
+  const snapSet = new Set(snap.ids);
+  const notInSnapshot = currentUnread.filter((m) => !snapSet.has(m.id));
+  if (notInSnapshot.length === 0) return [];
+
+  const cutoff = snap.readAt || maxCreatedAtForIds(db, snap.ids);
+  if (!cutoff) return notInSnapshot.map((m) => m.id);
+
+  return notInSnapshot.filter((m) => m.createdAt > cutoff).map((m) => m.id);
 }
 
 function clearReadSnapshot(db: Database, agent: string): void {
@@ -265,9 +308,8 @@ export function ackAll(db: Database, selfId: string): AckResult {
     };
   }
 
-  const currentUnread = new Set(list(db, selfId, { limit: 1000 }).map((m) => m.id));
-  const snapSet = new Set(snapshot);
-  const arrivedSinceRead = [...currentUnread].filter((id) => !snapSet.has(id));
+  const currentUnread = list(db, selfId, { limit: INBOX_ACK_SCAN_LIMIT });
+  const arrivedSinceRead = unreadArrivedSinceRead(db, snapshot, currentUnread);
   if (arrivedSinceRead.length > 0) {
     return {
       ok: false,
@@ -279,12 +321,12 @@ export function ackAll(db: Database, selfId: string): AckResult {
     };
   }
 
-  if (snapshot.length === 0 && currentUnread.size === 0) {
+  if (snapshot.ids.length === 0 && currentUnread.length === 0) {
     clearReadSnapshot(db, selfId);
     return { ok: true, changed: [], already: [] };
   }
 
-  const r = ack(db, selfId, snapshot);
+  const r = ack(db, selfId, snapshot.ids);
   if (r.ok) clearReadSnapshot(db, selfId);
   return r;
 }
@@ -320,7 +362,7 @@ export function ackFor(
   const bad = checkReason(opts.reason, `${opts.agent} は止まっており、閉じた司令の未読が残っておる`);
   if (bad) return { ok: false, changed: [], already: [], message: bad };
 
-  const ids = list(db, opts.agent, { limit: 1000 }).map((m) => m.id);
+  const ids = list(db, opts.agent, { limit: INBOX_ACK_SCAN_LIMIT }).map((m) => m.id);
   if (ids.length === 0) return { ok: true, changed: [], already: [] };
 
   tx(db, () => {
