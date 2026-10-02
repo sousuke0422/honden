@@ -257,6 +257,10 @@ JSON を出して exit 1 になるため、exit 0 と 1 の双方を受け入れ
 `repository` を**投入前に** `$repo` と厳密比較する。欠落、不正な JSON、
 食い違いのいずれでも投入せず止める。
 
+> **門を足したら**、その門が除いた原因を stderr と失敗表に書いておるか見直せ。
+> 筆頭の案内が古い仮説のままだと次の踏み手が誤る——投入前の連携先照合を足した後も、
+> 投入後の読み取り遅れを「連携先の疑い」として筆頭に書く、といった残りがないか。
+
 ```bash
 if integration_json=$(task review summary \
   --project "$project" --pr "$pr" --json); then
@@ -338,8 +342,10 @@ rounds_after=$(jq 'length' <<<"$rounds_json")
 [[ "$rounds_after" -gt "$rounds_before" ]] || {
   printf 'task review submit は成功した。読み返しでは round が増えて見えぬ（%s の PR #%s、%s 件のまま）。\n' \
     "$repo" "$pr" "$rounds_after" >&2
-  printf -- '--project %s の GitHub 連携先が %s と違う疑いが濃い。盤の project 設定で連携先を確かめ、\n' "$project" "$repo" >&2
-  printf '連携先側の同番号 PR に round が立っておらぬか検分せよ。submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
+  printf '読み取りの遅れか別の投入と交錯した疑いがある。submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
+  printf '念のため: 投入前に照合した連携先が投入の後で差し替わっておらぬか。\n' >&2
+  printf '--project %s の GitHub 連携先と %s、連携先側の同番号 PR に round が立っておらぬか検分せよ。\n' \
+    "$project" "$repo" >&2
   exit 1
 }
 latest_head=$(jq -r 'max_by(.round).head_sha' <<<"$rounds_json")
@@ -413,7 +419,7 @@ PR #749 を honden の木から調べて honden の main HEAD と比較する形
 | `task review submit` が非ゼロで返り、rounds の読み返し自体が落ちる | 弾かれたかは分からぬ。exit を報告し、殿へ相談する |
 | `task review submit` が非ゼロで返り、rounds は返ったが JSON 配列でない | 弾かれたかは分からぬ（「撃ち直してよい」には落とさない） |
 | `task review submit` は成功したが、投入後の `rounds` が失敗または JSON 配列でない | submit を撃ち直すな。rounds の読み取りだけを撃ち直せ |
-| `task review submit` は成功したが、読み返しで round が増えない／head が違う | submit を撃ち直すな。連携先・一覧を検分し、rounds の読み取りだけを撃ち直せ |
+| `task review submit` は成功したが、読み返しで round が増えない／head が違う | submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。念のため投入前に照合した連携先が投入後で差し替わっておらぬか、一覧を検分せよ |
 | `task` CLI が無い | 投入は諦め、レビュー結果を会話に残したまま殿へ告げる |
 
 ## 注意
