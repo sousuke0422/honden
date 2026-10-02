@@ -16,6 +16,10 @@ honden brief
 （部品は `instructions/` に一系統で置いてある。**生成物は作らぬ**——
 出す時に組めば、割れようが無い。）
 
+**戒めを書き足す時は `instructions/` へ。** `brief` が組むのは `instructions/` だけで、
+この文書（`AGENTS.md`・`CLAUDE.md`）は honden の木で開いた者にしか届かぬ。
+役を持つ者の多くは別の repo の木で働くゆえ、ここにだけ書いた戒めは届かぬ。
+
 ## 受け手の作法
 
 `inbox_notice unread=N …` が届いたら:

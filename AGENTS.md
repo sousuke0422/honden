@@ -13,13 +13,17 @@ honden brief
 （部品は `instructions/` に一系統で置いてある。**生成物は作らぬ**——
 出す時に組めば、割れようが無い。）
 
+**戒めを書き足す時は `instructions/` へ。** `brief` が組むのは `instructions/` だけで、
+この文書（`AGENTS.md`・`CLAUDE.md`）は honden の木で開いた者にしか届かぬ。
+役を持つ者の多くは別の repo の木で働くゆえ、ここにだけ書いた戒めは届かぬ。
+
 ## 受け手の作法
 
 `inbox_notice unread=N …` が届いたら:
 
 ```
 honden inbox read          # 己に届いておる報せを読む
-honden inbox ack --all     # 処理したものを既読にする
+honden inbox ack --all     # 読んだらすぐ既読にする（着手の印。処理は ack の後）
 ```
 
 既読にできるのは己の分だけである。他人の分を既読にすれば、相手は永久に気づけぬ。

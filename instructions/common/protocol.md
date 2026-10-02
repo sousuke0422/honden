@@ -211,8 +211,10 @@ LXC か systemd container を考える。
 **After completing ANY task, BEFORE going idle:**
 
 1. `honden inbox unread` — 未読の内訳を見る
-2. 未読があれば `honden inbox read` して処理し、`honden inbox ack --all`
-3. Only then go idle
+2. `honden status` — 検め待ちの報告を見る。未読 0 は「済んだ」ではない。
+   報せは既読で消えるが、検め待ちは状態ゆえ残る（前の座が読んだだけのこともある）
+3. 未読があれば `honden inbox read` し、すぐ `honden inbox ack --all`（着手の印。処理は ack の後）
+4. Only then go idle
 
 This is NOT optional. If you skip this and a redo message is waiting,
 you will be stuck idle until the next escalation or task reassignment.
@@ -276,6 +278,29 @@ EOF
 
 殿が席を外しておられ、様態が `autonomous` の間は、家老 → 将軍の inbox も開く。
 戻し忘れの害がまさにこの守りの防ごうとしているものゆえ、`--until` を付けて開けること。
+
+## 道具の出力を鵜呑みにするな
+
+**フィルタを通った表示を、証拠として報告へ転記するな。**
+
+SHA・commit の確認は `git rev-parse <ref>` か `git rev-list -1 <ref>` を使え。
+`git log` の表示を根拠に tip・基準 commit・commit 数を報告へ書いてはならぬ。
+
+**理由（実測・cmd_706）**: `rtk git log` は `--merges` 指定が無いと
+**merge commit を黙って除外する**。`-N` の件数指定は除外後に適用されるゆえ
+**件数が合ってしまい、欠落に気づく手掛かりが残らぬ**。
+PR merge 運用の repo では main の tip はほぼ常に merge commit ゆえ、
+「`git log` で tip 確認」は**系統的に誤る**。
+
+| 信用できる | `rev-parse` / `rev-list` / `show` / `cat-file` / `--merges` を明示した `git log` |
+|---|---|
+| 汚れておる | `--merges` 無しの `git log`（tip 確認・基準の選定・commit 数の勘定・系譜の推論） |
+
+履歴の完全性が要る場面では `GIT_REAL=/usr/bin/git` で実体を直に叩け（token は失う。常用はせぬ）。
+
+これは git に限らぬ。**道具の出力は観測であって事実ではない**——
+何かを「無い」「変わらぬ」「通った」と報告する前に、
+その道具が**在る物を見せられる**ことを確かめよ（陽性対照）。
 
 ## File Operation Rule
 
