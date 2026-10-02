@@ -236,8 +236,17 @@ export function submitReport(
         '  他の者の仕事の報告は書けぬ。書き込みは行っておらぬ。',
     };
   }
+  if (!cur.cmd_id) {
+    return {
+      ok: false,
+      message:
+        `${selfId} の持ち場 ${cur.task_id} は司令に結び付いておらぬ。\n` +
+        '  検めの流れへ載せられぬ報告は書けぬ。家老に司令から振り直してもらわれよ。\n' +
+        '  書き込みは行っておらぬ。',
+    };
+  }
   const cmdId = cur.cmd_id;
-  const criteria = cmdId ? criteriaOf(db, cmdId) : [];
+  const criteria = criteriaOf(db, cmdId);
 
   const norm = normalizeAcceptance(input['acceptance'], criteria);
   if (!norm.ok) return { ok: false, message: `${norm.message}\n  書き込みは行っておらぬ。` };
@@ -294,7 +303,7 @@ export function submitReport(
       action: `report.submit.${v.status}`,
       target: v.task_id,
       detail:
-        `cmd=${cmdId ?? 'なし'} 覆った条件=[${[...norm.map.keys()].sort((a, b) => a - b).join(',')}]` +
+        `cmd=${cmdId} 覆った条件=[${[...norm.map.keys()].sort((a, b) => a - b).join(',')}]` +
         (freed > 0 ? ` 手放した場所=${freed}件` : ''),
     });
   });
@@ -306,16 +315,15 @@ export function submitReport(
   // 覆った条件まで「残り」に出て、二度手間を招く。
   // 「残り」は証拠が出ておるかで数える。検めを待っておるだけの条件を
   // 「まだ誰も手を付けておらぬ」と出すと、次の者が同じ仕事をやり直す。
-  const cov = cmdId ? coverageOf(db, cmdId) : null;
-  const rest = cov ? criteria.filter((c) => !cov.claimed.has(c.idx)) : criteria.filter((c) => !norm.map.has(c.idx));
+  const cov = coverageOf(db, cmdId);
+  const rest = criteria.filter((c) => !cov.claimed.has(c.idx));
   return {
     ok: true,
     id,
     out: [
       `  ${v.task_id} を ${v.status} として納めた（報告 #${id}）`,
       `  そなたが覆った条件: ${covered.length > 0 ? covered.join(', ') : 'なし'}`,
-      `  ${cmdId ?? '司令'} ぜんたい: 証拠 ${cov ? cov.claimed.size : covered.length} / ${criteria.length} 件` +
-        (cov ? `（うち検め済 ${cov.covered.size} 件）` : ''),
+      `  ${cmdId} ぜんたい: 証拠 ${cov.claimed.size} / ${criteria.length} 件（うち検め済 ${cov.covered.size} 件）`,
       rest.length > 0
         ? `  まだ誰も覆っておらぬ: ${rest.map((c) => `${c.idx}. ${c.text}`).join(' / ')}`
         : '  全条件が覆われた。',
