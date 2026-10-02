@@ -177,6 +177,22 @@ CREATE TABLE IF NOT EXISTS cmd_acceptance (
   PRIMARY KEY (cmd_id, idx)
 );
 
+-- 司令の依存。cmd_id は needs が済むまで振れぬ (src/deps.ts)。
+--
+-- **解けたかは持たぬ。** 毎度 needs 側の cmd.status から引く（done なら解けておる）。
+-- 印を書き換える手を置くと、その手が遅れた時に済んだ依存が塞がったまま残る
+-- （Claude Code の Agent Teams が Limitations に挙げた詰まり）。
+-- 既存の表には欄を足さぬゆえ、移行は要らぬ——新しい表が一つ生えるだけである。
+CREATE TABLE IF NOT EXISTS cmd_dep (
+  cmd_id     TEXT NOT NULL REFERENCES cmd(id) ON DELETE CASCADE,
+  needs      TEXT NOT NULL REFERENCES cmd(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  by         TEXT NOT NULL,
+  PRIMARY KEY (cmd_id, needs),
+  CHECK (cmd_id != needs)
+);
+CREATE INDEX IF NOT EXISTS ix_cmd_dep_needs ON cmd_dep(needs);
+
 -- 殿の裁定を仰ぐもの。
 --
 -- 現行は dashboard.md の 🚨要対応 節に散文で積む。実測（2026-08-26）:
