@@ -14,7 +14,17 @@ import { inboxWrite } from '../src/cli';
 import { existsSync, statSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSuppressed } from '../src/inbox';
+import {
+  list,
+  summarize,
+  nudgeText,
+  ack,
+  ackAll,
+  ackFor,
+  recordReadSnapshot,
+  urgentRideAlong,
+  rideAlongSuppressed,
+} from '../src/inbox';
 
 const seeded = () => {
   const db = openStore({ path: ':memory:' });
@@ -75,6 +85,7 @@ describe('開く前に分かること', () => {
 
   test('無ければそう言う', () => {
     const db = seeded();
+    recordReadSnapshot(db, 'karo', list(db, 'karo'));
     ackAll(db, 'karo');
     expect(nudgeText(summarize(db, 'karo'))).toBe('inbox_notice unread=0');
   });
@@ -129,11 +140,40 @@ describe('既読にする', () => {
 
   test('全部既読にできる', () => {
     const db = seeded();
+    recordReadSnapshot(db, 'karo', list(db, 'karo'));
     const r = ackAll(db, 'karo');
     expect(r.changed.sort()).toEqual(['m1', 'm2', 'm3']);
     expect(summarize(db, 'karo').total).toBe(0);
     // 他人のには触らぬ
     expect(summarize(db, 'gunshi').total).toBe(1);
+  });
+
+  test('read 無しの ack --all は断る', () => {
+    const db = seeded();
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('inbox read をまだ打っておらぬ');
+    expect(summarize(db, 'karo').total).toBe(3);
+  });
+
+  test('read のあとに届いた未読は読まれぬまま既読にできぬ', () => {
+    const db = seeded();
+    recordReadSnapshot(db, 'karo', list(db, 'karo'));
+    db.prepare(
+      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,?)',
+    ).run('m_new', 'karo', '2026-08-24T12:30', 'cmd_new', 'shogun', '間に届いた', 0);
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('m_new');
+    expect(summarize(db, 'karo').total).toBe(4);
+    expect((db.query('SELECT read FROM inbox WHERE id = ?').get('m_new') as { read: number }).read).toBe(0);
+  });
+
+  test('ackFor は read 写しを要らぬ（家老が当人の未読を片付ける）', () => {
+    const db = seeded();
+    const r = ackFor(db, { agent: 'gunshi', by: 'karo', reason: '当人が止まっておる' });
+    expect(r.ok).toBe(true);
+    expect(r.changed).toEqual(['g1']);
   });
 
   test('既読は台帳に残る', () => {

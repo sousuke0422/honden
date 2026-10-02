@@ -193,8 +193,8 @@ LXC か systemd container を考える。
 
 横乗せの一行が出たとき、または `inbox_notice unread=N …` を受け取ったとき:
 
-1. `honden inbox read` — 自分の未読が出る
-2. `honden inbox ack --all` — 読んだらすぐ既読にする（着手の印。id を並べて一件ずつでもよい）
+1. `honden inbox read` — 自分の未読が出る（見せた id が正本に写される）
+2. `honden inbox ack --all` — **直近の read が見せた未読だけ**既読にする（着手の印。id を並べて一件ずつでもよい）。read 以降に届いた未読があるなら断る——もう一度 read してから ack せよ
 3. type ごとに処理する。ack は「読んだ」の意で「済んだ」ではない——処理を待って既読を遅らせると、芯が「無視された」と見て文脈を消しに来る
 4. Resume normal workflow
 

@@ -222,11 +222,71 @@ export function ack(db: Database, selfId: string, ids: string[]): AckResult {
   return { ok: true, changed: toMark, already };
 }
 
-/** 自分の未読を全部既読にする。 */
+/** 直近の inbox read（己の未読）が見せた id を正本に残す。 */
+export function recordReadSnapshot(db: Database, agent: string, shown: Message[]): void {
+  const ids = shown.map((m) => m.id);
+  db.prepare(
+    `INSERT INTO inbox_read_snapshot(agent, ids) VALUES (?, ?)
+     ON CONFLICT(agent) DO UPDATE SET ids = excluded.ids`,
+  ).run(agent, JSON.stringify(ids));
+}
+
+function loadReadSnapshot(db: Database, agent: string): string[] | null {
+  const row = db.query('SELECT ids FROM inbox_read_snapshot WHERE agent = ?').get(agent) as
+    | { ids: string }
+    | null;
+  if (!row) return null;
+  const parsed = JSON.parse(row.ids) as unknown;
+  if (!Array.isArray(parsed) || !parsed.every((x) => typeof x === 'string')) {
+    return null;
+  }
+  return parsed;
+}
+
+function clearReadSnapshot(db: Database, agent: string): void {
+  db.prepare('DELETE FROM inbox_read_snapshot WHERE agent = ?').run(agent);
+}
+
+/**
+ * 自分の未読を、直近の read が見せた分だけ既読にする。
+ *
+ * read 以降に届いた未読があるなら一件も触らず断る——読まれぬまま既読にしない。
+ */
 export function ackAll(db: Database, selfId: string): AckResult {
-  const ids = list(db, selfId, { limit: 1000 }).map((m) => m.id);
-  if (ids.length === 0) return { ok: true, changed: [], already: [] };
-  return ack(db, selfId, ids);
+  const snapshot = loadReadSnapshot(db, selfId);
+  if (snapshot === null) {
+    return {
+      ok: false,
+      changed: [],
+      already: [],
+      message:
+        'inbox read をまだ打っておらぬ。見せた報せが無いまま ack --all はできぬ。\n' +
+        '  先に honden inbox read して、届いた分を読んだ上で ack --all せよ。',
+    };
+  }
+
+  const currentUnread = new Set(list(db, selfId, { limit: 1000 }).map((m) => m.id));
+  const snapSet = new Set(snapshot);
+  const arrivedSinceRead = [...currentUnread].filter((id) => !snapSet.has(id));
+  if (arrivedSinceRead.length > 0) {
+    return {
+      ok: false,
+      changed: [],
+      already: [],
+      message:
+        `inbox read のあとに未読が ${arrivedSinceRead.length} 件届いた（${arrivedSinceRead.join(', ')}）。\n` +
+        '  読まれぬまま既読にできぬ。もう一度 honden inbox read してから ack --all せよ。',
+    };
+  }
+
+  if (snapshot.length === 0 && currentUnread.size === 0) {
+    clearReadSnapshot(db, selfId);
+    return { ok: true, changed: [], already: [] };
+  }
+
+  const r = ack(db, selfId, snapshot);
+  if (r.ok) clearReadSnapshot(db, selfId);
+  return r;
 }
 
 /**

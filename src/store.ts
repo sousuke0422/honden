@@ -321,6 +321,12 @@ CREATE TABLE IF NOT EXISTS inbox (
 );
 CREATE INDEX IF NOT EXISTS ix_inbox_unread ON inbox(agent, read, created_at);
 
+-- inbox read が見せた未読 id の写し。ack --all はここだけ既読にする。
+CREATE TABLE IF NOT EXISTS inbox_read_snapshot (
+  agent TEXT PRIMARY KEY,
+  ids     TEXT NOT NULL
+);
+
 -- 報告。
 --
 -- verdict は instructions/gunshi_at.md が定める 4 値だけを受ける。

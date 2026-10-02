@@ -63,7 +63,17 @@ import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
-import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
+import {
+  list,
+  summarize,
+  nudgeText,
+  ack,
+  ackAll,
+  ackFor,
+  recordReadSnapshot,
+  urgentRideAlong,
+  rideAlongSuppressed,
+} from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
 import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
@@ -495,9 +505,12 @@ export function runInboxRead(
       detail: `未読 ${s.total} 件を覗いた`,
     });
   }
+  const ownUnreadRead = !all && !peeking && agent === selfId;
   if (msgs.length === 0) {
+    if (ownUnreadRead) recordReadSnapshot(db, agent, []);
     return { code: EXIT_OK, out: `  ${agent}: ${all ? '一件も無い' : nudgeText(s)}` };
   }
+  if (ownUnreadRead) recordReadSnapshot(db, agent, msgs);
   const head = `  ${agent}: ${nudgeText(s)}` + (peeking ? '（覗いておるだけ。既読にはできぬ）' : '');
   const body = msgs
     .map((m) => {

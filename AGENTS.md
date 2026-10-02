@@ -19,8 +19,10 @@ honden brief
 
 ```
 honden inbox read          # 己に届いておる報せを読む
-honden inbox ack --all     # 処理したものを既読にする
+honden inbox ack --all     # 直近の read が見せた未読だけ既読にする
 ```
+
+`ack --all` は **read の直後に見せた id だけ**を既読にする。read 以降に届いた未読があるなら断る——読まれぬまま既読にしない。届いたらもう一度 `inbox read` してから `ack --all` せよ。
 
 既読にできるのは己の分だけである。他人の分を既読にすれば、相手は永久に気づけぬ。
 
