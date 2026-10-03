@@ -194,9 +194,12 @@ LXC か systemd container を考える。
 横乗せの一行が出たとき、または `inbox_notice unread=N …` を受け取ったとき:
 
 1. `honden inbox read` — 自分の未読が出る
-2. `honden inbox ack --all` — 読んだらすぐ既読にする（着手の印。id を並べて一件ずつでもよい）
-3. type ごとに処理する。ack は「読んだ」の意で「済んだ」ではない——処理を待って既読を遅らせると、芯が「無視された」と見て文脈を消しに来る
-4. Resume normal workflow
+2. `honden inbox ack <id>...` — read が見せた id だけを、処理の前に既読にする（着手の印）。
+   **先に既読にするのは、未読が残る限り芯が合図を撃ち続け、処理の最中に己の文脈を消しに来るためである**
+3. type ごとに処理する。ack は「読んだ」の意で「済んだ」ではない
+4. 未読が残っておれば（read の後に届いた分）1 へ戻る。`ack --all` は使わぬ——
+   版によっては、read の後に届いて見ておらぬ分まで既読にする
+5. Resume normal workflow
 
 既読にできるのは自分のものだけ。他人の inbox を既読にすると、その相手は報せが来たことを
 永久に知らぬ。自分のものでない id が混じっておれば、**一件も既読にせず**断る——
@@ -215,8 +218,8 @@ LXC か systemd container を考える。
    報せは既読で消えるが、検め待ちは状態ゆえ残る（前の座が読んだだけのこともある）。
    己の役が手を下す物なら、対応してから待つ。分けは上の `report_unreviewed` の段に同じ——
    軍師は検め、家老は検めの運びを差配する。足軽と将軍は見るだけでよい
-3. 未読があれば `honden inbox read` し、すぐ `honden inbox ack --all`（着手の印。処理は ack の後）。
-   ack が断れば、read の後に届いた分がある——もう一度 read してから ack せよ
+3. 未読があれば `honden inbox read` し、見せた id をすぐ `honden inbox ack <id>...`（着手の印。処理は ack の後。
+   先に既読にせねば、芯が合図を撃ち続けて処理の最中に文脈を消しに来る）。残る未読は再び read する
 4. 読んだ報せを type ごとに処理する（上の Inbox Processing Protocol に従う）
 5. Only then go idle
 
