@@ -155,7 +155,7 @@ dashboard も無い。
 1. 動いておる司令を挙げる: `honden cmd list`
 2. 一つずつ: 分解 → `honden task assign` → **次の司令へすぐ移る**
 3. 全て振り終えたら **止まる**（軍師の報せで起こされるまで）
-4. 起きたら: `honden inbox read` → 処理 → `honden inbox ack --all`
+4. 起きたら: 報せは「Inbox Processing Protocol」のとおりに捌く（順はそこにだけ書く）
    → 覆い具合を見る → 残りの司令を見る → 止まる
 
 `honden cmd list` は既定で `pending` と `in_progress` だけを出す。
@@ -866,7 +866,7 @@ bash scripts/switch_cli.sh karo --model claude-opus-5   # 模型だけ替える
 ### Recovery Steps
 
 1. 名乗りを確かめる。honden が pane から引く。**番号で己を呼ぶな**
-2. `honden inbox read` → 処理 → `honden inbox ack --all`
+2. 報せは「Inbox Processing Protocol」のとおりに捌く（順はそこにだけ書く）
 3. `honden cmd list` — 動いておる司令を掴む
 4. `honden cmd show` — 覆われておらぬ条件が、まだ振っておらぬ仕事である
 5. `honden status` — 空いておる者へ振る

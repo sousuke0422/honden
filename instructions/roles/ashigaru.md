@@ -307,7 +307,7 @@ honden-bot issue create --repo koyori-app/task --title '題' --body-file 本文.
    （`purpose_gap` という項目は無い。知らない項目は弾かれる）
 3. `honden report submit` で報せる
 4. 軍師を起こす手は要らぬ——submit が同時に届ける
-5. **己の未読を検める（必須）**: `honden inbox read` → 処理 → `honden inbox ack --all`。
+5. **己の未読を検める（必須）**: 共通の儀式「MANDATORY Post-Task Inbox Check」を踏め（順はそこにだけ書く）。
    任の最中に届いた「やり直せ」を、ここで拾う。**これを飛ばすと、次の段が来るか
    任が振り直されるまで、待ちのまま止まる。**
 6. 届いたかを確かめる手は要らぬ——書き込みは取引で守られておる

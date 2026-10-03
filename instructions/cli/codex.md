@@ -224,7 +224,7 @@ For TUI mode with `--no-alt-screen`:
 - Follow-up 確認キー for codex is `Tab`. **仮置きである** — 布陣へ座らせた時に実測で校正せよ.
 - Safety (shogun): in attended mode the Shogun pane is never nudged at all (`honden mode [attended|autonomous]`).
   `honden nudge --wake-shogun --reason "…"` is a one-off explicit exception and does not move the 正本.
-- After a nudge: `honden inbox read` → process each message by its `type` → `honden inbox ack --all`.
+- After a nudge: follow the "Inbox Processing Protocol" in the common protocol. The order is written there only.
 - **急ぎの報せ** (`clear_command` / `cmd_new` / `cmd_update` / `guard_appeal` / `guard_grant`) does not wait for a nudge.
   It rides along on the output of **any** honden subcommand as a single line, `⚠ 急ぎの未読`. Reading that line is not optional.
 
