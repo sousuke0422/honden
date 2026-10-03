@@ -118,23 +118,21 @@ pr_url=$(jq -r .url <<<"$pr_json")
   printf 'repo 不一致: %s\n' "$pr_url" >&2
   exit 1
 }
-
-# PR の現在の head を取り直す。取れなければ非ゼロで返す（空・不正は取れた扱いにしない）
-reread_head_sha() {
-  local now
-  now=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) || return 1
-  [[ "$now" =~ ^[0-9a-f]{40}$ ]] || return 1
-  printf '%s\n' "$now"
-}
 ```
 
 `head_sha` はここで一度だけ取り、findings JSON と Step 7 の `--head` に使い回す。
-レビューには時間がかかり、その間に PR へ push されうる。`reread_head_sha` は
-**比べるためだけ**に Step 6（submit の直前）と Step 7（判定の直前）で呼ぶ。
-取り直した値で `$head_sha` を上書きせぬこと——findings は最初の head を
+レビューには時間がかかり、その間に PR へ push されうる。Step 6（submit の直前）と
+Step 7（判定の直前）は、**比べるためだけ**に `gh pr view … --json headRefOid` を
+それぞれ打ち直す。取り直した値で `$head_sha` を上書きせぬこと——findings は最初の head を
 レビューしたものだからである。
 `git rev-parse HEAD` は cwd の checkout を写すだけで、PR の head とは限らない。
 `repo` と `pr_url` が食い違えば、別 repo の同番号 PR なので投入せず止める。
+
+**段をまたぐ依存は値だけにする。** 取り直しは関数にせず、各段へ同じ取り直しを書き写す
+（Step 2 と Step 6 が同じ `jq` 式を書き写すのと同じ流儀）。関数を Step 1 に置くと、
+Step 6・7 を新しい shell で撃った時に「command not found」になり、
+しかもそれが「head を取り直せなかった」という誤診へ化ける。
+各段が前提にしてよい値は `pr` / `repo` / `project` / `head_sha` の四つだけである。
 
 `gh` が使えないなら、PR 自身の `headRefOid` を取れないので止める。
 cwd の ref を代用しない。
@@ -316,7 +314,8 @@ if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json
 fi
 
 # 投入の直前に PR の head が動いておらぬか見る。ここで止まれば、まだ投入しておらぬ。
-if ! head_now=$(reread_head_sha); then
+head_now=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) || head_now=""
+if [[ ! "$head_now" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'PR の現在の head を取り直せなかった。head が動いたか分からぬ。投入はしておらぬ。止める。\n' >&2
   exit 1
 fi
@@ -389,7 +388,8 @@ latest_head=$(jq -r 'max_by(.round).head_sha' <<<"$rounds_json")
 
 ```bash
 # 判定の直前に PR の head が動いておらぬか見る。ここで止まれば、投入は済んでおる。
-if ! head_now=$(reread_head_sha); then
+head_now=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) || head_now=""
+if [[ ! "$head_now" =~ ^[0-9a-f]{40}$ ]]; then
   printf '投入は済んでおる。判定の前に PR の現在の head を取り直せなかった。head が動いたか分からぬ。mergeable とは言えぬ。submit を撃ち直すな。head の取り直しだけを撃ち直せ。\n' >&2
   exit 1
 fi
