@@ -118,9 +118,21 @@ pr_url=$(jq -r .url <<<"$pr_json")
   printf 'repo 不一致: %s\n' "$pr_url" >&2
   exit 1
 }
+
+# PR の現在の head を取り直す。取れなければ非ゼロで返す（空・不正は取れた扱いにしない）
+reread_head_sha() {
+  local now
+  now=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) || return 1
+  [[ "$now" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf '%s\n' "$now"
+}
 ```
 
 `head_sha` はここで一度だけ取り、findings JSON と Step 7 の `--head` に使い回す。
+レビューには時間がかかり、その間に PR へ push されうる。`reread_head_sha` は
+**比べるためだけ**に Step 6（submit の直前）と Step 7（判定の直前）で呼ぶ。
+取り直した値で `$head_sha` を上書きせぬこと——findings は最初の head を
+レビューしたものだからである。
 `git rev-parse HEAD` は cwd の checkout を写すだけで、PR の head とは限らない。
 `repo` と `pr_url` が食い違えば、別 repo の同番号 PR なので投入せず止める。
 
@@ -303,6 +315,17 @@ if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json
   exit 1
 fi
 
+# 投入の直前に PR の head が動いておらぬか見る。ここで止まれば、まだ投入しておらぬ。
+if ! head_now=$(reread_head_sha); then
+  printf 'PR の現在の head を取り直せなかった。head が動いたか分からぬ。投入はしておらぬ。止める。\n' >&2
+  exit 1
+fi
+[[ "$head_now" == "$head_sha" ]] || {
+  printf 'head が動いた（%s → %s）。再レビューしてから投入せよ。投入はしておらぬ。\n' \
+    "$head_sha" "$head_now" >&2
+  exit 1
+}
+
 task review submit findings.json --project "$project" --pr "$pr" || {
   submit_exit=$?
   if rounds_reread_json=$(task review rounds \
@@ -361,7 +384,21 @@ latest_head=$(jq -r 'max_by(.round).head_sha' <<<"$rounds_json")
 
 ### Step 7: マージ可否を見て、そのまま報告する
 
+投入はすでに済んでおる。ゆえにここで止める言葉は Step 6 の直前の門と**違う**
+（「投入しておらぬ」と読める言葉を、投入の後に出してはならぬ）。
+
 ```bash
+# 判定の直前に PR の head が動いておらぬか見る。ここで止まれば、投入は済んでおる。
+if ! head_now=$(reread_head_sha); then
+  printf '投入は済んでおる。判定の前に PR の現在の head を取り直せなかった。head が動いたか分からぬ。mergeable とは言えぬ。submit を撃ち直すな。head の取り直しだけを撃ち直せ。\n' >&2
+  exit 1
+fi
+[[ "$head_now" == "$head_sha" ]] || {
+  printf '投入は済んだが、その後に head が動いた（%s → %s）。新しい head は未レビューゆえ mergeable とは言えぬ。submit を撃ち直すな。\n' \
+    "$head_sha" "$head_now" >&2
+  exit 1
+}
+
 if summary_json=$(task review summary \
   --project "$project" --pr "$pr" --repo "$repo" --head "$head_sha" --json); then
   summary_exit=0
@@ -420,6 +457,8 @@ PR #749 を honden の木から調べて honden の main HEAD と比較する形
 | `task review submit` が非ゼロで返り、rounds は返ったが JSON 配列でない | 弾かれたかは分からぬ（「撃ち直してよい」には落とさない） |
 | `task review submit` は成功したが、投入後の `rounds` が失敗または JSON 配列でない | submit を撃ち直すな。rounds の読み取りだけを撃ち直せ |
 | `task review submit` は成功したが、読み返しで round が増えない／head が違う | submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。念のため投入前に照合した連携先が投入後で差し替わっておらぬか、一覧を検分せよ |
+| 投入の直前（Step 6）で head が動いた／取り直せない | **まだ投入しておらぬ。** 再レビューしてから投入せよ（取り直せぬ時は動いたか分からぬ。通さず止める） |
+| 判定の直前（Step 7）で head が動いた／取り直せない | **投入は済んでおる。** 新しい head は未レビューゆえ `mergeable` と言えぬ。submit を撃ち直すな（取り直せぬ時は head の取り直しだけを撃ち直せ） |
 | `task` CLI が無い | 投入は諦め、レビュー結果を会話に残したまま殿へ告げる |
 
 ## 注意
