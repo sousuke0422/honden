@@ -212,9 +212,13 @@ LXC か systemd container を考える。
 
 1. `honden inbox unread` — 未読の内訳を見る
 2. `honden status` — 検め待ちの報告を見る。未読 0 は「済んだ」ではない。
-   報せは既読で消えるが、検め待ちは状態ゆえ残る（前の座が読んだだけのこともある）
-3. 未読があれば `honden inbox read` し、すぐ `honden inbox ack --all`（着手の印。処理は ack の後）
-4. Only then go idle
+   報せは既読で消えるが、検め待ちは状態ゆえ残る（前の座が読んだだけのこともある）。
+   己の役が手を下す物なら、対応してから待つ。分けは上の `report_unreviewed` の段に同じ——
+   軍師は検め、家老は検めの運びを差配する。足軽と将軍は見るだけでよい
+3. 未読があれば `honden inbox read` し、すぐ `honden inbox ack --all`（着手の印。処理は ack の後）。
+   ack が断れば、read の後に届いた分がある——もう一度 read してから ack せよ
+4. 読んだ報せを type ごとに処理する（上の Inbox Processing Protocol に従う）
+5. Only then go idle
 
 This is NOT optional. If you skip this and a redo message is waiting,
 you will be stuck idle until the next escalation or task reassignment.
