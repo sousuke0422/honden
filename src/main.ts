@@ -1054,6 +1054,9 @@ async function runNudgeInner(
   // 未知の通知を含む無応答は、文脈を消す直前に保留する。
   for (const p of plans) {
     if (!p.send || !p.pane) continue;
+    // 刻の無い枠切れの打ち直しは旗を読み直さぬ。旗は残っておって当然で、
+    // 読めば保留へ戻すだけになる。打つのは素の合図（inbox_notice）だけである。
+    if (p.holdResend) continue;
     const limit = limitedReader(p.pane, now);
     if (typeof limit === 'number') {
       // 旗に明ける刻が書いてあれば、その刻の直後（+2 分）に再訪する。

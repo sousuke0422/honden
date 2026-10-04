@@ -141,6 +141,14 @@ export interface Plan {
    * 将軍が起こされたか」を辿れるようにする。
    */
   byExplicitWake?: boolean;
+  /**
+   * 刻の無い枠切れ（undated-limit）の保留中の打ち直しか。
+   *
+   * 打つのは素の合図（inbox_notice）だけで、旗を読み直しに行かぬ（旗は
+   * 残っておって当然であり、読めば保留へ戻すだけになる）。送れたら
+   * record が打ち直しの回数と刻を正本へ覚える。
+   */
+  holdResend?: boolean;
 }
 
 interface State {
@@ -152,13 +160,15 @@ interface State {
   limited_until: string | null;
   hold_reason: string | null;
   hold_at: string | null;
+  hold_resend_count: number;
+  hold_resent_at: string | null;
 }
 
 export function stateOf(db: Database, agent: string): State {
   return (
-    (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count, limited_until, hold_reason, hold_at FROM nudge WHERE agent = ?').get(agent) as
+    (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count, limited_until, hold_reason, hold_at, COALESCE(hold_resend_count, 0) hold_resend_count, hold_resent_at FROM nudge WHERE agent = ?').get(agent) as
       | State
-      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0, limited_until: null, hold_reason: null, hold_at: null }
+      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0, limited_until: null, hold_reason: null, hold_at: null, hold_resend_count: 0, hold_resent_at: null }
   );
 }
 
@@ -281,6 +291,29 @@ export function plan(
     }
 
     if (st.hold_reason) {
+      // 刻の無い枠切れ（undated-limit）だけは、保留の後も間を倍々に延ばして
+      // 素の合図を打ち直す。枠が戻れば本人が気づけるように（殿の裁可・2026-10-04）。
+      // 原因の分からぬ無応答（unresponsive）は打ち直さぬ——原因が分からぬ物へ
+      // 撃ち直せば、保留が防いだ文脈の焼き直しへ戻る恐れがある。人の確認を待つ。
+      const blocked = !pane || (entry.id === ATTENDED_SILENT && !autonomous && !opts.wakeShogun);
+      if (st.hold_reason === 'undated-limit' && !blocked) {
+        const due = undatedResendDue(st);
+        if (due !== null && due.getTime() <= now.getTime()) {
+          const resend = build(entry.id, entry.cli, pane, s, 1, true,
+            `刻の無い枠切れの打ち直し（${st.hold_resend_count + 1} 回目）`, now, st, level);
+          resend.holdResend = true;
+          resend.nextInMs = Math.min(undatedResendStepMs(st.hold_resend_count + 1), HOLD_RECHECK_MS);
+          out.push(mark(resend));
+          continue;
+        }
+        const held = build(entry.id, entry.cli, pane, s, 1, false,
+          `上役の確認待ち（${st.hold_reason} / ${st.hold_at}）。` +
+            `次に打つ刻 ${due?.toISOString() ?? '不明'}（打ち直し ${st.hold_resend_count} 回済み）。nudge revive で解除`,
+          now, st, level);
+        held.nextInMs = Math.max(1000, Math.min(due ? due.getTime() - now.getTime() : HOLD_RECHECK_MS, HOLD_RECHECK_MS));
+        out.push(held);
+        continue;
+      }
       const held = build(entry.id, entry.cli, pane, s, 1, false,
         `上役の確認待ち（${st.hold_reason} / ${st.hold_at}）。nudge revive で解除`, now, st, level);
       held.nextInMs = HOLD_RECHECK_MS;
@@ -389,11 +422,23 @@ export function record(db: Database, p: Plan, now: Date, reason?: string, by?: s
        last_reset_at = COALESCE(excluded.last_reset_at, nudge.last_reset_at),
        reset_count = nudge.reset_count + excluded.reset_count`,
   ).run(p.agent, p.agent, at, at, p.escalationLevel, p.level === 3 ? at : null, p.level === 3 ? 1 : 0);
+  if (p.holdResend) {
+    // 打ち直しの回数と最後に打った刻を正本へ。芯を立て直しても間が巻き戻らぬ。
+    db.prepare(
+      'UPDATE nudge SET hold_resend_count = COALESCE(hold_resend_count, 0) + 1, hold_resent_at = ? WHERE agent = ?',
+    ).run(at, p.agent);
+  }
 
   journal(db, {
     // 誰が起こしたかを残す。'nudge' 固定では、明示で起こした跡が辿れぬ。
     actor: p.byExplicitWake ? (by ?? '名乗り無し') : 'nudge',
-    action: p.byExplicitWake ? 'nudge.wake_shogun' : p.level === 3 ? 'nudge.reset' : `nudge.L${p.level}`,
+    action: p.byExplicitWake
+      ? 'nudge.wake_shogun'
+      : p.holdResend
+        ? 'nudge.hold_resend'
+        : p.level === 3
+          ? 'nudge.reset'
+          : `nudge.L${p.level}`,
     target: p.agent,
     detail:
       `unread=${p.unread} pane=${p.pane?.label ?? 'なし'} ${JSON.stringify(p.text)}` +
@@ -493,7 +538,10 @@ export function markSince(db: Database, agent: string, now: Date): void {
       .get(agent) as { t: string | null };
     if (oldest.t && oldest.t > cur.since) {
       // いま在る未読はどれも since より新しい ＝ 前の山は片付いた。時計を戻す。
-      db.prepare('UPDATE nudge SET since = ?, last_level = NULL, hold_reason = NULL, hold_at = NULL WHERE agent = ?').run(now.toISOString(), agent);
+      db.prepare(
+        `UPDATE nudge SET since = ?, last_level = NULL, hold_reason = NULL, hold_at = NULL,
+           hold_resend_count = 0, hold_resent_at = NULL WHERE agent = ?`,
+      ).run(now.toISOString(), agent);
       return;
     }
   }
@@ -622,6 +670,24 @@ export function withNudgeLock<T>(lockPath: string, fn: () => T, opts: { staleMs?
 
 /** 確認待ちの間も未読の片付きを確認する。自動解除の期限ではない。 */
 export const HOLD_RECHECK_MS = 5 * 60_000;
+
+/**
+ * 刻の無い枠切れの打ち直しの間。保留の刻（打ち直した後は最後に打った刻）を起点に、
+ * 30 分から倍々に延ばし、12 時間で頭打ちにして以後 12 時間ごと（最初と上限は殿の言）。
+ */
+export const UNDATED_RESEND_STEPS_MS = [30, 60, 120, 240, 480, 720].map((m) => m * 60_000);
+
+/** n 回目（0 始まり）の打ち直しまでの間。上限を越えれば最後の間を繰り返す。 */
+export function undatedResendStepMs(n: number): number {
+  return UNDATED_RESEND_STEPS_MS[Math.min(n, UNDATED_RESEND_STEPS_MS.length - 1)]!;
+}
+
+/** 次に打ち直す刻。起点が無ければ null。 */
+export function undatedResendDue(st: { hold_at: string | null; hold_resent_at: string | null; hold_resend_count: number }): Date | null {
+  const base = st.hold_resent_at ?? st.hold_at;
+  if (!base) return null;
+  return new Date(new Date(base).getTime() + undatedResendStepMs(st.hold_resend_count));
+}
 export type HoldReason = 'undated-limit' | 'unresponsive';
 
 /** 通知と保留を同じ取引で確定し、再起動後も同じ相手へ重ねて報せない。 */
@@ -640,7 +706,8 @@ export function holdForReview(db: Database, agent: string, reason: HoldReason, n
         '\n本人が未読を片付ければ保留も解除される。通知行が消えただけでは解除しない。',
     });
     db.run(`INSERT INTO nudge(agent, hold_reason, hold_at) VALUES (?,?,?)
-      ON CONFLICT(agent) DO UPDATE SET hold_reason=excluded.hold_reason, hold_at=excluded.hold_at`,
+      ON CONFLICT(agent) DO UPDATE SET hold_reason=excluded.hold_reason, hold_at=excluded.hold_at,
+        hold_resend_count=0, hold_resent_at=NULL`,
       [agent, reason, now.toISOString()]);
     journal(db, { actor: 'core', action: 'nudge.hold', target: agent,
       detail: `reason=${reason} recipient=${recipient}`, at: now });
