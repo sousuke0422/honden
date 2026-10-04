@@ -84,6 +84,25 @@ fi
 # lib まで chmod すると、core.filemode=true の clone で ` M`（mode の差）が出る。
 chmod +x "$HOOKS/prepare-commit-msg" "$HOOKS/commit-msg" 2>/dev/null || true
 
+# chmod の後に、入口二本が実行できるかを確かめ、駄目なら何も書かずに止まる。git は、実行権の無い
+# hook を黙って走らせぬ（警めも出ぬ）。咎めるのは chmod の失敗そのものではなく、**その後の -x**:
+# 指標で既に 755 の file や、他人の持ち物で chmod は落ちるが実行はできる file を、止める理由は無い。
+# この確かめは、extensions.worktreeConfig や core.hooksPath を書く前に置く（書いた後に止まると、
+# 下の戻しの道を通ることになる）。
+not_exec=()
+for f in prepare-commit-msg commit-msg; do
+  [[ -x "$HOOKS/$f" ]] || not_exec+=("$f")
+done
+if [[ "${#not_exec[@]}" -gt 0 ]]; then
+  {
+    echo "  入口の hook が実行できぬ（chmod +x の後も）:"
+    for f in "${not_exec[@]}"; do echo "    $HOOKS/$f"; done
+    echo "  git は実行権の無い hook を黙って走らせぬ。据えても strip も門も働かぬゆえ、何も書き換えずに止まる。"
+    echo "  持ち主か、実行権を効かせぬ fs（DrvFs 等）かもしれぬ。実行できるようにしてから、もう一度走らせよ。"
+  } >&2
+  exit 1
+fi
+
 # --worktree は、拡張が立っておらぬと --local と同じ（共有へ書く）になる。先に立てる。
 # 立てた後に --worktree が落ちたら、立てる前に拡張が無かった時に限り外して戻す
 # （立てる前から在った物は、人が立てた物ゆえ消さぬ）。
@@ -129,7 +148,25 @@ echo "  core.hooksPath → $HOOKS（この worktree だけ: $(git rev-parse --gi
 
 # 据えた後に、どの木でも指す先が実在するかを自ら検める。NG があれば非ゼロで終える。
 echo "  検め（scripts/check_githooks.sh）:"
-if ! bash "$ROOT/scripts/check_githooks.sh" | sed 's/^/    /'; then
-  echo "  据えたが、検めに NG が在る。上の NG の木を直してから、もう一度 bash scripts/check_githooks.sh を打て。" >&2
-  exit 1
-fi
+# 検めの終了コード: 0 全て ok / 1 NG が在る / 2 引数が受け付けられぬ（検めが走っておらぬ）。
+# 2 は NG ではない。分けて告げる。
+# 出力を先に受けて終了コードを取る（pipe の後の `|| true` は PIPESTATUS を潰す）。
+check_rc=0
+check_out="$(bash "$ROOT/scripts/check_githooks.sh" 2>&1)" || check_rc=$?
+printf '%s\n' "$check_out" | sed 's/^/    /'
+case "$check_rc" in
+  0) ;;
+  1)
+    echo "  据えたが、検めに NG が在る。上の NG の木を直してから、もう一度 bash scripts/check_githooks.sh を打て。" >&2
+    exit 1
+    ;;
+  2)
+    echo "  据えたが、検めが走らなんだ（check_githooks.sh が引数を受け付けず exit 2。NG ではなく、検めの欠け）。" >&2
+    echo "  bash scripts/check_githooks.sh を打って確かめよ。" >&2
+    exit 1
+    ;;
+  *)
+    echo "  据えたが、検めが想定外の終わり方をした（exit $check_rc）。bash scripts/check_githooks.sh を打って確かめよ。" >&2
+    exit 1
+    ;;
+esac

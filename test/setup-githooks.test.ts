@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -14,6 +14,31 @@ const SETUP = process.env.HONDEN_SETUP_SCRIPT ?? join(ROOT, 'scripts/setup_githo
 const CHECK = process.env.HONDEN_CHECK_SCRIPT ?? join(ROOT, 'scripts/check_githooks.sh');
 
 type Box = { base: string; repo: string; env: NodeJS.ProcessEnv };
+
+// 実行権の試験は、tmpdir が実行権を効かせる fs の時だけ意味を持つ（DrvFs 等では chmod -x が効かず、
+// 試験が偽に通る）。先に chmod -x が効くかを確かめ、効かねば skip と明示する。
+const EXEC_WORKS = (() => {
+  const d = mkdtempSync(join(tmpdir(), 'honden-execprobe-'));
+  try {
+    const f = join(d, 'probe');
+    writeFileSync(f, '#!/bin/sh\n');
+    chmodSync(f, 0o755);
+    accessSync(f, constants.X_OK);
+    chmodSync(f, 0o644);
+    try {
+      accessSync(f, constants.X_OK);
+      return false; // 外したのに実行できる＝この fs は実行権を効かせぬ
+    } catch {
+      return true;
+    }
+  } catch {
+    return false;
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+})();
+const execTest = test.skipIf(!EXEC_WORKS);
+if (!EXEC_WORKS) console.warn('setup-githooks.test: この tmpdir は実行権を効かせぬ。実行権の試験は skip する。');
 
 function sh(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
   return spawnSync(cmd, args, { cwd, env, encoding: 'utf8' });
@@ -251,6 +276,75 @@ describe('setup_githooks.sh（使い捨ての repo）', () => {
       done(b);
     }
   });
+
+  // chmod の後の -x を咎める（chmod の失敗そのものではなく）。chmod を効かせぬ・落とす形は、
+  // PATH の先頭に chmod の包みを置いて作る（他人の持ち物で chmod が効かぬ形）。
+  const shimChmod = (b: Box, body: string) => {
+    const bin = join(b.base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'chmod'), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(bin, 'chmod'), 0o755);
+    b.env = { ...b.env, PATH: `${bin}:${process.env.PATH}` };
+  };
+  const entry = (b: Box, f: string) => join(b.repo, '.githooks', f);
+
+  execTest('入口が実行できず chmod も効かぬなら、何も据えずに非ゼロで止まり、実行できぬ file を示す', () => {
+    const b = sandbox();
+    try {
+      chmodSync(entry(b, 'prepare-commit-msg'), 0o644);
+      shimChmod(b, 'exit 0'); // 成功を装って何もせぬ
+      const r = setup(b);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('実行できぬ');
+      expect(r.stderr).toContain(entry(b, 'prepare-commit-msg'));
+      expect(r.stderr).not.toContain(entry(b, 'commit-msg')); // 実行できる方は挙げぬ
+      // 共有にも config.worktree にも何も書かれぬ
+      expect(cfg(b, '--get', 'extensions.worktreeConfig').status).toBe(1);
+      expect(cfg(b, '--get', 'core.hooksPath').status).toBe(1);
+      expect(existsSync(join(b.repo, '.git/config.worktree'))).toBe(false);
+    } finally {
+      done(b);
+    }
+  });
+
+  execTest('chmod が落ちても、入口が実行できるなら止めぬ（咎めるのは chmod の後の -x）', () => {
+    const b = sandbox();
+    try {
+      shimChmod(b, 'exit 1'); // 他人の持ち物で chmod は落ちるが、指標で既に 755 の file
+      const r = setup(b);
+      expect(r.status).toBe(0);
+      expect(cfg(b, '--get', 'extensions.worktreeConfig').stdout.trim()).toBe('true');
+    } finally {
+      done(b);
+    }
+  });
+
+  execTest('入口の実行権が落ちた clone でも、chmod が効けば据える（保険）', () => {
+    const b = sandbox();
+    try {
+      chmodSync(entry(b, 'prepare-commit-msg'), 0o644);
+      chmodSync(entry(b, 'commit-msg'), 0o644);
+      const r = setup(b);
+      expect(r.status).toBe(0);
+      accessSync(entry(b, 'prepare-commit-msg'), constants.X_OK);
+      accessSync(entry(b, 'commit-msg'), constants.X_OK);
+    } finally {
+      done(b);
+    }
+  });
+
+  test('setup の自検めが exit 2 を受けたら、NG と分けて「検めが走らなんだ」と告げる', () => {
+    const b = sandbox();
+    try {
+      writeFileSync(join(b.repo, 'scripts/check_githooks.sh'), '#!/bin/sh\necho stub >&2\nexit 2\n');
+      const r = setup(b);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('検めが走らなんだ');
+      expect(r.stderr).not.toContain('検めに NG が在る');
+    } finally {
+      done(b);
+    }
+  });
 });
 
 // 据えた後に、指す先（本の木の .githooks）が消える窓。git は警めを出さぬ。
@@ -281,6 +375,7 @@ describe('check_githooks.sh（指す先が消える窓）', () => {
       expect(bad.status).not.toBe(0);
       expect(bad.stdout).toContain('NG  ');
       expect(bad.stdout).toContain('commit-msg が無い');
+      expect(bad.stdout).not.toContain('実行できぬ'); // 「無い」と「実行権が無い」は分ける
 
       // 本の木を戻せば 0
       expect(sh('git', ['checkout', '-q', 'main'], b.repo, b.env).status).toBe(0);
@@ -338,5 +433,90 @@ describe('check_githooks.sh（指す先が消える窓）', () => {
       done(b);
     }
   });
-});
 
+  // 実行権: 在らぬ時と、在るが実行できぬ時を分けて NG の理由に書く。権を戻せば ok に戻る（陽性対照）。
+  for (const f of ['prepare-commit-msg', 'commit-msg']) {
+    execTest(`${f} の実行権を外すと check が非ゼロで「${f} が実行できぬ」を出し、戻せば ok に戻る`, () => {
+      const b = sandbox();
+      try {
+        expect(setup(b).status).toBe(0);
+        expect(check(b.repo, b).status).toBe(0);
+        const hook = join(b.repo, '.githooks', f);
+        chmodSync(hook, 0o644);
+        const bad = check(b.repo, b);
+        expect(bad.status).toBe(1);
+        expect(bad.stdout).toContain('NG  ');
+        expect(bad.stdout).toContain(`${f} が実行できぬ`);
+        expect(bad.stdout).toContain('実行権が無い。git は黙って飛ばす');
+        expect(bad.stdout).not.toContain(`${f} が無い`); // 「無い」とは分ける
+        expect(bad.stderr).toContain('実行権が無い木は、setup_githooks.sh を据え直す');
+        // 陽性対照: 権を戻せば ok に戻る
+        chmodSync(hook, 0o755);
+        const good = check(b.repo, b);
+        expect(good.status).toBe(0);
+        expect(good.stdout).toContain('ok  ');
+        expect(good.stdout).not.toContain('NG  ');
+      } finally {
+        done(b);
+      }
+    });
+  }
+
+  // 引数: 無し・--all・-h/--help だけ。他は検めを走らせず exit 2。
+  test('知らぬ引数（--al）は exit 2 で止め、検めを走らせぬ（ok 行を出さぬ）', () => {
+    const b = sandbox();
+    try {
+      expect(setup(b).status).toBe(0);
+      const r = check(b.repo, b, '--al');
+      expect(r.status).toBe(2);
+      expect(r.stdout).not.toContain('ok  ');
+      expect(r.stdout).not.toContain('NG  ');
+      expect(r.stderr).toContain('知らぬ引数');
+      expect(r.stderr).toContain('使い方');
+    } finally {
+      done(b);
+    }
+  });
+
+  test('二つ以上の引数は exit 2 で止める', () => {
+    const b = sandbox();
+    try {
+      expect(setup(b).status).toBe(0);
+      const r = check(b.repo, b, '--all', '--all');
+      expect(r.status).toBe(2);
+      expect(r.stdout).not.toContain('ok  ');
+    } finally {
+      done(b);
+    }
+  });
+
+  for (const h of ['--help', '-h']) {
+    test(`${h} は使い方を出して exit 0（検めは走らせぬ）`, () => {
+      const b = sandbox();
+      try {
+        expect(setup(b).status).toBe(0);
+        const r = check(b.repo, b, h);
+        expect(r.status).toBe(0);
+        expect(r.stdout).toContain('使い方');
+        expect(r.stdout).toContain('終了コード');
+        expect(r.stdout).not.toContain('ok  ');
+      } finally {
+        done(b);
+      }
+    });
+  }
+
+  test('終了コードの三つ: 全て ok は 0、NG が在れば 1、引数不受理は 2', () => {
+    const b = sandbox();
+    try {
+      expect(setup(b).status).toBe(0);
+      expect(check(b.repo, b).status).toBe(0);
+      expect(check(b.repo, b, '--all').status).toBe(0);
+      expect(check(b.repo, b, '--nope').status).toBe(2);
+      expect(sh('git', ['checkout', '-q', '--detach', 'old'], b.repo, b.env).status).toBe(0);
+      expect(check(b.repo, b).status).toBe(1);
+    } finally {
+      done(b);
+    }
+  });
+});
