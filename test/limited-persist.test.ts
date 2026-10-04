@@ -12,7 +12,7 @@ import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { deliver } from '../src/inbox';
 import { limitedWaitMs } from '../src/busy';
-import { stateOf, revive, markLimited } from '../src/nudge';
+import { stateOf, revive, markLimited, holdForReview } from '../src/nudge';
 import { runNudge } from '../src/main';
 
 // 実物の旗（殿採取・2026-09-05・claude）
@@ -208,3 +208,43 @@ describe('markLimited は覚えを縮めぬ（守りを直に撃つ）', () => {
   });
 });
 
+/**
+ * 枠切れの覚え（limited_until）と上役の確認待ち（hold_reason）が交わる所。
+ * 二つは別の枝で入り、plan の同じ所で合わさった。順と、確認待ちが旗の
+ * 消えた後も解けぬことを留める。
+ */
+describe('覚えと確認待ちの交わり', () => {
+  test('確認待ちは旗が画面から消えても解けぬ（L1 でも撃たず、旗を読みにも行かぬ）', async () => {
+    const path = join(tmpdir(), `limited-hold-${Date.now()}.db`);
+    const db = seeded(path);
+    // 未読の山を新しくし、段を L1 にしておく（L3 の無応答の保留と混ぜぬ）
+    db.run('UPDATE nudge SET since = ? WHERE agent = ?', [new Date().toISOString(), 'ashigaru9']);
+    holdForReview(db, 'ashigaru9', 'undated-limit', new Date());
+    db.close();
+
+    const s1 = spy();
+    let reads = 0;
+    const r1 = await runNudge(path, false, false, undefined, 'core', paneReader,
+      () => false, () => { reads += 1; return null; }, s1.sender);
+    expect(r1.code).toBe(0);
+    expect(s1.sent).toEqual([]);
+    expect(reads).toBe(0); // 旗が消えておっても、plan の段で止まる
+    expect((r1.out ?? '').includes('上役の確認待ち（undated-limit')).toBe(true);
+  }, 20_000);
+
+  test('覚えと確認待ちが両方立てば、覚えの分岐が先に効く（刻が来れば人を待たずに明ける）', async () => {
+    const path = join(tmpdir(), `limited-hold-both-${Date.now()}.db`);
+    const db = seeded(path);
+    holdForReview(db, 'ashigaru9', 'unresponsive', new Date());
+    markLimited(db, 'ashigaru9', new Date(Date.now() + 60 * 60_000));
+    db.close();
+
+    const s1 = spy();
+    const r1 = await runNudge(path, false, false, undefined, 'core', paneReader,
+      () => false, () => null, s1.sender);
+    expect(r1.code).toBe(0);
+    expect(s1.sent).toEqual([]);
+    expect((r1.out ?? '').includes('明けるまで撃たず')).toBe(true);
+    expect((r1.out ?? '').includes('上役の確認待ち')).toBe(false);
+  }, 20_000);
+});
