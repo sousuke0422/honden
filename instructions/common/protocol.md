@@ -193,10 +193,14 @@ LXC か systemd container を考える。
 
 横乗せの一行が出たとき、または `inbox_notice unread=N …` を受け取ったとき:
 
-1. `honden inbox read` — 自分の未読が出る（見せた id が正本に写される）
-2. `honden inbox ack --all` — **直近の read が見せた未読だけ**既読にする（着手の印。id を並べて一件ずつでもよい）。read 以降に届いた未読があるなら断る——もう一度 read してから ack せよ
-3. type ごとに処理する。ack は「読んだ」の意で「済んだ」ではない——処理を待って既読を遅らせると、芯が「無視された」と見て文脈を消しに来る
-4. Resume normal workflow
+1. `honden inbox read` — 自分の未読が出る
+2. `honden inbox ack <id>...` — read が見せた id だけを、処理の前に既読にする（着手の印）。
+   **先に既読にするのは、未読が残る限り芯が合図を撃ち続け、処理の最中に己の文脈を消しに来るためである**
+3. type ごとに処理する。ack は「読んだ」の意で「済んだ」ではない
+4. 未読が残っておれば（read の後に届いた分）1 へ戻る。`ack --all` を打っても見ておらぬ分は既読にならぬ——
+   直近の read が見せた未読だけを既読にし、それ以降に届いた未読があれば一件も触らずに断る
+   （確かめ手: `src/inbox.ts` の `ackAll`）
+5. Resume normal workflow
 
 既読にできるのは自分のものだけ。他人の inbox を既読にすると、その相手は報せが来たことを
 永久に知らぬ。自分のものでない id が混じっておれば、**一件も既読にせず**断る——
@@ -211,8 +215,14 @@ LXC か systemd container を考える。
 **After completing ANY task, BEFORE going idle:**
 
 1. `honden inbox unread` — 未読の内訳を見る
-2. 未読があれば `honden inbox read` して処理し、`honden inbox ack --all`
-3. Only then go idle
+2. `honden status` — 検め待ちの報告を見る。未読 0 は「済んだ」ではない。
+   報せは既読で消えるが、検め待ちは状態ゆえ残る（前の座が読んだだけのこともある）。
+   己の役が手を下す物なら、対応してから待つ。分けは上の `report_unreviewed` の段に同じ——
+   軍師は検め、家老は検めの運びを差配する。足軽と将軍は見るだけでよい
+3. 未読があれば `honden inbox read` し、見せた id をすぐ `honden inbox ack <id>...`（着手の印。処理は ack の後。
+   先に既読にせねば、芯が合図を撃ち続けて処理の最中に文脈を消しに来る）。残る未読は再び read する
+4. 読んだ報せを type ごとに処理する（上の Inbox Processing Protocol に従う）
+5. Only then go idle
 
 This is NOT optional. If you skip this and a redo message is waiting,
 you will be stuck idle until the next escalation or task reassignment.
@@ -276,6 +286,29 @@ EOF
 
 殿が席を外しておられ、様態が `autonomous` の間は、家老 → 将軍の inbox も開く。
 戻し忘れの害がまさにこの守りの防ごうとしているものゆえ、`--until` を付けて開けること。
+
+## 道具の出力を鵜呑みにするな
+
+**フィルタを通った表示を、証拠として報告へ転記するな。**
+
+SHA・commit の確認は `git rev-parse <ref>` か `git rev-list -1 <ref>` を使え。
+`git log` の表示を根拠に tip・基準 commit・commit 数を報告へ書いてはならぬ。
+
+**理由（実測・cmd_706）**: `rtk git log` は `--merges` 指定が無いと
+**merge commit を黙って除外する**。`-N` の件数指定は除外後に適用されるゆえ
+**件数が合ってしまい、欠落に気づく手掛かりが残らぬ**。
+PR merge 運用の repo では main の tip はほぼ常に merge commit ゆえ、
+「`git log` で tip 確認」は**系統的に誤る**。
+
+| 信用できる | `rev-parse` / `rev-list` / `show` / `cat-file` / `--merges` を明示した `git log` |
+|---|---|
+| 汚れておる | `--merges` 無しの `git log`（tip 確認・基準の選定・commit 数の勘定・系譜の推論） |
+
+履歴の完全性が要る場面では `GIT_REAL=/usr/bin/git` で実体を直に叩け（token は失う。常用はせぬ）。
+
+これは git に限らぬ。**道具の出力は観測であって事実ではない**——
+何かを「無い」「変わらぬ」「通った」と報告する前に、
+その道具が**在る物を見せられる**ことを確かめよ（陽性対照）。
 
 ## File Operation Rule
 

@@ -659,6 +659,37 @@ export function coverageOf(db: Database, cmdId: string): Coverage {
   };
 }
 
+/** 開いておる司令に検め待ちの報告。`coverageOf` と同じ定め。 */
+export interface PendingReview {
+  id: number;
+  agent: string;
+  taskId: string | null;
+  cmdId: string;
+}
+
+/**
+ * 開いておる司令すべてから、検め待ちの報告を集める。
+ *
+ * `cmd show` の「検め待ち」と同じ問い——座が入れ替わっても
+ * `status` / `cmd list` を一度叩けば残りが見えるようにする。
+ */
+export function listPendingReviews(db: Database): PendingReview[] {
+  const cmds = db
+    .query(`SELECT id FROM cmd WHERE status IN ('pending','in_progress') ORDER BY created_at`)
+    .all() as { id: string }[];
+  const out: PendingReview[] = [];
+  for (const c of cmds) {
+    for (const u of coverageOf(db, c.id).unreviewed) {
+      out.push({ id: u.id, agent: u.agent, taskId: u.taskId, cmdId: c.id });
+    }
+  }
+  return out;
+}
+
+export function formatPendingReview(p: PendingReview): string {
+  return `#${p.id} ${p.agent}/${p.taskId ?? '?'}`;
+}
+
 /**
  * 司令を閉じる。
  *
