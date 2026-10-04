@@ -46,7 +46,10 @@ if shared_value="$(git config --file "$SHARED" --get core.hooksPath 2>/dev/null)
   } >&2
 fi
 
-chmod +x .githooks/prepare-commit-msg .githooks/commit-msg .githooks/lib/strip-cursor-trailers.sh 2>/dev/null || true
+# 入口の二本だけ。指標の mode（755）が効かぬ clone（core.filemode=false や実行権の落ちた展開）の保険。
+# lib/strip-cursor-trailers.sh は prepare-commit-msg が `.` で読むだけで実行権は要らぬ（指標の mode は 644 が正しい）。
+# lib まで chmod すると、core.filemode=true の clone で ` M`（mode の差）が出る。
+chmod +x .githooks/prepare-commit-msg .githooks/commit-msg 2>/dev/null || true
 
 # --worktree は、拡張が立っておらぬと --local と同じ（共有へ書く）になる。先に立てる。
 git config extensions.worktreeConfig true

@@ -77,3 +77,65 @@ Co-authored-by: Cursor <cursoragent@cursor.com>
     });
   });
 });
+
+// 紋様は表示名でなく宛先の領域（@cursor.com）で留める。表示名は Cursor 本体に埋まった
+// 文字列で、こちらは握っておらぬ（実打で `Cursor Agent <cursoragent@cursor.com>` が
+// 旧い紋様を通り抜け、commit object に残った）。
+const DROP = [
+  'Co-authored-by: Cursor <cursoragent@cursor.com>',
+  'Co-authored-by: Cursor Agent <cursoragent@cursor.com>',
+  'Co-authored-by: cursor <agent@cursor.com>',
+];
+const KEEP = [
+  'Co-authored-by: Alice <alice@example.com>',
+  'Co-authored-by: Bob <bob@cursor.company.example>',
+  'Assisted-by: multi-agent-shogun-aki-tweak',
+  'Signed-off-by: Carol <carol@example.com>',
+];
+
+describe('githooks: 落とす紋様は宛先の領域で留める', () => {
+  for (const line of DROP) {
+    test(`strip: 落とす — ${line}`, async () => {
+      await withMsg(`feat: 試し\n\n${line}\n`, async (file) => {
+        runStrip(file);
+        const after = await readFile(file, 'utf8');
+        expect(after).not.toContain(line);
+        expect(after).toContain('feat: 試し');
+      });
+    });
+
+    test(`commit-msg: 拒む — ${line}`, async () => {
+      await withMsg(`fix: x\n\n${line}\n`, async (file) => {
+        const r = spawnSync(COMMIT_MSG, [file], { encoding: 'utf8' });
+        expect(r.error).toBeUndefined();
+        expect(r.status).toBe(1);
+      });
+    });
+  }
+
+  for (const line of KEEP) {
+    test(`strip: 残す — ${line}`, async () => {
+      await withMsg(`feat: 試し\n\n${line}\n`, async (file) => {
+        runStrip(file);
+        expect(await readFile(file, 'utf8')).toContain(line);
+      });
+    });
+
+    test(`commit-msg: 通す（exit 0） — ${line}`, async () => {
+      await withMsg(`fix: x\n\n${line}\n`, async (file) => {
+        const r = spawnSync(COMMIT_MSG, [file], { encoding: 'utf8' });
+        expect(r.error).toBeUndefined();
+        expect(r.status).toBe(0);
+      });
+    });
+  }
+
+  // Co-authored-by を一律に拒む形へ広げても緑のまま通ってしまう穴を塞ぐ。
+  test('commit-msg: 人の Co-authored-by は exit 0 で通る（一律に拒まぬ）', async () => {
+    await withMsg('fix: x\n\nCo-authored-by: Alice <alice@example.com>\n', async (file) => {
+      const r = spawnSync(COMMIT_MSG, [file], { encoding: 'utf8' });
+      expect(r.error).toBeUndefined();
+      expect(r.status).toBe(0);
+    });
+  });
+});
