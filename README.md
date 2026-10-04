@@ -34,7 +34,32 @@ honden はそれらを起こす側で、中身は問わない。
 git clone --recurse-submodules https://github.com/sousuke0422/honden
 cd honden
 bash scripts/first_setup.sh
+bash scripts/setup_githooks.sh   # Cursor が差す Co-authored-by を落とす（任意・この worktree だけ）
 ```
+
+`setup_githooks.sh` は `core.hooksPath` を**走らせた worktree にだけ**据える
+（`extensions.worktreeConfig` を立て、`git config --worktree` で書く）。
+指す先は、どの木で走らせても**本の木（primary worktree）の `.githooks` の絶対路**である。
+`git worktree add` は作った側の `config.worktree` を新しい木へ写すので、相対の路では、
+`.githooks` の無い枝の木で hook が警め無しに外れる。本の木に `.githooks` が無ければ、script は何も書かずに止まる。
+
+据えた後、**どの木でも指しておる路が実在する**ことを確かめる。見るのは出所ではなく、
+**指す先に `commit-msg` と `prepare-commit-msg` が実在し、実行できること**である（出所の表示だけでは、指す先が消えておっても気づけぬ）。
+`setup_githooks.sh` は、入口二本が実行できなければ何も据えずに止まり（git は実行権の無い hook を黙って走らせぬ）、
+据えた後は自らこれを検め、NG があれば非ゼロで終える。いつでも打てる:
+
+```bash
+bash scripts/check_githooks.sh      # 木ごとに ok / NG。NG が一つでもあれば非ゼロ
+```
+
+指す先は本の木の `.githooks` ゆえ、**本の木が `.githooks` を持たぬ枝へ移る・repo の在処を動かす・
+本の木を動かすか消す**と、git は警めを出さずに、どの木でも hook が落ちる。NG はその印である
+（本の木を `.githooks` の在る枝へ戻すか、repo を元の在処へ戻すか、`setup_githooks.sh` を据え直す）。
+据えておらぬ木（global の hook が走る）は `--` と出て、NG には数えぬ（`--all` で数える）。
+
+共有の `.git/config` に `core.hooksPath` が在れば全 worktree に効いておる——
+`setup_githooks.sh` が示した外し方（`git config --local --unset core.hooksPath`）を見よ。
+`extensions.worktreeConfig` は古い git が拒むことがある（理由と版は script の冒頭の註）。
 
 道具を確かめ、本体を用意し、設定と正本を整えて一覧で結ぶ。
 **勝手には入れない。**
