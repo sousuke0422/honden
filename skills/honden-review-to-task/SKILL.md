@@ -10,7 +10,7 @@ description: |
   PR に紐づかぬ課題の起票（task の通常タスクを使え）、
   GitHub へのインラインコメント投稿（**仕様で禁じられている**）。
 allowed-tools: Bash
-argument-hint: "<PR番号> [--project <キー>]"
+argument-hint: "[PR番号] [--project project] [--repo owner/name]"
 ---
 
 # honden-review-to-task — レビュー指摘を task へ移す
@@ -39,11 +39,59 @@ Do NOT use for:
 - `task` CLI が使えること（`task review submit` があること）
 - `honden` が道に在ること（投入前の検めに使う）
 
+## 引数
+
+- `$0`：PR 番号。必須。
+- `--project <project>`：task の project key または UUID。必須。
+- `--repo <owner/name>`：対象 repo。省略時は cwd の repo を使う。
+  対象 repo の木の外から実行するときは必ず渡す。
+
+## task CLI の設定
+
+この skill は `task` を直接呼ぶため、shell に次の三つが要る。
+
+```bash
+export TASK_API_URL=https://task.koyori.app/api
+export TASK_TOKEN=...
+export TASK_TENANT=...
+task auth whoami --json
+```
+
+honden の木では秘密を git に載せず `.envrc` に書き、`direnv allow` で読む。
+`TASK_TENANT` は推測しない。PAT の `/personal_tokens/me` は `tenant_id` を返さず、
+同名の陣を推すと 403 になることを 2026-09-21 に実測したため、明示するほかない。
+**2026-09-24 時点**（`task --version` 実測 **0.1.26**）の `task auth whoami --json` については次の二つ。
+(a) 応答に **`tenant_id` 鍵が載る**（id / name / user_id / username / scopes /
+allowed_project_ids / expires_at とともに）。
+(b) その `whoami` を打つには **依然 `TASK_TENANT` が要る**——`env -u TASK_TENANT
+task auth whoami --json` は exit 2（tenant_id 未設定）になる。
+2026-09-23 までは (a) が成り立たず「返らない」と書いてあった——当時正しかった。
+(b) を要らなくする修正は task の **PR #786**（merge 済み 2026-09-23T23:06:21Z）だが、
+**merge は版の公開ではない**——2026-09-24 実測の最新 GitHub release tag はまだ **v0.1.26** で、
+#786 を含む **CLI リリースは未だ出ていない**。その版を入れたら (b) は消える見込みである。
+確かめ手は変えない: `task --version` と `env -u TASK_TENANT task auth whoami --json`
+（**0.1.26 では exit 2**。版が出たら誰かがこの行の tag 名を具体値へ書き換えてよい）。
+
+`TASK_API_URL` の末尾の `/api` は必須である。2026-09-22 に PR #768 で、
+`https://task.koyori.app` は `Resource not found`、
+`https://task.koyori.app/api` は成功することを実測した。前者の表示から
+口の違いは分からないため、鍵・陣・案件を疑う前に `/api` を確かめる。
+
+同じ実測で `/api/v1/personal_tokens/me` は 200 でも tenant_id を返さず、
+`/api/v1/tenants` は 403、`/api/v1/users/me` と `/me` は 401、
+`/api/v1/tenants/me` は UUID として読めず 400 だった。
+review の口は `/tenants/{tenant}/projects/{project}/…` なので、陣の UUID は明示する。
+
+honden 自身が `cmd done` で使う review gate は別経路である。
+その tenant は `settings.yaml` の `review.gate.tenant`、案件別なら
+`review.gates.<id>.tenant` に書く。直接 `task` を呼ぶこの skill の
+`TASK_TENANT` を settings が自動で shell へ出すわけではない。
+
 ---
 
 ## 手順
 
-### Step 1: head SHA を取る
+### Step 1: 対象 repo と head SHA を取る
 
 **40 桁の小文字 16 進でなければならない。** 短縮 SHA を渡すと、そのラウンドは
 指摘を全部解消しても通らなくなる（ゲートが `latest_head_sha` を厳密一致で
@@ -51,10 +99,43 @@ Do NOT use for:
 出るので、画面から原因を辿れない。
 
 ```bash
-gh pr view <PR番号> --json headRefOid -q .headRefOid
+pr="$0"
+project="…" # --project で受けた project key または UUID
+repo_arg="…" # --repo で受けた owner/name。省略時は空文字
+if [[ -n "$repo_arg" ]]; then
+  repo="$repo_arg"
+else
+  repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+fi
+pr_json=$(gh pr view "$pr" --repo "$repo" --json headRefOid,url)
+head_sha=$(jq -r .headRefOid <<<"$pr_json")
+pr_url=$(jq -r .url <<<"$pr_json")
+[[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'head_sha が 40 桁の sha でない: %s\n' "$head_sha" >&2
+  exit 1
+}
+[[ "$pr_url" == "https://github.com/$repo/pull/$pr" ]] || {
+  printf 'repo 不一致: %s\n' "$pr_url" >&2
+  exit 1
+}
 ```
 
-`gh` が使えないなら `git rev-parse <ref>`。
+`head_sha` はここで一度だけ取り、findings JSON と Step 7 の `--head` に使い回す。
+レビューには時間がかかり、その間に PR へ push されうる。Step 6（submit の直前）と
+Step 7（判定の直前）は、**比べるためだけ**に `gh pr view … --json headRefOid` を
+それぞれ打ち直す。取り直した値で `$head_sha` を上書きせぬこと——findings は最初の head を
+レビューしたものだからである。
+`git rev-parse HEAD` は cwd の checkout を写すだけで、PR の head とは限らない。
+`repo` と `pr_url` が食い違えば、別 repo の同番号 PR なので投入せず止める。
+
+**段をまたぐ依存は値だけにする。** 取り直しは関数にせず、各段へ同じ取り直しを書き写す
+（Step 2 と Step 6 が同じ `jq` 式を書き写すのと同じ流儀）。関数を Step 1 に置くと、
+Step 6・7 を新しい shell で撃った時に「command not found」になり、
+しかもそれが「head を取り直せなかった」という誤診へ化ける。
+各段が前提にしてよい値は `pr` / `repo` / `project` / `head_sha` の四つだけである。
+
+`gh` が使えないなら、PR 自身の `headRefOid` を取れないので止める。
+cwd の ref を代用しない。
 
 > **`git log` の表示を根拠にしてはならない。** merge commit を黙って除外する
 > ことがあり、件数が合ってしまうので欠落に気づけない（honden の
@@ -63,10 +144,37 @@ gh pr view <PR番号> --json headRefOid -q .headRefOid
 ### Step 2: 既に同じラウンドが無いか見る
 
 ```bash
-task review rounds --project <キー> --pr <PR番号>
+task --version
+task auth whoami --json
+rounds_before_json=$(task review rounds \
+  --project "$project" --pr "$pr" --repo "$repo" --json) || {
+  rounds_exit=$?
+  printf 'task review rounds が失敗（exit=%s）。\n' "$rounds_exit" >&2
+  exit 1
+}
+if ! jq -e 'type == "array"' <<<"$rounds_before_json" >/dev/null; then
+  printf 'task review rounds の応答が JSON 配列でない。\n' >&2
+  exit 1
+fi
+if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json" >/dev/null; then
+  printf 'head %s の round は既にある。新しい round を作らず、task review resolve で個々を動かせ。\n' \
+    "$head_sha" >&2
+  exit 1
+fi
 ```
 
-**同じ head SHA のラウンドが既にあれば、そこで止める。** 二度投入すると
+`whoami` は review command より先に打つ。403 は PAT が偽とは限らず、
+scope、tenant、project authorization の不足でも起きるためである。
+
+PR 番号は引数、head SHA は Step 1 の GitHub `headRefOid`、round 番号と
+finding ID は `task review submit` / `task review rounds` の応答から取る。
+cwd の Git の状態や表示順から推測しない。
+
+**同じ head SHA のラウンドが既にあれば、そこで止める。** 上の
+`jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)'` がその門である。
+Step 6 でも submit の直前に `rounds_before_json` を読み直し、**同じ式**で
+もう一度止める（head が動けば通る。`--force` のような抜け道は要らぬ）。
+二度投入すると
 R2（第二ラウンド）ができ、「同じ commit を二度レビューした」ことになる。
 
 指摘を差し替えたい場合は、新しいラウンドを作るのではなく
@@ -109,6 +217,7 @@ task は `deferred` にした指摘から通常タスクを自動で起票する
 }
 ```
 
+- `head_sha` は Step 1 の `$head_sha` をそのまま書く。cwd の HEAD や取り直した値を混ぜない
 - `title` はレビューの指摘タイトルをそのまま
 - `body` に**説明と `→` の対処法**を入れる。ここが薄いと直す者が困る
 - `file` / `line` は分かる時だけ。`line` は 1 以上の整数
@@ -138,20 +247,191 @@ honden review check findings.json --expect high=2,medium=3,low=1,nit=0
 
 ### Step 6: 投入する
 
+**取れなかった物を、取れたことにするな。** `$(task … | jq …)` は `task` が落ちても
+`jq` が空入力で黙って通る——`jq -e` だけでは足りぬ（`[]` は有効な JSON である）。
+`task` の exit と、JSON が**配列**であることの両方を見てから数えよ。
+
+**`task review submit` に `--repo` は無い**（0.1.24 の `--help` で実測。旗は
+`--json` / `--project` / `--pr` のみ）。投入先の repo は project の
+GitHub 連携先（current integration）から決まる——`rounds --help` の
+`--repo` の既定が「the current integration」と明言している。
+ゆえに `--project` と `--repo` の組を誤ると、Step 1 は指定 repo の PR を
+正しく検めたのに、round は連携先側の同番号 PR へ立つ。読み返す先
+（`--repo "$repo"`）には現れないので、誤投入したのに「round なし」に
+見えて気づけない。
+
+0.1.24 の `task review summary --project "$project" --pr "$pr" --json` は、
+`--repo` を渡さなければ current integration を使い、JSON の `repository` に
+その repo 名を返す（2026-09-23 実測）。`summary` は未レビュー等でも有効な
+JSON を出して exit 1 になるため、exit 0 と 1 の双方を受け入れた上で
+`repository` を**投入前に** `$repo` と厳密比較する。欠落、不正な JSON、
+食い違いのいずれでも投入せず止める。
+
+> **門を足したら**、その門が除いた原因を stderr と失敗表に書いておるか見直せ。
+> 筆頭の案内が古い仮説のままだと次の踏み手が誤る——投入前の連携先照合を足した後も、
+> 投入後の読み取り遅れを「連携先の疑い」として筆頭に書く、といった残りがないか。
+
 ```bash
-task review submit findings.json --project <キー> --pr <PR番号>
+if integration_json=$(task review summary \
+  --project "$project" --pr "$pr" --json); then
+  integration_exit=0
+else
+  integration_exit=$?
+fi
+[[ "$integration_exit" -eq 0 || "$integration_exit" -eq 1 ]] || {
+  printf 'project の GitHub 連携先を取得できぬ（task review summary exit=%s）。\n' \
+    "$integration_exit" >&2
+  exit 1
+}
+integration_repo=$(jq -er \
+  '.repository | select(type == "string" and length > 0)' \
+  <<<"$integration_json") || {
+  printf 'task review summary の JSON に有効な repository が無い。投入せず止める。\n' >&2
+  exit 1
+}
+[[ "$integration_repo" == "$repo" ]] || {
+  printf 'repo 不一致: --project %s の GitHub 連携先は %s、対象は %s。投入せず止める。\n' \
+    "$project" "$integration_repo" "$repo" >&2
+  exit 1
+}
+
+rounds_before_json=$(task review rounds \
+  --project "$project" --pr "$pr" --repo "$repo" --json) || {
+  rounds_exit=$?
+  printf 'task review rounds（投入前）が失敗（exit=%s）。投入せず止める。\n' "$rounds_exit" >&2
+  exit 1
+}
+if ! jq -e 'type == "array"' <<<"$rounds_before_json" >/dev/null; then
+  printf 'task review rounds（投入前）の応答が JSON 配列でない。投入せず止める。\n' >&2
+  exit 1
+fi
+rounds_before=$(jq 'length' <<<"$rounds_before_json")
+
+if jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_before_json" >/dev/null; then
+  printf 'head %s の round は既にある。新しい round を作らず、task review resolve で個々を動かせ。\n' \
+    "$head_sha" >&2
+  exit 1
+fi
+
+# 投入の直前に PR の head が動いておらぬか見る。ここで止まれば、まだ投入しておらぬ。
+head_now=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) || head_now=""
+if [[ ! "$head_now" =~ ^[0-9a-f]{40}$ ]]; then
+  printf 'PR の現在の head を取り直せなかった。head が動いたか分からぬ。投入はしておらぬ。止める。\n' >&2
+  exit 1
+fi
+[[ "$head_now" == "$head_sha" ]] || {
+  printf 'head が動いた（%s → %s）。再レビューしてから投入せよ。投入はしておらぬ。\n' \
+    "$head_sha" "$head_now" >&2
+  exit 1
+}
+
+task review submit findings.json --project "$project" --pr "$pr" || {
+  submit_exit=$?
+  if rounds_reread_json=$(task review rounds \
+    --project "$project" --pr "$pr" --repo "$repo" --json); then
+    if ! jq -e 'type == "array"' <<<"$rounds_reread_json" >/dev/null; then
+      printf 'task review submit が失敗（exit=%s）。rounds は返ったが JSON 配列でない。弾かれたかは分からぬ。\n' \
+        "$submit_exit" >&2
+    elif jq -e --arg h "$head_sha" 'any(.[]; .head_sha == $h)' <<<"$rounds_reread_json" >/dev/null; then
+      printf 'task review submit が失敗（exit=%s）。この head の round は既に立っている。撃ち直すな。task review resolve で個々を動かせ。\n' \
+        "$submit_exit" >&2
+    else
+      printf 'task review submit が失敗（exit=%s）。この head の round は読み返しでは見つからない。同じ命令を撃ち直してよい。\n' \
+        "$submit_exit" >&2
+    fi
+  else
+    rounds_reread_exit=$?
+    printf 'task review submit が失敗（exit=%s）。rounds を読み返せなかった（exit=%s）。弾かれたかは分からぬ。\n' \
+      "$submit_exit" "$rounds_reread_exit" >&2
+  fi
+  exit 1
+}
+
+rounds_json=$(task review rounds \
+  --project "$project" --pr "$pr" --repo "$repo" --json) || {
+  rounds_exit=$?
+  printf 'task review submit は成功した。task review rounds（投入後）が失敗（exit=%s）。\n' \
+    "$rounds_exit" >&2
+  printf 'submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
+  exit 1
+}
+if ! jq -e 'type == "array"' <<<"$rounds_json" >/dev/null; then
+  printf 'task review submit は成功した。task review rounds（投入後）の応答が JSON 配列でない。\n' >&2
+  printf 'submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
+  exit 1
+fi
+rounds_after=$(jq 'length' <<<"$rounds_json")
+[[ "$rounds_after" -gt "$rounds_before" ]] || {
+  printf 'task review submit は成功した。読み返しでは round が増えて見えぬ（%s の PR #%s、%s 件のまま）。\n' \
+    "$repo" "$pr" "$rounds_after" >&2
+  printf '読み取りの遅れか別の投入と交錯した疑いがある。submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
+  printf '念のため: 投入前に照合した連携先が投入の後で差し替わっておらぬか。\n' >&2
+  printf -- '--project %s の GitHub 連携先と %s、連携先側の同番号 PR に round が立っておらぬか検分せよ。\n' \
+    "$project" "$repo" >&2
+  exit 1
+}
+latest_head=$(jq -r 'max_by(.round).head_sha' <<<"$rounds_json")
+[[ "$latest_head" == "$head_sha" ]] || {
+  printf 'task review submit は成功した。読み返した最新 round の head_sha (%s) が投入した %s と違う。\n' \
+    "$latest_head" "$head_sha" >&2
+  printf 'rounds の一覧を目で検分し、己の round がどれかを確かめてから先へ進め。submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。\n' >&2
+  exit 1
+}
 ```
 
 一括で 1 回だけ呼ぶ（1 件ずつ送らない）。
 
 ### Step 7: マージ可否を見て、そのまま報告する
 
+投入はすでに済んでおる。ゆえにここで止める言葉は Step 6 の直前の門と**違う**
+（「投入しておらぬ」と読める言葉を、投入の後に出してはならぬ）。
+
 ```bash
-task review summary --project <キー> --pr <PR番号>
+# 判定の直前に PR の head が動いておらぬか見る。ここで止まれば、投入は済んでおる。
+head_now=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) || head_now=""
+if [[ ! "$head_now" =~ ^[0-9a-f]{40}$ ]]; then
+  printf '投入は済んでおる。判定の前に PR の現在の head を取り直せなかった。head が動いたか分からぬ。mergeable とは言えぬ。submit を撃ち直すな。head の取り直しだけを撃ち直せ。\n' >&2
+  exit 1
+fi
+[[ "$head_now" == "$head_sha" ]] || {
+  printf '投入は済んだが、その後に head が動いた（%s → %s）。新しい head は未レビューゆえ mergeable とは言えぬ。submit を撃ち直すな。\n' \
+    "$head_sha" "$head_now" >&2
+  exit 1
+}
+
+if summary_json=$(task review summary \
+  --project "$project" --pr "$pr" --repo "$repo" --head "$head_sha" --json); then
+  summary_exit=0
+else
+  summary_exit=$?
+fi
+summary_json_valid=false
+if printf '%s\n' "$summary_json" | jq -e . >/dev/null; then
+  summary_json_valid=true
+fi
 ```
 
-**未解決の High/Medium が残っていれば終了コード 1** になる。これがマージ可否の
-答えであり、`/honden-review` の総合判定はその要約に添える形で伝える。
+`task review summary` は `--head` を省くと cwd の `git rev-parse HEAD` を比較対象にする。
+別 repo の木から叩けば、無関係な SHA と比べて偽の `blocked` を返す。
+この罠は 2026-09-17 に `honden-review-check` で実測し、2026-09-21 には
+PR #749 を honden の木から調べて honden の main HEAD と比較する形で再発した。
+ゆえに cwd にかかわらず、Step 1 の PR `headRefOid` を `--head` に必ず渡す。
+
+**未解決の High/Medium が残っていれば終了コード 1** になる。ただし、
+有効な summary JSON を取れない exit 1 は通信障害等であり `blocked` ではない。
+隣の `honden-review-check` と同じく、次の語で報告する。
+
+| exit | JSON | 報告 |
+|---:|---|---|
+| 0 | 有効 | `mergeable` |
+| 1 | 有効 | `blocked`。未解決、未検証、古い SHA を列挙 |
+| 1 | 無効 | `判定不能: task 側未読` |
+| 2 | — | 設定不足または入力不正。stderr で分ける |
+| 3 | — | 認証失敗（401） |
+| 4 | — | 権限不足（403） |
+| 5 | — | 対象なし（404） |
+
+`/honden-review` の総合判定は、この task 側の要約に添える形で伝える。
 
 ```
 レビュー指摘を task へ入れた（R1 / <head SHA の先頭 7 桁>）
@@ -169,7 +449,16 @@ task review summary --project <キー> --pr <PR番号>
 | `honden review check` が件数違いで止まる | レビュー出力を数え直す。**申告のほうが正しいとは限らない** |
 | `severity must be one of` | `critical` を書いている。💥 は `high` へ潰す |
 | head SHA が弾かれる | 短縮を渡している。`--json headRefOid` で取り直す |
-| 同じ head SHA のラウンドが既にある | 二度目である。投入せず、`task review resolve` で個々を動かす |
+| 同じ head SHA のラウンドが既にある（Step 2 / submit 直前の門） | 二度目である。`task review resolve` で個々を動かす |
+| 同じ head で新しい指摘を見つけた | head が動くのを待ち、次の round で出す。待てぬなら `/external-to-honden` で殿へ送り、盤の外に残す |
+| `task review submit` が非ゼロで返り、読み返しで同じ head の round がある | 撃ち直すな。`task review resolve` で個々を動かす |
+| `task review submit` が非ゼロで返り、読み返しで同じ head の round が無い（配列として読めた） | 同じ命令を撃ち直してよい |
+| `task review submit` が非ゼロで返り、rounds の読み返し自体が落ちる | 弾かれたかは分からぬ。exit を報告し、殿へ相談する |
+| `task review submit` が非ゼロで返り、rounds は返ったが JSON 配列でない | 弾かれたかは分からぬ（「撃ち直してよい」には落とさない） |
+| `task review submit` は成功したが、投入後の `rounds` が失敗または JSON 配列でない | submit を撃ち直すな。rounds の読み取りだけを撃ち直せ |
+| `task review submit` は成功したが、読み返しで round が増えない／head が違う | submit を撃ち直すな。rounds の読み取りだけを撃ち直せ。念のため投入前に照合した連携先が投入後で差し替わっておらぬか、一覧を検分せよ |
+| 投入の直前（Step 6）で head が動いた／取り直せない | **まだ投入しておらぬ。** 再レビューしてから投入せよ（取り直せぬ時は動いたか分からぬ。通さず止める） |
+| 判定の直前（Step 7）で head が動いた／取り直せない | **投入は済んでおる。** 新しい head は未レビューゆえ `mergeable` と言えぬ。submit を撃ち直すな（取り直せぬ時は head の取り直しだけを撃ち直せ） |
 | `task` CLI が無い | 投入は諦め、レビュー結果を会話に残したまま殿へ告げる |
 
 ## 注意

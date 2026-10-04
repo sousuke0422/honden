@@ -159,6 +159,8 @@
 !scripts/setup_task_cli.sh
 !scripts/setup_skills.sh
 !scripts/setup_addons.sh
+!scripts/setup_githooks.sh
+!scripts/check_githooks.sh
 !scripts/agent_status.sh
 !scripts/ratelimit_check.sh
 !scripts/switch_cli.sh

@@ -363,7 +363,7 @@ checks:
 4. 家老へ伝えよ:
    `honden inbox write --to karo --type report_received --from gunshi --body "…"`
    （`report submit` の報せは軍師自身の未読へ落ちる。足軽の報告を受ける口と同じ口ゆえ、家老へは自分で伝えねば届かぬ）
-5. **自分の未読を検めよ（必須）**: `honden inbox read` → 処理 → `honden inbox ack --all`
+5. **自分の未読を検めよ（必須）**: 共通の儀式「MANDATORY Post-Task Inbox Check」を踏め（順はそこにだけ書く）
 
 **質の担保:**
 

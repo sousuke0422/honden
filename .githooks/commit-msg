@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+COMMIT_MSG_FILE=$1
+
+# 宛先の領域（@cursor.com）で留める。表示名は Cursor 本体に埋まった文字列で、こちらは握っておらぬ。
+# strip-cursor-trailers.sh と同じ紋様にすること（割れれば、strip を抜けた行を門も通す）。
+if grep -qE '^Co-authored-by: .*<[^>]*@cursor\.com>[[:space:]]*$' "$COMMIT_MSG_FILE"; then
+  printf '%s\n' 'commit-msg: Cursor の Co-authored-by が残っている。commit を止めた。' >&2
+  exit 1
+fi

@@ -65,12 +65,14 @@ import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
-import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
-import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
+import {
+  submitReport, submitQc, cmdDone, coverageOf, criteriaOf, listPendingReviews, formatPendingReview,
+} from './report';
+import { plan, send, record, startClocks, withNudgeLock, revive, holdForReview, HOLD_RECHECK_MS, markLimited } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
 import { findStalled, notifyStalled } from './stalled';
 import { notifyUnreviewed } from './unreviewed';
-import { captureBusy, captureLimitedWaitMs, isWorking } from './busy';
+import { captureBusy, captureLimitState, type LimitState, isWorking } from './busy';
 import { assemble as assembleBrief } from './brief';
 import { lookup as helpFor, render as renderHelp, HELP } from './help';
 import { emphasize } from './term';
@@ -109,7 +111,7 @@ import { normsRoot, setSetting } from './settings';
 import { resolve as resolvePath } from 'node:path';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
-import { roster as rosterOf, roleOf as roleOfId, isWorker } from './roster';
+import { roster as rosterOf, roleOf as roleOfId, isWorker, isKnown } from './roster';
 import { leaseState, expired, release, renew, DEFAULT_LEASE_MINUTES } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
@@ -502,8 +504,13 @@ export function runInboxRead(
   const body = msgs
     .map((m) => {
       const mark = m.read ? '  ' : '● ';
+      // 名簿の外からの報せは返せぬ（inbox write --to は名簿に縛られる）。
+      // 読んだ者がそれと分かるよう、表示にだけ @no-reply を添える。
+      // 正本の from は変えぬ。名簿は動くゆえ、覚えずに読むたびに引く——
+      // 差出人が後から名簿へ入れば、同じ報せが印無しで出る。
+      const sender = isKnown(db, m.sender) ? m.sender : `${m.sender} @no-reply`;
       return (
-        `\n  ${mark}${m.id}  [${m.type}] ${m.sender} → ${m.agent}  ${m.createdAt}\n` +
+        `\n  ${mark}${m.id}  [${m.type}] ${sender} → ${m.agent}  ${m.createdAt}\n` +
         m.body
           .split('\n')
           .map((l) => `      ${l}`)
@@ -902,6 +909,13 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
   // 見捨てられた司令に印を立てる。期限切れ（★期限切・握ったまま）とは
   // 別の言葉にする——こちらは握っておらぬのに残っておるもの。
   const abandoned = new Set(findAbandoned(db).map((a) => a.cmdId));
+  const pending = listPendingReviews(db);
+  const pendingByCmd = new Map<string, ReturnType<typeof listPendingReviews>>();
+  for (const p of pending) {
+    const arr = pendingByCmd.get(p.cmdId) ?? [];
+    arr.push(p);
+    pendingByCmd.set(p.cmdId, arr);
+  }
   const lines = rows.map((r) => {
     const who = r.assigned_to ? ` → ${r.assigned_to}` : '';
     const p = r.purpose ? ` ${r.purpose.split('\n')[0]!.slice(0, 42)}` : '';
@@ -911,9 +925,23 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
         ? `閉じて${ago(r.completed_at)}`
         : `起草から${ago(r.created_at)}`;
     const mark = abandoned.has(r.id) ? '  ⚠見捨てられ（振られた跡のみ残り、握る者も報告も無い）' : '';
-    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}`;
+    const review =
+      pendingByCmd.has(r.id)
+        ? `  検め待ち: ${pendingByCmd.get(r.id)!.map(formatPendingReview).join(', ')}`
+        : '';
+    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}${review}`;
   });
-  return { code: EXIT_OK, out: lines.join('\n') + `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` };
+  const pendingTail =
+    pending.length > 0
+      ? `\n\n  検め待ち（${pending.length} 件）: ${pending.map((p) => `${formatPendingReview(p)} (${p.cmdId})`).join(', ')}`
+      : '';
+  return {
+    code: EXIT_OK,
+    out:
+      lines.join('\n') +
+      `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` +
+      pendingTail,
+  };
 }
 
 export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined): RunResult {
@@ -956,7 +984,7 @@ export async function runNudge(
   selfId?: string,
   paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
   busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
-  limitedReader: (pane: Pane, now: Date) => number | null = captureLimitedWaitMs,
+  limitedReader: (pane: Pane, now: Date) => LimitState = captureLimitState,
   sender: typeof send = send,
 ): Promise<RunResult> {
   // 二つの手が同時に撃つのを止める。芯は前の子が終わる前に次を起こすゆえ、
@@ -982,7 +1010,7 @@ async function runNudgeInner(
   selfId?: string,
   paneReader: (session?: string, run?: TmuxRunner) => Map<string, Pane> = panes,
   busyReader: (pane: Pane, cli: string | null) => boolean = captureBusy,
-  limitedReader: (pane: Pane, now: Date) => number | null = captureLimitedWaitMs,
+  limitedReader: (pane: Pane, now: Date) => LimitState = captureLimitState,
   sender: typeof send = send,
 ): Promise<RunResult> {
   const db = openStore({ path: dbPath });
@@ -1027,23 +1055,31 @@ async function runNudgeInner(
     }
   }
   if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy, busyReason, panes: paneMap });
-  // **枠切れの pane には何も撃たぬ。** 5h 枠の枯渇で止まった相手に段梯子を
-  // 上げると /clear が仕掛かりを焼いた上で固まる（殿の実戦報せ・2026-09-05）。
-  // 段も reset の刻印も進めぬ——枠が明けた最初の周から通常の梯子が再開する。
-  //
-  // 刻は plan と同じ now で見る。既定引数に任せると判定ごとに別の時計を引き、
-  // 明ける刻の際どい所で「撃つ/撃たぬ」が一周の中で揺れる。
+  // 枠切れを先に読む。時刻付きは既存の待ち、時刻無しは上役の判断へ回す。
+  // 未知の通知を含む無応答は、文脈を消す直前に保留する。
   for (const p of plans) {
     if (!p.send || !p.pane) continue;
-    const wait = limitedReader(p.pane, now);
-    if (wait !== null) {
+    const limit = limitedReader(p.pane, now);
+    if (typeof limit === 'number') {
       // 旗に明ける刻が書いてあれば、その刻の直後（+2 分）に再訪する。
-      // 読めねば 5 分の盲目再訪。段も reset の刻印も進めぬのは従前どおり。
+      //
+      // 明ける刻は正本へ刻む（plan が次の周から使う）。旗は /clear や
+      // 再描画で写しから消えるゆえ、画面だけを頼ると消えた次の周から
+      // 梯子が再開し、枠切れの相手へ文脈消しまで届く。読めた今、覚える。
+      // 刻の無い旗（undated）は覚えに刻を作らず、下の確認待ちへ回す。
+      if (!dryRun) markLimited(db, p.agent, new Date(now.getTime() + limit));
       p.send = false;
-      p.reason = `使用枠が尽きておる（pane に案内あり）。約${Math.round(wait / 60_000)}分後に再訪——/clear で仕掛かりを焼かぬ`;
-      p.nextInMs = wait;
+      p.reason = `使用枠が尽きておる（pane に案内あり）。約${Math.round(limit / 60_000)}分後に再訪`;
+      p.nextInMs = limit;
+    } else if (limit === 'undated' || p.level === 3) {
+      const holdReason = limit === 'undated' ? 'undated-limit' : 'unresponsive';
+      if (!dryRun) holdForReview(db, p.agent, holdReason, now);
+      p.send = false;
+      p.reason = `上役の確認待ち（${holdReason}）。文脈を消さず、nudge revive で解除`;
+      p.nextInMs = HOLD_RECHECK_MS;
     }
   }
+
   const lines: string[] = [];
 
   if (plans.length === 0) {
@@ -1457,6 +1493,12 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
   }
   if (absent > 0) tail.push(`${absent} 名が布陣に居らぬ`);
   if (urgent > 0) tail.push(`${urgent} 名に急ぎの未読`);
+  const pending = listPendingReviews(db);
+  if (pending.length > 0) {
+    tail.push(
+      `検め待ち ${pending.length} 件: ${pending.map((p) => `${formatPendingReview(p)} (${p.cmdId})`).join(', ')}`,
+    );
+  }
   return {
     code: EXIT_OK,
     out: renderStatus(rows) + (tail.length > 0 ? `\n\n  ${tail.join(' / ')}` : ''),
