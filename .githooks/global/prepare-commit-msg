@@ -32,10 +32,17 @@ else
 fi
 
 # --- 2. 旧 sentinel を Assisted-by へ置き換える -----------------------------
+# 比べる前に行末の CR を除く（CRLF の本文でも当たるように。段 1 の lib も CR を吸う）。
+# 置き換えた行の行末は元の行に揃え、他の行には触らぬ。
 tmp_file=$(mktemp "${COMMIT_MSG_FILE}.XXXXXX") || exit 1
 awk -v sentinel="$SENTINEL" -v trailer="$TRAILER" '
-  $0 == sentinel {
-    print trailer
+  {
+    line = $0
+    cr = ""
+    if (sub(/\r$/, "", line)) cr = "\r"
+  }
+  line == sentinel {
+    print trailer cr
     next
   }
   { print }
