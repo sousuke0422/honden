@@ -153,11 +153,21 @@ test('Fable はL1でもbusyでも保留し、時刻付き旗は既存の待ち�
     const afterDated = stateOf(db, agent);
     screen = ${JSON.stringify(FABLE)};
     db.run('UPDATE nudge SET since = ?', [new Date().toISOString()]);
-    busy = true; await tick();
-    console.log(JSON.stringify({ dated: dated.out, afterDated, sent, state: stateOf(db, agent), notices: notices() }));
+    // 刻の在る旗の覚え（limited_until）が明けておらぬ間は、刻の無い旗でも保留せぬ
+    busy = true; const whileRemembered = await tick();
+    const duringMemory = stateOf(db, agent);
+    // 覚えた刻が明けた後の周を作る（2099 年まで待てぬゆえ、刻を過去へ置く）
+    db.run('UPDATE nudge SET limited_until = ?', [new Date(Date.now() - 60000).toISOString()]);
+    await tick();
+    console.log(JSON.stringify({ dated: dated.out, afterDated, whileRemembered: whileRemembered.out, duringMemory, sent, state: stateOf(db, agent), notices: notices() }));
   `);
   expect(result.dated).toContain('使用枠が尽きておる');
   expect(result.afterDated.hold_reason).toBeNull();
+  // 刻の在る旗は覚えに刻む（待ちには上限があり、刻はその上限で丸められる）
+  expect(result.afterDated.limited_until).not.toBeNull();
+  expect(Date.parse(result.afterDated.limited_until)).toBeGreaterThan(Date.now());
+  expect(result.whileRemembered).toContain('明けるまで撃たず');
+  expect(result.duringMemory.hold_reason).toBeNull();
   expect(result.state.hold_reason).toBe('undated-limit');
   expect(result.sent).toEqual([]);
   expect(result.notices.length).toBe(1);

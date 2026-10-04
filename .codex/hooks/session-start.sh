@@ -63,7 +63,8 @@ else:
 """
 body += f"""
 **受け手の作法**: `inbox_notice unread=N` が届いたら honden inbox read で読み、
-処理したものを honden inbox ack --all で既読にせよ。
+見せた id をすぐ honden inbox ack <id>... で既読にしてから処理せよ。残る未読は再び read する。
+先に既読にするのは、未読が残る限り芯が合図を撃ち続け、処理の最中に文脈を消しに来るためである。
 **急ぎの報せ**は honden のどの副命令の出力にも「⚠ 急ぎの未読」として一行載る。
 
 いまの未読: {os.environ["UNREAD"]}

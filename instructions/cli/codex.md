@@ -175,7 +175,7 @@ Step 1: 名乗り is injected from the pane's @agent_id (never guessed, never ta
 Step 2: honden inbox read  → 己に届いておる報せを読む。task_assigned が任である
 Step 3: honden lease       → 持ち場と期限を確かめる。任が無ければ待て
 Step 4: 他人の持ち場に触れる前に honden claim check <場所> で空きを問え
-Step 5: 読んだらすぐ honden inbox ack --all で既読にせよ（着手の印。処理は ack の後。ack は「読んだ」であって「済んだ」ではない）
+Step 5: 読んだらすぐ、見せた id を honden inbox ack <id>... で既読にせよ（着手の印。処理は ack の後。先に既読にせねば、芯が合図を撃ち続けて処理の最中に文脈を消しに来る。手順は protocol の「Inbox Processing Protocol」に在る）
 ```
 
 **名乗りが済むまで inbox を処理するな。** A nudge may land first; ignore it until Step 1 is settled.
@@ -224,7 +224,7 @@ For TUI mode with `--no-alt-screen`:
 - Follow-up 確認キー for codex is `Tab`. **仮置きである** — 布陣へ座らせた時に実測で校正せよ.
 - Safety (shogun): in attended mode the Shogun pane is never nudged at all (`honden mode [attended|autonomous]`).
   `honden nudge --wake-shogun --reason "…"` is a one-off explicit exception and does not move the 正本.
-- After a nudge: `honden inbox read` → process each message by its `type` → `honden inbox ack --all`.
+- After a nudge: follow the "Inbox Processing Protocol" in the common protocol. The order is written there only.
 - **急ぎの報せ** (`clear_command` / `cmd_new` / `cmd_update` / `guard_appeal` / `guard_grant`) does not wait for a nudge.
   It rides along on the output of **any** honden subcommand as a single line, `⚠ 急ぎの未読`. Reading that line is not optional.
 
