@@ -39,14 +39,24 @@ bash scripts/setup_githooks.sh   # Cursor が差す Co-authored-by を落とす�
 
 `setup_githooks.sh` は `core.hooksPath` を**走らせた worktree にだけ**据える
 （`extensions.worktreeConfig` を立て、`git config --worktree` で書く）。
-据えた後、**他の worktree へ波及しておらぬか**を確かめる。
+指す先は、どの木で走らせても**本の木（primary worktree）の `.githooks` の絶対路**である。
+`git worktree add` は作った側の `config.worktree` を新しい木へ写すので、相対の路では、
+`.githooks` の無い枝の木で hook が警め無しに外れる。本の木に `.githooks` が無ければ、script は何も書かずに止まる。
+
+据えた後、**どの木でも指しておる路が実在する**ことを確かめる。見るのは出所ではなく、
+**指す先に `commit-msg` が実在すること**である（出所の表示だけでは、指す先が消えておっても気づけぬ）。
 
 ```bash
-git config --show-origin core.hooksPath             # 据えた木: config.worktree の .githooks
-git -C <別の worktree> config --show-origin core.hooksPath   # 別の木: .githooks が出ぬこと
+git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r w; do
+  p=$(git -C "$w" rev-parse --git-path hooks)   # core.hooksPath を解いた先
+  case "$p" in /*) ;; *) p="$w/$p" ;; esac
+  if [ -f "$p/commit-msg" ]; then echo "ok  $w → $p"; else echo "NG  $w → $p（commit-msg が無い。hook が走らぬ）"; fi
+done
+git config --show-origin core.hooksPath   # 据えた木: 出所と値（本の木の .githooks の絶対路）
 ```
 
-別の木で `.git/config`（共有）の `.githooks` が出たら、共有へ入っておる——
+`NG` の木は、指す先に `.githooks` が無い（据えておらぬ木なら、global の路が出る）。据え直すか、指す先を直す。
+共有の `.git/config` に `core.hooksPath` が在れば全 worktree に効いておる——
 `setup_githooks.sh` が示した外し方（`git config --local --unset core.hooksPath`）を見よ。
 `extensions.worktreeConfig` は古い git が拒むことがある（理由と版は script の冒頭の註）。
 
