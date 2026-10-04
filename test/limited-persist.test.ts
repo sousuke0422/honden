@@ -12,7 +12,7 @@ import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { deliver } from '../src/inbox';
 import { limitedWaitMs } from '../src/busy';
-import { stateOf, revive } from '../src/nudge';
+import { stateOf, revive, markLimited } from '../src/nudge';
 import { runNudge } from '../src/main';
 
 // 実物の旗（殿採取・2026-09-05・claude）
@@ -154,4 +154,44 @@ describe('枠切れでない相手（陰性対照）', () => {
     expect(s1.sent.length).toBe(1);
     expect(s1.sent[0]!.text).toBe('/new');
   }, 20_000);
+});
+
+/**
+ * 「より遠い方だけ残す」守りを直に撃つ。
+ *
+ * いまの経路では、この ELSE には届かぬ——明ける刻を覚えた相手は plan が
+ * 撃たぬ側へ回し、markLimited を呼ぶ所（runNudge の旗を読んだ時）まで来ぬ。
+ * 経路から撃てぬ守りは、単純化しても試験が通り、誰にも見張られぬ。
+ * markLimited は export されておる。別の経路から呼ばれた時に効く守りゆえ、
+ * 関数そのものを撃って留める。
+ */
+describe('markLimited は覚えを縮めぬ（守りを直に撃つ）', () => {
+  const at = (iso: string) => new Date(iso);
+  test('遠い刻を覚えた後に近い刻で撃っても縮まず、より遠い刻なら進む', () => {
+    const db = openStore({ path: ':memory:' });
+    markLimited(db, 'ashigaru9', at('2026-10-04T12:00:00.000Z'));
+    expect(stateOf(db, 'ashigaru9').limited_until).toBe('2026-10-04T12:00:00.000Z');
+
+    // 古い旗の残骸を読み直した形——近い刻で撃っても、遠い覚えを縮めぬ
+    markLimited(db, 'ashigaru9', at('2026-10-04T09:00:00.000Z'));
+    expect(stateOf(db, 'ashigaru9').limited_until).toBe('2026-10-04T12:00:00.000Z');
+
+    // 同じ刻でも変わらぬ
+    markLimited(db, 'ashigaru9', at('2026-10-04T12:00:00.000Z'));
+    expect(stateOf(db, 'ashigaru9').limited_until).toBe('2026-10-04T12:00:00.000Z');
+
+    // より遠い刻なら進む
+    markLimited(db, 'ashigaru9', at('2026-10-04T15:30:00.000Z'));
+    expect(stateOf(db, 'ashigaru9').limited_until).toBe('2026-10-04T15:30:00.000Z');
+  });
+
+  test('覚えの無い行（nudge の行が既に在り limited_until が空）なら刻む', () => {
+    const db = openStore({ path: ':memory:' });
+    db.run("INSERT INTO nudge(agent, since) VALUES ('ashigaru9', '2026-10-04T08:00:00.000Z')");
+    markLimited(db, 'ashigaru9', at('2026-10-04T09:00:00.000Z'));
+    const st = stateOf(db, 'ashigaru9');
+    expect(st.limited_until).toBe('2026-10-04T09:00:00.000Z');
+    // 他の欄は壊さぬ
+    expect(st.since).toBe('2026-10-04T08:00:00.000Z');
+  });
 });

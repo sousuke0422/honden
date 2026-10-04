@@ -170,6 +170,11 @@ export function stateOf(db: Database, agent: string): State {
  *
  * 既に未来の刻を覚えておるなら、より遠い方だけ残す——古い旗の残骸を
  * 読み直して覚えを縮め、明ける前に撃ち始める形を作らぬ。
+ *
+ * この守りは今の経路（runNudge）からは撃たれぬ。明ける刻を覚えた相手は
+ * plan が撃たぬ側へ回し、旗を読む所まで来ぬゆえ。それでも残すのは、
+ * export された口であり、別の経路から呼ばれた時に効くからである。
+ * 経路から撃てぬ分は test/limited-persist.test.ts が直に撃って留めておる。
  */
 export function markLimited(db: Database, agent: string, until: Date): void {
   db.prepare(
