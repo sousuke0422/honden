@@ -34,8 +34,21 @@ honden はそれらを起こす側で、中身は問わない。
 git clone --recurse-submodules https://github.com/sousuke0422/honden
 cd honden
 bash scripts/first_setup.sh
-bash scripts/setup_githooks.sh   # Cursor が差す Co-authored-by を落とす（任意・local のみ）
+bash scripts/setup_githooks.sh   # Cursor が差す Co-authored-by を落とす（任意・この worktree だけ）
 ```
+
+`setup_githooks.sh` は `core.hooksPath` を**走らせた worktree にだけ**据える
+（`extensions.worktreeConfig` を立て、`git config --worktree` で書く）。
+据えた後、**他の worktree へ波及しておらぬか**を確かめる。
+
+```bash
+git config --show-origin core.hooksPath             # 据えた木: config.worktree の .githooks
+git -C <別の worktree> config --show-origin core.hooksPath   # 別の木: .githooks が出ぬこと
+```
+
+別の木で `.git/config`（共有）の `.githooks` が出たら、共有へ入っておる——
+`setup_githooks.sh` が示した外し方（`git config --local --unset core.hooksPath`）を見よ。
+`extensions.worktreeConfig` は古い git が拒むことがある（理由と版は script の冒頭の註）。
 
 道具を確かめ、本体を用意し、設定と正本を整えて一覧で結ぶ。
 **勝手には入れない。**
