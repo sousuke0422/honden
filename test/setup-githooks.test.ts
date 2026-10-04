@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,6 +10,8 @@ import { spawnSync } from 'node:child_process';
 // HONDEN_SETUP_SCRIPT を置けば、別の版の script で同じ試験を撃てる（直す前の版で落ちることを見る用）。
 const ROOT = join(import.meta.dir, '..');
 const SETUP = process.env.HONDEN_SETUP_SCRIPT ?? join(ROOT, 'scripts/setup_githooks.sh');
+// 検めの script。直す前の版（検めが無い）で撃つ時は、HONDEN_CHECK_SCRIPT に在らぬ路を渡す。
+const CHECK = process.env.HONDEN_CHECK_SCRIPT ?? join(ROOT, 'scripts/check_githooks.sh');
 
 type Box = { base: string; repo: string; env: NodeJS.ProcessEnv };
 
@@ -41,6 +43,7 @@ function sandbox(): Box {
   mkdirSync(join(repo, 'scripts'), { recursive: true });
   cpSync(join(ROOT, '.githooks'), join(repo, '.githooks'), { recursive: true });
   cpSync(SETUP, join(repo, 'scripts/setup_githooks.sh'));
+  if (existsSync(CHECK)) cpSync(CHECK, join(repo, 'scripts/check_githooks.sh'));
   for (const f of ['prepare-commit-msg', 'commit-msg']) chmodSync(join(repo, '.githooks', f), 0o755);
   const g = (...a: string[]) => {
     const r = sh('git', a, repo, env);
@@ -150,11 +153,19 @@ describe('setup_githooks.sh（使い捨ての repo）', () => {
   //      死ぬ形（戻せぬのに「戻した」と言わぬことを固める）。
   //  (b) PATH の先頭に、`--worktree` を渡されたら落ちる git の包みを置く。repo は壊さず、
   //      「立てる前から拡張が在った」場合を作れる。
-  const wrapGit = (b: Box) => {
+  // noopRestore: 戻しの書き込み（git -C / config --file … extensions.worktreeConfig false）を、
+  // 成功を装って何もせぬ（書いたのに戻っておらぬ形）。
+  const wrapGit = (b: Box, opts: { noopRestore?: boolean } = {}) => {
     const bin = join(b.base, 'bin');
     mkdirSync(bin);
     const real = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
-    writeFileSync(join(bin, 'git'), `#!/bin/sh\nfor a in "$@"; do [ "$a" = "--worktree" ] && exit 1; done\nexec ${real} "$@"\n`);
+    const noop = opts.noopRestore
+      ? `case "$*" in *"-C / config --file"*"extensions.worktreeConfig false"*) exit 0;; esac\n`
+      : '';
+    writeFileSync(
+      join(bin, 'git'),
+      `#!/bin/sh\n${noop}for a in "$@"; do [ "$a" = "--worktree" ] && exit 1; done\nexec ${real} "$@"\n`,
+    );
     chmodSync(join(bin, 'git'), 0o755);
     b.env = { ...b.env, PATH: `${bin}:${process.env.PATH}` };
   };
@@ -206,4 +217,126 @@ describe('setup_githooks.sh（使い捨ての repo）', () => {
       done(b);
     }
   });
+
+  // 戻しの片方（前から在った拡張）も、書いた後に読み返し、前の値と合った時だけ「そのまま」と言う。
+  test('前の値が false の拡張: --worktree が落ちたら、前の値へ戻し、読み返して合ったと言う', () => {
+    const b = sandbox();
+    try {
+      expect(cfg(b, 'extensions.worktreeConfig', 'false').status).toBe(0);
+      wrapGit(b);
+      const r = setup(b);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('据え付けの前から在った');
+      expect(r.stderr).toContain('前の値のままと確かめた');
+      expect(cfg(b, '--get', 'extensions.worktreeConfig').stdout.trim()).toBe('false');
+    } finally {
+      done(b);
+    }
+  });
+
+  test('前の値が false の拡張: 戻しが効かなんだら、「そのまま」と言わず、今の値と手で戻す命を示す', () => {
+    const b = sandbox();
+    try {
+      expect(cfg(b, 'extensions.worktreeConfig', 'false').status).toBe(0);
+      wrapGit(b, { noopRestore: true });
+      const r = setup(b);
+      expect(r.status).toBe(1);
+      expect(r.stderr).not.toContain('前の値のままと確かめた');
+      expect(r.stderr).toContain('戻せなんだ');
+      expect(r.stderr).toContain('今の値: true');
+      expect(r.stderr).toContain("extensions.worktreeConfig 'false'");
+      // 実際にも戻っておらぬ（嘘を言わなかったことの裏）
+      expect(cfg(b, '--get', 'extensions.worktreeConfig').stdout.trim()).toBe('true');
+    } finally {
+      done(b);
+    }
+  });
 });
+
+// 据えた後に、指す先（本の木の .githooks）が消える窓。git は警めを出さぬ。
+describe('check_githooks.sh（指す先が消える窓）', () => {
+  const check = (repoDir: string, b: Box, ...a: string[]) =>
+    sh('bash', ['scripts/check_githooks.sh', ...a], repoDir, b.env);
+
+  test('窓 (1)(2): 本の木が .githooks を持たぬ枝へ移ると hook が落ち、検めが NG を並べて非ゼロ、戻せば 0', () => {
+    const b = sandbox();
+    try {
+      const s0 = setup(b);
+      expect(s0.status).toBe(0);
+      expect(s0.stdout).toContain('ok  ');
+      const wt = join(b.base, 'wt-old');
+      expect(sh('git', ['worktree', 'add', '-q', wt, 'old'], b.repo, b.env).status).toBe(0);
+      expect(check(b.repo, b).status).toBe(0);
+
+      // 本の木が .githooks の無い枝へ移る（old は別の木が持つゆえ、detach で移る）
+      expect(sh('git', ['checkout', '-q', '--detach', 'old'], b.repo, b.env).status).toBe(0);
+      // 窓が現に在る: 別の木の commit に Cursor 行が残り、鎖（Assisted-by）が働かぬ
+      const c = sh('git', ['commit', '-q', '--allow-empty', '-m', MSG], wt, b.env);
+      expect(c.status).toBe(0);
+      const msg = sh('git', ['log', '-1', '--format=%B'], wt, b.env).stdout;
+      expect(msg).toContain('cursoragent@cursor.com');
+      expect(msg).not.toContain('Assisted-by: fake-chain');
+      // 検めは NG を並べて非ゼロ
+      const bad = check(b.repo, b);
+      expect(bad.status).not.toBe(0);
+      expect(bad.stdout).toContain('NG  ');
+      expect(bad.stdout).toContain('commit-msg が無い');
+
+      // 本の木を戻せば 0
+      expect(sh('git', ['checkout', '-q', 'main'], b.repo, b.env).status).toBe(0);
+      const good = check(b.repo, b);
+      expect(good.status).toBe(0);
+      expect(good.stdout).not.toContain('NG  ');
+    } finally {
+      done(b);
+    }
+  });
+
+  test('窓 (3): repo の在処を mv で動かすと、検めが NG と言う', () => {
+    const b = sandbox();
+    try {
+      expect(setup(b).status).toBe(0);
+      expect(sh('git', ['worktree', 'add', '-q', join(b.base, 'wt-old'), 'old'], b.repo, b.env).status).toBe(0);
+      const moved = join(b.base, 'repo-moved');
+      renameSync(b.repo, moved);
+      const bad = check(moved, b);
+      expect(bad.status).not.toBe(0);
+      expect(bad.stdout).toContain('NG  ');
+    } finally {
+      done(b);
+    }
+  });
+
+  test('据えておらぬ木は -- と出て NG に数えず（setup は 0 で終わる）、--all なら NG に数える', () => {
+    const b = sandbox();
+    try {
+      // setup の前に作った木は、据えておらぬ（global の hook が走る）
+      expect(sh('git', ['worktree', 'add', '-q', join(b.base, 'wt-pre'), 'old'], b.repo, b.env).status).toBe(0);
+      const s0 = setup(b);
+      expect(s0.status).toBe(0);
+      expect(s0.stdout).toContain('--  ');
+      expect(check(b.repo, b).status).toBe(0);
+      expect(check(b.repo, b, '--all').status).not.toBe(0);
+    } finally {
+      done(b);
+    }
+  });
+
+  test('setup は据えた後に検め、NG の木が在れば非ゼロで終える', () => {
+    const b = sandbox();
+    try {
+      const bad = join(b.base, 'wt-bad');
+      expect(sh('git', ['worktree', 'add', '-q', bad, 'old'], b.repo, b.env).status).toBe(0);
+      expect(cfg(b, 'extensions.worktreeConfig', 'true').status).toBe(0);
+      // 指す先の無い hooksPath を、その木に据えておく（据えておって、消えておる木）
+      expect(sh('git', ['config', '--worktree', 'core.hooksPath', '/nonexistent/hooks'], bad, b.env).status).toBe(0);
+      const r = setup(b);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('NG  ');
+      expect(r.stderr).toContain('検めに NG が在る');
+    } finally {
+      done(b);
+    }
+  });
+});
+

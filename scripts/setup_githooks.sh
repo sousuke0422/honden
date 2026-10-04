@@ -18,6 +18,14 @@
 #   hook を直すたびに据え直しが要る。本の木は消さぬゆえ、指す先として最も長く生きる。
 #   本の木に .githooks が無い（本の木が #34 を含まぬ枝に居る等）時は、何も書かずに止まる。
 #
+#   **残る窓（据えた後に、指す先が消える）**: (1) 本の木が .githooks を持たぬ枝へ移る、
+#   (2) repo の在処を動かす（mv 等）、(3) 本の木を動かすか消す。どれも git は警めを出さず、
+#   **どの木でも strip・門・global の Assisted-by が黙って落ちる**。据える前は global の hook が
+#   効いておったゆえ、この窓では、動いておった物が止まる。窓は塞げぬ（本の木に頼る形の代価）ゆえ、
+#   機械で検める: `bash scripts/check_githooks.sh`（木ごとに ok / NG。NG があれば非ゼロ）。
+#   この script も据えた後に自ら呼ぶ。窓が開いた後は、本の木を .githooks の在る枝へ戻すか、
+#   repo を元の在処へ戻すか、この script を据え直す。
+#
 # extensions.worktreeConfig の副作用: これは共有の .git/config に書かれ、全 worktree に及ぶ。
 # git-worktree の文書は「この拡張を知らぬ古い git は、この repo へ触るのを拒む」と書く
 # （"Older Git versions will refuse to access repositories with this extension"）。
@@ -104,7 +112,13 @@ if ! git config --worktree core.hooksPath "$HOOKS"; then
       fi
     else
       outside config --file "$SHARED" extensions.worktreeConfig "$had_ext_value" 2>/dev/null || true
-      echo "  extensions.worktreeConfig は据え付けの前から在った（値: $had_ext_value）ゆえ、外さず、その値のままにした。"
+      now_value="$(outside config --file "$SHARED" --get extensions.worktreeConfig 2>/dev/null || true)"
+      if [[ "$now_value" == "$had_ext_value" ]]; then
+        echo "  extensions.worktreeConfig は据え付けの前から在った（値: $had_ext_value）ゆえ、外さず、読み返して前の値のままと確かめた。"
+      else
+        echo "  extensions.worktreeConfig を前の値（$had_ext_value）へ戻せなんだ。今の値: ${now_value:-（無い）}。手で戻せ:"
+        echo "    git config --file '$SHARED' extensions.worktreeConfig '$had_ext_value'"
+      fi
     fi
     echo "  core.hooksPath は書いておらぬ。--worktree を解さぬ git かもしれぬ（上の版を見よ）。"
   } >&2
@@ -112,4 +126,10 @@ if ! git config --worktree core.hooksPath "$HOOKS"; then
 fi
 
 echo "  core.hooksPath → $HOOKS（この worktree だけ: $(git rev-parse --git-path config.worktree)）"
-echo "  確かめ: どの木でも、指しておる路が実在すること（README の「確かめ」の loop）"
+
+# 据えた後に、どの木でも指す先が実在するかを自ら検める。NG があれば非ゼロで終える。
+echo "  検め（scripts/check_githooks.sh）:"
+if ! bash "$ROOT/scripts/check_githooks.sh" | sed 's/^/    /'; then
+  echo "  据えたが、検めに NG が在る。上の NG の木を直してから、もう一度 bash scripts/check_githooks.sh を打て。" >&2
+  exit 1
+fi

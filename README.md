@@ -45,17 +45,17 @@ bash scripts/setup_githooks.sh   # Cursor が差す Co-authored-by を落とす�
 
 据えた後、**どの木でも指しておる路が実在する**ことを確かめる。見るのは出所ではなく、
 **指す先に `commit-msg` が実在すること**である（出所の表示だけでは、指す先が消えておっても気づけぬ）。
+`setup_githooks.sh` は据えた後に自らこれを検め、NG があれば非ゼロで終える。いつでも打てる:
 
 ```bash
-git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r w; do
-  p=$(git -C "$w" rev-parse --git-path hooks)   # core.hooksPath を解いた先
-  case "$p" in /*) ;; *) p="$w/$p" ;; esac
-  if [ -f "$p/commit-msg" ]; then echo "ok  $w → $p"; else echo "NG  $w → $p（commit-msg が無い。hook が走らぬ）"; fi
-done
-git config --show-origin core.hooksPath   # 据えた木: 出所と値（本の木の .githooks の絶対路）
+bash scripts/check_githooks.sh      # 木ごとに ok / NG。NG が一つでもあれば非ゼロ
 ```
 
-`NG` の木は、指す先に `.githooks` が無い（据えておらぬ木なら、global の路が出る）。据え直すか、指す先を直す。
+指す先は本の木の `.githooks` ゆえ、**本の木が `.githooks` を持たぬ枝へ移る・repo の在処を動かす・
+本の木を動かすか消す**と、git は警めを出さずに、どの木でも hook が落ちる。NG はその印である
+（本の木を `.githooks` の在る枝へ戻すか、repo を元の在処へ戻すか、`setup_githooks.sh` を据え直す）。
+据えておらぬ木（global の hook が走る）は `--` と出て、NG には数えぬ（`--all` で数える）。
+
 共有の `.git/config` に `core.hooksPath` が在れば全 worktree に効いておる——
 `setup_githooks.sh` が示した外し方（`git config --local --unset core.hooksPath`）を見よ。
 `extensions.worktreeConfig` は古い git が拒むことがある（理由と版は script の冒頭の註）。
