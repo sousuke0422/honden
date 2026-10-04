@@ -25,7 +25,10 @@ global の git hooks を $HOOKS_DIR へ配る。
 
   （旗なし）   何をどう書き換えるかを出し、打つか尋ねてから配る
   --dry-run    出すだけ。一切触らぬ
-  --uninstall  退避（*.bak.<刻>）から戻す。退避が無く当方の配り物なら消す
+  --uninstall  一層だけ戻す: 最新の退避（*.bak.<刻>[.<連番>]）から戻し、その退避を消す。
+               配り直すたびに退避が一層積まれるゆえ、層が残っておれば
+               元へ着くまで --uninstall を繰り返し打つ（残っておれば打った後に告げる）。
+               退避が無く当方の配り物（正本と同じ中身）なら消す
   --help       この文
 
 配る物:
@@ -189,6 +192,13 @@ uninstall() {
   restore_one "$SRC_HOOK" "$DST_HOOK"
   restore_one "$SRC_LIB" "$DST_LIB"
   rmdir "$HOOKS_DIR/lib" 2>/dev/null || true
+  # 一度に戻すのは一層だけ。層が残っておれば、元へ着いたと思わせぬよう告げる。
+  for d in "$DST_HOOK" "$DST_LIB"; do
+    next_bak=$(latest_backup "$d")
+    if [ -n "$next_bak" ]; then
+      echo "  $d: 退避がまだ残っておる（次は $next_bak）。元へ着くまで --uninstall を繰り返し打て"
+    fi
+  done
   echo "  core.hooksPath は触らぬ（据えたのが当方か判じられぬ）。外すなら:"
   echo "    git config --global --unset core.hooksPath"
 }

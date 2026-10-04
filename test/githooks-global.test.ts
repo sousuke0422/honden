@@ -321,10 +321,17 @@ describe('setup_global_githooks.sh', () => {
       const baks = readdirSync(join(home, '.git-hooks')).filter((f) => f.startsWith('prepare-commit-msg.bak.'));
       expect(baks.sort()).toEqual(['prepare-commit-msg.bak.20260101000000', 'prepare-commit-msg.bak.20260101000000.1']);
 
-      expect(runSetup(home, ['--uninstall']).status).toBe(0);
+      // --uninstall は一層ずつ戻す。層が残っておれば、そう告げて次の名を示す。
+      const un1 = runSetup(home, ['--uninstall']);
+      expect(un1.status).toBe(0);
       expect(await readFile(dst, 'utf8')).toBe(second);
-      expect(runSetup(home, ['--uninstall']).status).toBe(0);
+      expect(un1.stdout).toContain('まだ残っておる');
+      expect(un1.stdout).toContain(`次は ${dst}.bak.20260101000000）`);
+
+      const un2 = runSetup(home, ['--uninstall']);
+      expect(un2.status).toBe(0);
       expect(await readFile(dst, 'utf8')).toBe(first);
+      expect(un2.stdout).not.toContain('まだ残っておる');
     });
   });
 
