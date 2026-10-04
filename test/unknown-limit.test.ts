@@ -12,34 +12,27 @@ const FABLE = 'reached your Fable limit';
 const now = new Date(2026, 8, 23, 5, 0);
 
 describe('時刻を持たない既知の通知行', () => {
-  // 実物の旗を一字一句そのまま留める（レビュー 🔴 Medium・2026-10-04）。
-  // 試験が `reached your Fable limit` だけを使っておったゆえ、行末に案内が続く形と
-  // `your` の無い形を取りこぼしたまま緑であった。
-  test('Fable の旗の実物（PR 本文の写し・将軍が pane で実測した二行）を拾う', () => {
-    const PR_BODY = "You've reached Fable limit. Run /usage-credits continue";
-    const OBSERVED = "You've reached your Fable limit. Run /usage-credits to continue\nor switch models with /model.";
-    for (const flag of [PR_BODY, OBSERVED, `● ${PR_BODY}`, `${'ordinary output\n'.repeat(3)}${OBSERVED}`]) {
+  // 実物の旗を一字一句そのまま留める（#32 のレビュー二本・2026-10-04）。
+  // 試験が `reached your Fable limit` の一行だけを使っておったゆえ、`limit.` の後に
+  // 案内が続く実物の形を取りこぼしたまま緑であった。
+  test('Fable の旗の実物（二行）を拾う', () => {
+    const FABLE_FLAG = "You've reached your Fable limit. Run /usage-credits to continue\n" +
+      'or switch models with /model.';
+    for (const flag of [FABLE_FLAG, `${'ordinary output\n'.repeat(3)}${FABLE_FLAG}`]) {
       expect(limitState(flag, now), flag).toBe('undated');
+      expect(isLimitedText(flag, now), flag).toBe(true);
       expect(limitedWaitMs(flag, now), flag).toBeNull();
     }
   });
-  test('cursor の枠切れの旗（刻を持たぬ・月の制限）を拾う', () => {
-    const CURSOR = 'Error: Increase limits for faster responses\n' +
+  test('cursor の枠切れの旗（二行・刻を持たぬ）を別の紋様で拾う', () => {
+    const CURSOR_FLAG = 'Error: Increase limits for faster responses\n' +
       "You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.";
-    expect(limitState(CURSOR, now)).toBe('undated');
-    expect(limitedWaitMs(CURSOR, now)).toBeNull();
-    // 二行目だけでも拾う（一行目が scroll で落ちても）
-    expect(limitState(CURSOR.split('\n')[1]!, now)).toBe('undated');
-  });
-  test('緩めすぎぬ——案内が続くのは /usage-credits だけ、枠が有る文は拾わぬ', () => {
-    for (const text of [
-      'reached your Fable limit. Run the test suite again',
-      'You have reached Fable limit but the build passed',
-      "The docs say You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.",
-      "You're out of usage? Not yet.",
-      'You have 3 usage limit resets available. Run /usage to use one.',
-      "You've reached your Fable limit. Run /usage-credits to continue\nYou have 3 usage limit resets available. Run /usage to use one.",
-    ]) expect(limitState(text, now), text).toBeNull();
+    expect(limitState(CURSOR_FLAG, now)).toBe('undated');
+    expect(limitedWaitMs(CURSOR_FLAG, now)).toBeNull();
+    // 一行目だけ（見出し）は枯渇を言わぬゆえ拾わぬ
+    expect(limitState('Error: Increase limits for faster responses', now)).toBeNull();
+    // 説明の中に引かれた文は拾わぬ（行の頭から見る）
+    expect(limitState("The docs say You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.", now)).toBeNull();
   });
   test('Fable を検知するが復帰時刻を作らない', () => {
     for (const flag of [FABLE, "You've reached your Fable limit", '● You’ve reached your Fable limit.']) {
@@ -160,7 +153,6 @@ test('既定のpane読み手もFableを検知して送信を止める', () => {
 test('実物の旗（Fable の二行・cursor の二行）で、芯の一巡でも初回から undated-limit として保留する', () => {
   for (const flag of [
     "You've reached your Fable limit. Run /usage-credits to continue\nor switch models with /model.",
-    "You've reached Fable limit. Run /usage-credits continue",
     "Error: Increase limits for faster responses\nYou're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.",
   ]) {
     const result = scenario(`

@@ -271,27 +271,32 @@ export function captureLimitedWaitMs(pane: Pane, now: Date = new Date()): number
 }
 
 /**
- * 復帰時刻が無い場合は、既知の完全な通知行だけを認める。
+ * 復帰時刻が無い場合は、既知の通知行だけを認める（行の頭から見る）。
  *
- * 行の全体を見る。説明・引用・試験の出力に紛れた字面を拾わぬためである。
- * 実物の旗は二通りある（いずれも刻を持たぬ）:
+ * Fable（claude）の実物の旗は二行である（#32 の PR 本文が引く・将軍が確かめた）:
  *
- *   Fable（claude）: You've reached your Fable limit. Run /usage-credits to continue
- *                    （PR の本文の写しでは `your` も `to` も無い形で出ておった）
- *   cursor:          You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.
- *                    （cursor は月の制限ゆえ、時では戻らぬ）
+ *   You've reached your Fable limit. Run /usage-credits to continue
+ *   or switch models with /model.
  *
- * 行末に続いてよいのは `Run /usage-credits …` の案内だけである。それ以外の
- * 文が続く行（説明の一部）は拾わぬ。枠が有ることの案内（NOT_LIMITED）は
- * limitState が先に除く。
+ * 一行目は `limit.` の後に案内が続く。ゆえに行末の固定は `limit` の直後で
+ * 緩める——句点か感嘆符が来るか、行がそこで終わるか（`(?:[.!]|\s*$)`）。
+ * 行の頭の固定は保つ。説明・引用・試験の出力に紛れた字面を拾わぬため。
  */
-const UNDATED_LIMIT = new RegExp(
-  [
-    String.raw`^\s*(?:[●■!⚠]\s*)?(?:(?:you['’]ve|you have)\s+)?reached (?:your )?Fable limit[.!]?(?:\s+Run /usage-credits\b[^\n]*)?\s*$`,
-    String.raw`^\s*(?:[●■!⚠]\s*)?you['’]re out of usage\.(?:\s+Switch to Auto, or ask your admin to increase your limit to continue\.)?\s*$`,
-  ].join('|'),
-  'im',
-);
+const UNDATED_LIMIT = /^\s*(?:[●■!⚠]\s*)?(?:(?:you['’]ve|you have)\s+)?reached your Fable limit(?:[.!]|\s*$)/im;
+
+/**
+ * cursor の枠切れの旗（刻を持たぬ。月の制限ゆえ時では戻らぬ）:
+ *
+ *   Error: Increase limits for faster responses
+ *   You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.
+ *
+ * Fable の紋様を広げて拾わず、別の紋様として置く。一つの紋様に二つの CLI の
+ * 旗を詰めると、陰性の対照がどちらの旗に効いておるのか見分けられなくなる。
+ * 一行目（Increase limits…）は案内の見出しで、枯渇そのものを言うのは二行目ゆえ、
+ * 二行目を行の全体で見る。
+ */
+const UNDATED_LIMIT_CURSOR =
+  /^\s*You['’]re out of usage\. Switch to Auto, or ask your admin to increase your limit to continue\.\s*$/im;
 
 export type LimitState = number | 'undated' | null;
 
@@ -300,7 +305,8 @@ export function limitState(capture: string, now: Date): LimitState {
   const wait = limitedWaitMs(capture, now);
   if (wait !== null) return wait;
   const tail = tailOf(capture);
-  return !NOT_LIMITED.test(tail) && UNDATED_LIMIT.test(tail) ? 'undated' : null;
+  if (NOT_LIMITED.test(tail)) return null;
+  return UNDATED_LIMIT.test(tail) || UNDATED_LIMIT_CURSOR.test(tail) ? 'undated' : null;
 }
 
 export function captureLimitState(pane: Pane, now: Date): LimitState {

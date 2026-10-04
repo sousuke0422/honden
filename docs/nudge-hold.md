@@ -14,7 +14,15 @@
 行の前後に説明や引用符が付いた文、単に `limit` を含む文はこの紋様に当たらない。
 
 ```regex
-^\s*(?:[●■!⚠]\s*)?(?:(?:you['’]ve|you have)\s+)?reached your Fable limit[.!]?\s*$
+^\s*(?:[●■!⚠]\s*)?(?:(?:you['’]ve|you have)\s+)?reached your Fable limit(?:[.!]|\s*$)
+```
+
+Fable の実物の旗は `limit.` の後に `Run /usage-credits to continue` が続くゆえ、行末は `limit` の直後で緩める。
+
+cursor の枠切れの旗（刻を持たぬ。月の制限）は、Fable の紋様を広げずに別の紋様で見る:
+
+```regex
+^\s*You['’]re out of usage\. Switch to Auto, or ask your admin to increase your limit to continue\.\s*$
 ```
 
 大文字小文字を区別せず、行単位で判定する。
