@@ -128,16 +128,45 @@ const HEADERS_BASE = {
   'User-Agent': 'honden-bot',
 };
 
-/** 失敗応答を人の読める形へ。token や Authorization は決して混ぜぬ。 */
+/**
+ * 失敗応答を人の読める形へ。token や Authorization は決して混ぜぬ。
+ *
+ * GitHub の言う理由（errors[] の各件）も捨てぬ。422 の因は message
+ * （「Unprocessable Entity」の類）だけでは分からず、errors[] に在る
+ * （例: PR review の inline の行が diff の外にある時の
+ * 「PullRequestReviewComment line: … must be part of the diff」）。
+ * 捨てると、因が権限の話として説明され、本当の因が見えなくなる。
+ */
 async function fail(r: Response, doing: string): Promise<never> {
   let detail = '';
   try {
-    const j = (await r.json()) as { message?: string };
+    const j = (await r.json()) as { message?: string; errors?: unknown };
     detail = j.message ?? '';
+    const reasons = errorReasons(j.errors);
+    if (reasons.length > 0) detail += `${detail ? ' — ' : ''}${reasons.join(' / ')}`;
   } catch {
     /* 本文が JSON でない失敗はそのまま */
   }
   throw new Error(`${doing} に失敗した（HTTP ${r.status}${detail ? `: ${detail}` : ''}）`);
+}
+
+/** errors[] の各件を一行ずつへ。resource・field・message の在る物だけを拾う。 */
+function errorReasons(errors: unknown): string[] {
+  if (!Array.isArray(errors)) return [];
+  const out: string[] = [];
+  for (const e of errors) {
+    if (typeof e === 'string') {
+      if (e.trim() !== '') out.push(e.trim());
+      continue;
+    }
+    if (typeof e !== 'object' || e === null) continue;
+    const { resource, field, message } = e as { resource?: unknown; field?: unknown; message?: unknown };
+    const where = [resource, field].filter((x): x is string => typeof x === 'string' && x !== '').join(' ');
+    const what = typeof message === 'string' ? message : '';
+    const line = where && what ? `${where}: ${what}` : where || what;
+    if (line) out.push(line);
+  }
+  return out;
 }
 
 /** JWT → installation token。1 時間有効。 */

@@ -193,6 +193,9 @@ async function withToken<T>(cfg: AppCfg, work: (token: string) => Promise<T>): P
 /**
  * repo に触る仕事を回す。**404/422 は権限の話**のことが多いゆえ、
  * その時だけ入居先を引いて因を名指しする（src/bot.ts の explainRepoAccess）。
+ * ただし PR review の 422 は、inline の file+line が PR の diff の外にある時にも
+ * 出る（一件外れれば review 全体が落ちる）。権限だけを因と決め打たぬこと——
+ * GitHub の言う理由（errors[]）は src/bot.ts の fail が文へ足す。
  */
 async function onRepo<T>(cfg: AppCfg, repo: string, work: (token: string) => Promise<T>): Promise<T> {
   return withToken(cfg, async (token) => {
@@ -298,6 +301,26 @@ function resolveRepoFlag(flags: Record<string, string>, dbPath: string | undefin
   if (r.warn) console.error(`  ※ ${r.warn}`);
   if (r.source !== 'flag') console.error(`  宛先: ${r.repo}（${r.source}）`);
   return r.repo;
+}
+
+/**
+ * review submit --to github が落ちた時に標準エラーへ出す文。試験が同じ物を見る。
+ *
+ * 422 は権限だけでなく、inline の file+line が PR の diff の外にある時にも出る。
+ * その因を権限と並べて示す。inline を落として body だけで出し直す道は作らぬ——
+ * 黙って中身を変えて投稿すれば、指摘が行から外れたことに誰も気づかぬ。
+ * 因を正しく示せば、操作する者が行を直すか body へ移すかを選べる。
+ */
+export function reviewSubmitFailureLines(e: unknown): string[] {
+  const msg = e instanceof Error ? e.message : String(e);
+  const lines = [`  [github] ${msg}`];
+  if (msg.includes('HTTP 422')) {
+    lines.push(
+      '  ※ 422 は権限だけでなく、inline の file+line が PR の diff の外にある時にも出る' +
+        '（一件外れれば review 全体が落ちる）。上の理由を見て、行を直すか body へ移されよ。',
+    );
+  }
+  return lines;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -618,7 +641,7 @@ async function main(argv: string[]): Promise<number> {
       audit({ action: 'review_submit', actor, dest: 'github', repo, pr: String(pr), url: made.url, status: 'SUCCESS' });
       return EXIT_OK;
     }).catch((e: unknown) => {
-      console.error(`  [github] ${e instanceof Error ? e.message : String(e)}`);
+      for (const line of reviewSubmitFailureLines(e)) console.error(line);
       return EXIT_SYSTEM;
     });
   }
