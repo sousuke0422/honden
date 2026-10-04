@@ -57,6 +57,7 @@ export function list(db: Database, agent: string, opts: { all?: boolean; limit?:
   const sql = opts.all
     ? 'SELECT * FROM inbox WHERE agent = ? ORDER BY created_at, id LIMIT ?'
     : 'SELECT * FROM inbox WHERE agent = ? AND read = 0 ORDER BY created_at, id LIMIT ?';
+  // sender は素のまま返す。@no-reply の印は表示の口（runInboxRead）だけ——ここへ混ぜると from の突き合わせが壊れる。
   return (db.query(sql).all(agent, opts.limit ?? 100) as Record<string, unknown>[]).map(toMessage);
 }
 

@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSuppressed } from '../src/inbox';
 import { runInboxRead } from '../src/main';
+import { exportAll } from '../src/export';
 
 const seeded = () => {
   const db = openStore({ path: ':memory:' });
@@ -339,5 +340,27 @@ describe('名簿の外からの報せ', () => {
     expect(row.sender).toBe('ashigaru3');
     const rowOut = db.query("SELECT sender FROM inbox WHERE id = 'n1'").get() as { sender: string };
     expect(rowOut.sender).toBe('review_session');
+  });
+
+  test('印は表示の口だけ。list と export は素の from を返す', () => {
+    const { dbPath, db } = mk();
+
+    // list は正本の from をそのまま返す。from で突き合わせる口が頼る。
+    const senders = list(db, 'karo', { all: true }).map((m) => m.sender);
+    expect(senders).toContain('review_session');
+    for (const s of senders) expect(s).not.toContain('@no-reply');
+
+    // export の YAML も素の from。旧形式へ戻す時に差出人が化けてはならぬ。
+    const file = exportAll(db).find((f) => f.path === 'queue/inbox/karo.yaml');
+    expect(file).toBeDefined();
+    expect(file!.body).toContain('from: review_session');
+    expect(file!.body).not.toContain('@no-reply');
+
+    // 陽性対照——同じ正本で、印を付ける口は生きておる。
+    // これが無いと、印の実装ごと壊れた時も上の「付かぬ」が緑のまま通る。
+    // （表示は list を通るゆえ、list が印を混ぜれば表示の印は二重になる。
+    //   上で先に list を見るのは、落ちた所が壊れた口を指すようにするため。）
+    const r = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(r.out).toContain('review_session @no-reply → karo');
   });
 });
