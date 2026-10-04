@@ -270,8 +270,28 @@ export function captureLimitedWaitMs(pane: Pane, now: Date = new Date()): number
   return limitedWaitMs(r.stdout.toString(), now);
 }
 
-/** 復帰時刻が無い場合は、既知の完全な通知行だけを認める。 */
-const UNDATED_LIMIT = /^\s*(?:[●■!⚠]\s*)?(?:(?:you['’]ve|you have)\s+)?reached your Fable limit[.!]?\s*$/im;
+/**
+ * 復帰時刻が無い場合は、既知の完全な通知行だけを認める。
+ *
+ * 行の全体を見る。説明・引用・試験の出力に紛れた字面を拾わぬためである。
+ * 実物の旗は二通りある（いずれも刻を持たぬ）:
+ *
+ *   Fable（claude）: You've reached your Fable limit. Run /usage-credits to continue
+ *                    （PR の本文の写しでは `your` も `to` も無い形で出ておった）
+ *   cursor:          You're out of usage. Switch to Auto, or ask your admin to increase your limit to continue.
+ *                    （cursor は月の制限ゆえ、時では戻らぬ）
+ *
+ * 行末に続いてよいのは `Run /usage-credits …` の案内だけである。それ以外の
+ * 文が続く行（説明の一部）は拾わぬ。枠が有ることの案内（NOT_LIMITED）は
+ * limitState が先に除く。
+ */
+const UNDATED_LIMIT = new RegExp(
+  [
+    String.raw`^\s*(?:[●■!⚠]\s*)?(?:(?:you['’]ve|you have)\s+)?reached (?:your )?Fable limit[.!]?(?:\s+Run /usage-credits\b[^\n]*)?\s*$`,
+    String.raw`^\s*(?:[●■!⚠]\s*)?you['’]re out of usage\.(?:\s+Switch to Auto, or ask your admin to increase your limit to continue\.)?\s*$`,
+  ].join('|'),
+  'im',
+);
 
 export type LimitState = number | 'undated' | null;
 
