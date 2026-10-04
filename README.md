@@ -149,7 +149,7 @@ bash shutsujin_departure.sh down         # 撤収
 ```bash
 honden inbox write karo "cmd_048 を書いた。実行せよ。" cmd_new shogun
 honden inbox read                     # 自分宛の未読
-honden inbox ack --all                # 読んだ分を既読に
+honden inbox ack <id>...             # read が見せた分を既読に（処理の前に）
 ```
 
 起こす合図は短い。

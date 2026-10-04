@@ -65,7 +65,9 @@ import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
 import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
-import { submitReport, submitQc, cmdDone, coverageOf, criteriaOf } from './report';
+import {
+  submitReport, submitQc, cmdDone, coverageOf, criteriaOf, listPendingReviews, formatPendingReview,
+} from './report';
 import { plan, send, record, startClocks, withNudgeLock, revive } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
 import { findStalled, notifyStalled } from './stalled';
@@ -902,6 +904,13 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
   // 見捨てられた司令に印を立てる。期限切れ（★期限切・握ったまま）とは
   // 別の言葉にする——こちらは握っておらぬのに残っておるもの。
   const abandoned = new Set(findAbandoned(db).map((a) => a.cmdId));
+  const pending = listPendingReviews(db);
+  const pendingByCmd = new Map<string, ReturnType<typeof listPendingReviews>>();
+  for (const p of pending) {
+    const arr = pendingByCmd.get(p.cmdId) ?? [];
+    arr.push(p);
+    pendingByCmd.set(p.cmdId, arr);
+  }
   const lines = rows.map((r) => {
     const who = r.assigned_to ? ` → ${r.assigned_to}` : '';
     const p = r.purpose ? ` ${r.purpose.split('\n')[0]!.slice(0, 42)}` : '';
@@ -911,9 +920,23 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
         ? `閉じて${ago(r.completed_at)}`
         : `起草から${ago(r.created_at)}`;
     const mark = abandoned.has(r.id) ? '  ⚠見捨てられ（振られた跡のみ残り、握る者も報告も無い）' : '';
-    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}`;
+    const review =
+      pendingByCmd.has(r.id)
+        ? `  検め待ち: ${pendingByCmd.get(r.id)!.map(formatPendingReview).join(', ')}`
+        : '';
+    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}${review}`;
   });
-  return { code: EXIT_OK, out: lines.join('\n') + `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` };
+  const pendingTail =
+    pending.length > 0
+      ? `\n\n  検め待ち（${pending.length} 件）: ${pending.map((p) => `${formatPendingReview(p)} (${p.cmdId})`).join(', ')}`
+      : '';
+  return {
+    code: EXIT_OK,
+    out:
+      lines.join('\n') +
+      `\n\n  ${rows.length} 件（honden cmd show <番号> で中身と覆いが見られる）` +
+      pendingTail,
+  };
 }
 
 export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined): RunResult {
@@ -1457,6 +1480,12 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
   }
   if (absent > 0) tail.push(`${absent} 名が布陣に居らぬ`);
   if (urgent > 0) tail.push(`${urgent} 名に急ぎの未読`);
+  const pending = listPendingReviews(db);
+  if (pending.length > 0) {
+    tail.push(
+      `検め待ち ${pending.length} 件: ${pending.map((p) => `${formatPendingReview(p)} (${p.cmdId})`).join(', ')}`,
+    );
+  }
   return {
     code: EXIT_OK,
     out: renderStatus(rows) + (tail.length > 0 ? `\n\n  ${tail.join(' / ')}` : ''),

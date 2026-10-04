@@ -71,7 +71,7 @@ COUNT=$(echo "$SUMMARY" | grep -o 'unread=[0-9]*' | head -1 | cut -d= -f2)
 # 未読あり。止めるのを断り、何が来ておるかを添えて差し戻す。
 # 本文は渡さぬ——**読むのは agent の仕事**である（既読の印を付けるのも）。
 [ -n "${HONDEN_HOOK_LOG:-}" ] && echo "[$(date -Is)] $AGENT_ID BLOCK (unread=$COUNT)" >> "$HONDEN_HOOK_LOG" 2>/dev/null || true
-REASON="未読が ${COUNT} 件残っておる（${SUMMARY# *}）。honden inbox read で読み、処理したものを honden inbox ack --all で既読にしてから手を止めよ。"
+REASON="未読が ${COUNT} 件残っておる（${SUMMARY# *}）。honden inbox read で読み、見せた id をすぐ honden inbox ack <id>... で既読にしてから処理せよ（先に既読にせねば、芯が合図を撃ち続けて処理の最中に文脈を消しに来る）。残る未読は再び read する。"
 R="$REASON" python3 -c "
 import json, os
 print(json.dumps({'decision': 'block', 'reason': os.environ['R']}, ensure_ascii=False))
