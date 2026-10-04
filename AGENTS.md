@@ -13,16 +13,27 @@ honden brief
 （部品は `instructions/` に一系統で置いてある。**生成物は作らぬ**——
 出す時に組めば、割れようが無い。）
 
+**戒めを書き足す時は `instructions/` へ。** `brief` が組むのは `instructions/` だけで、
+この文書（`AGENTS.md`・`CLAUDE.md`）は honden の木で開いた者にしか届かぬ。
+役を持つ者の多くは別の repo の木で働くゆえ、ここにだけ書いた戒めは届かぬ。
+
 ## 受け手の作法
 
 `inbox_notice unread=N …` が届いたら:
 
 ```
 honden inbox read          # 己に届いておる報せを読む
-honden inbox ack --all     # 処理したものを既読にする
+honden inbox ack <id>...   # read が見せた id をすぐ既読にする（着手の印。処理は ack の後）
 ```
 
+先に既読にするのは、未読が残る限り芯が合図を撃ち続け、処理の最中に文脈を消しに来るためである。
+read の後に届いた分は見ておらぬゆえ既読にせず、再び read する。`ack --all` は使わぬ——打った時の未読を引き直して全部を既読にするゆえ、
+見ておらぬ分まで既読にする（確かめ手: `src/inbox.ts` の `ackAll`）。
+
 既読にできるのは己の分だけである。他人の分を既読にすれば、相手は永久に気づけぬ。
+
+**報せと状態の違い**: inbox の報せは既読にすれば消える。`honden status` と
+`honden cmd list` は正本の状態を映すゆえ、検め待ちの報告は既読にせず残る。
 
 **急ぎの報せ**（範囲の増減など）は honden のほとんどの副命令の出力に
 `⚠ 急ぎの未読` として一行載る（`inbox` 系と `nudge` には載らぬ）。
@@ -31,8 +42,8 @@ honden inbox ack --all     # 処理したものを既読にする
 ## 様子を見る
 
 ```
-honden status        # 布陣一枚（誰が居り、何を握り、何が未読か）
-honden cmd list      # 動いておる司令
+honden status        # 布陣一枚（誰が居り、何を握り、何が未読か、検め待ちの報告）
+honden cmd list      # 動いておる司令（検め待ちの報告があれば印つき）
 honden decisions     # 殿の裁可を待っておるもの
 ```
 
@@ -47,24 +58,8 @@ honden decisions     # 殿の裁可を待っておるもの
 
 ## 道具の出力を鵜呑みにするな
 
-**フィルタを通った表示を、証拠として文書へ転記するな。**
+**SHA・tip・commit 数は `git rev-parse` / `git rev-list` / `git cat-file` で取れ。
+`--merges` 無しの `git log` の表示を根拠にするな**——merge commit が黙って落ち、件数は落ちた後で揃う。
 
-SHA・commit の確認は `git rev-parse <ref>` か `git rev-list -1 <ref>` を使え。
-`git log` の表示を根拠に tip・基準 commit・commit 数を報告へ書いてはならぬ。
-
-**理由（実測・cmd_706）**: `rtk git log` は `--merges` 指定が無いと
-**merge commit を黙って除外する**。`-N` の件数指定は除外後に適用されるゆえ
-**件数が合ってしまい、欠落に気づく手掛かりが残らぬ**。
-`git log -1 <merge_sha>` ですら別の commit を返す。PR merge 運用の repo では
-main の tip はほぼ常に merge commit ゆえ、「`git log` で tip 確認」は**系統的に誤る**。
-
-| 信用できる | `rev-parse` / `rev-list` / `show` / `cat-file` / `--merges` を明示した `git log` |
-|---|---|
-| 汚れておる | `--merges` 無しの `git log`（tip 確認・基準の選定・commit 数の勘定・系譜の推論） |
-
-**表示件数が期待どおりでも、欠落しておらぬ証にはならぬ。** 件数はフィルタの後で揃う。
-履歴の完全性が要る場面では `GIT_REAL=/usr/bin/git` で実体を直に叩け（token は失う。常用はせぬ）。
-
-これは git に限らぬ。**道具の出力は観測であって事実ではない**——
-何かを「無い」「変わらぬ」「通った」と報告する前に、
-その道具が**在る物を見せられる**ことを確かめよ（陽性対照）。
+理由・信用できる道具の表・陽性対照は `instructions/common/protocol.md` の
+「道具の出力を鵜呑みにするな」にだけ書く（`honden brief` に出る）。

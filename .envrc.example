@@ -3,12 +3,20 @@
 
 # ── task CLI の口 ──────────────────────────────────────
 # 門（cmd done の伺い）と honden-bot --to task が使う。
-# api_url は書かねば honden 側が暗黙で https://task.koyori.app を渡すゆえ、
-# 手元に別の task を立てる時だけ開ける。
-# tenant は env でなく settings.yaml の review.gate.tenant（案件別は
-# review.gates.<id>.tenant）に書く——秘密でなく案件の属性ゆえ（殿の指摘・2026-09-04）。
-#export TASK_API_URL=http://127.0.0.1:3400
+# honden 自身は api_url を省けば既定値を渡すが、task CLI を直接呼ぶ skill は
+# 三つとも shell に要る。末尾の /api が無い URL は `Resource not found` になる。
+export TASK_API_URL=https://task.koyori.app/api
 export TASK_TOKEN=
+export TASK_TENANT=
+
+# 2026-09-24 時点（task --version 実測 0.1.26）: whoami の JSON に tenant_id 鍵は載るが、
+# whoami を打つには依然 TASK_TENANT が要る（env -u TASK_TENANT では exit 2）。
+# 2026-09-23 までは tenant_id 鍵は載らなかった——当時の記述は正しかった。
+# #786 を含む CLI リリースを入れれば後者は消える見込み（merge 済みだが tag はまだ v0.1.26）。
+# 確かめ手: task --version と env -u TASK_TENANT task auth whoami --json（0.1.26 では exit 2）。
+# honden の review gate は別経路。tenant は settings.yaml の review.gate.tenant
+# （案件別は review.gates.<id>.tenant）にも書く。秘密でなく案件の属性である。
+# 手元に別の task を立てる時は TASK_API_URL をその URL へ変える。
 
 # 案件別の鍵（settings.yaml の review.gates.<id>.token_env で名指しする分）
 #export TASK_TOKEN_MYPROJ=

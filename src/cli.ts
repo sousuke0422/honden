@@ -214,6 +214,34 @@ export function inboxWrite(
 
   const problems = validate(inboxSchema(known), picked.value);
   if (problems.length > 0) {
+    // 宛先が名簿の外である時だけ、言葉を実情へ寄せる。**弾く条件は変えぬ**。
+    //
+    // 「取りうる値の外」では、布陣の外からの報せに返そうとした者が
+    // なぜ外なのかを知る手立てが無い（inbox write --to review_session が
+    // 弾かれ、読んだ者が途方に暮れた・2026-09-25）。
+    //
+    // ただし打ち間違い（--to shgun）に「布陣の外ゆえ届かぬ」と言えば嘘になる。
+    // 見分けの手掛かりは「その名から報せが届いた事実」——inbox に from として
+    // 現れる名は実在する差出人であり、打ち間違いではない。届いた事実の無い名は
+    // 打ち間違いの見込みが高いが、まだ一度も書いておらぬ布陣外の相手かも
+    // しれぬゆえ、そちらには両方に当てはまる言い方をする。
+    const toProblem = problems.find((p) => p.field === 'to' && p.message === '取りうる値の外');
+    const toRaw = picked.value['to'];
+    if (toProblem && typeof toRaw === 'string' && toRaw !== '') {
+      const wrote =
+        (db.query('SELECT count(*) c FROM inbox WHERE sender = ?').get(toRaw) as { c: number })
+          .c > 0;
+      if (wrote) {
+        toProblem.message = '布陣の外の相手である（名簿に無いが、この名から報せは届いておる）';
+        toProblem.hint =
+          'inbox では届かぬ。返しは殿（人）を介するほかない。\n' +
+          `名簿に居るのは ${known.join(' / ')}。`;
+      } else {
+        toProblem.hint =
+          (toProblem.hint ?? '') +
+          '\n打ち間違いでなく布陣の外の相手ならば、inbox では届かぬ——返しは殿（人）を介されよ。';
+      }
+    }
     return {
       code: EXIT_INVALID,
       err: explain(problems, "本文が長いなら <<'EOF' で流すと引用符に悩まされぬ。"),

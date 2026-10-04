@@ -13,6 +13,7 @@ import { expect, test, describe } from 'bun:test';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
+import { acquire } from '../src/lease';
 import {
   submitReport,
   submitQc,
@@ -98,6 +99,25 @@ describe('報告の路', () => {
     const { db } = seeded();
     const r = submitReport(db, 'ashigaru2', { task_id: 'subtask_x', status: 'done', summary: 'やった' });
     expect(r.ok).toBe(false);
+  });
+
+  test('司令に結び付かぬ持ち場から報告はできぬ', () => {
+    const { db } = seeded();
+    const taskId = 'lease_only_task';
+    const got = acquire(db, { agent: 'ashigaru2', taskId, holder: 'ashigaru2' });
+    expect(got.ok).toBe(true);
+    expect((db.query('SELECT cmd_id FROM task WHERE agent = ?').get('ashigaru2') as { cmd_id: string | null }).cmd_id)
+      .toBeNull();
+
+    const r = submitReport(db, 'ashigaru2', {
+      task_id: taskId,
+      status: 'done',
+      summary: '司令の無い持ち場から報告する',
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('司令に結び付いておらぬ');
+    expect((db.query('SELECT count(*) c FROM report').get() as { c: number }).c).toBe(0);
   });
 
   test('家老は報告を上げぬ（dashboard を通す）', () => {
