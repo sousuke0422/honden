@@ -22,6 +22,7 @@ const input = (findings: unknown[]) => {
 const harness = (flags: Record<string, string>) => {
   const runs: string[][] = [];
   const out: string[] = [];
+  const errs: string[] = [];
   const code = reviewSubmitTask({
     flags,
     pr: 7,
@@ -34,32 +35,30 @@ const harness = (flags: Record<string, string>) => {
       return 0;
     },
     out: (l) => out.push(l),
+    err: (l) => errs.push(l),
     audit: () => {},
   });
-  return { code, runs, out };
+  return { code, runs, out, errs };
 };
 
 describe('一、task 宛ての --repo を拒む', () => {
   test('--repo を渡すと EXIT_INVALID で、task CLI は一度も起こされぬ', () => {
-    const errs: string[] = [];
-    const orig = console.error;
-    console.error = (m: string) => errs.push(String(m));
-    try {
-      const { code, runs } = harness({ to: 'task', repo: 'o/r', project: 'TASK' });
-      expect(code).toBe(2);
-      expect(runs).toEqual([]);
-    } finally {
-      console.error = orig;
-    }
+    const { code, runs, out, errs } = harness({ to: 'task', repo: 'o/r', project: 'TASK' });
+    expect(code).toBe(2);
+    expect(runs).toEqual([]);
+    expect(out).toEqual([]);
+    // 拒みの文は二行とも err の口へ出る（console.error を差し替えずに見る）
     const text = errs.join('\n');
+    expect(text.split('\n')).toHaveLength(2);
     expect(text).toContain('[入力]');
     expect(text).toContain('--project');
     expect(text).toContain('repo の口');
   });
 
   test('--repo 無しの task 宛ては今のまま通り、task CLI へ --project と --pr が渡る', () => {
-    const { code, runs } = harness({ to: 'task', project: 'TASK' });
+    const { code, runs, errs } = harness({ to: 'task', project: 'TASK' });
     expect(code).toBe(0);
+    expect(errs).toEqual([]);
     expect(runs).toEqual([['task', 'review', 'submit', '-', '--project', 'TASK', '--pr', '7']]);
   });
 });

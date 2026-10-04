@@ -327,8 +327,8 @@ export function reviewSubmitFailureLines(e: unknown): string[] {
 }
 
 /**
- * review submit の task 宛て。task CLI を起こす手（run）と支度（gate）は注入にし、
- * 試験が名乗りの錨や App の鍵に依らず、起こされたかを見張れるようにする。
+ * review submit の task 宛て。task CLI を起こす手（run）と支度（gate）、出の口（out・err）は
+ * 注入にし、試験が名乗りの錨や App の鍵に依らず、起こされたかと何を言うたかを見張れるようにする。
  */
 export function reviewSubmitTask(a: {
   flags: Record<string, string>;
@@ -339,12 +339,13 @@ export function reviewSubmitTask(a: {
   gate: () => { ok: true; bin: string[]; project: string; env?: Record<string, string> } | { ok: false };
   run: (argv: string[], env: Record<string, string> | undefined, stdin?: string) => number;
   out: (line: string) => void;
+  err: (line: string) => void;
   audit: (entry: Record<string, string>) => void;
 }): number {
   // task CLI の review submit に repo の口は無い。黙って無視すると、--repo で選んだ
   // つもりの宛先と、--project（か既定）で決まる実の宛先が食い違っても気づけぬ。拒む。
   if (a.flags['repo'] !== undefined) {
-    console.error(
+    a.err(
       '  [入力] task 宛ての review submit に --repo は渡せぬ。task CLI の review submit に repo の口は無い。\n' +
         '  task 宛ては --project <id> で宛先を決める（GitHub へ出すなら --to github --repo OWNER/REPO）。',
     );
@@ -646,7 +647,7 @@ async function main(argv: string[]): Promise<number> {
     if (d.dest === 'task') {
       return reviewSubmitTask({
         flags, pr, input: parsed.input, dryRun, actor,
-        gate: taskGate, run: runTask, out: (l) => console.log(l), audit,
+        gate: taskGate, run: runTask, out: (l) => console.log(l), err: (l) => console.error(l), audit,
       });
     }
 
