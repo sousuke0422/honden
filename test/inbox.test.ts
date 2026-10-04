@@ -15,6 +15,8 @@ import { existsSync, statSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSuppressed } from '../src/inbox';
+import { runInboxRead } from '../src/main';
+import { exportAll } from '../src/export';
 
 const seeded = () => {
   const db = openStore({ path: ':memory:' });
@@ -269,5 +271,96 @@ describe('rideAlongSuppressed — 横乗せを載せてはならぬ口', () => {
     expect(rideAlongSuppressed(['brief'])).toBe(false);
     expect(rideAlongSuppressed(['status'])).toBe(false);
     expect(rideAlongSuppressed(['cmd', 'list'])).toBe(false);
+  });
+});
+
+describe('名簿の外からの報せ', () => {
+  // 布陣の外（standalone セッションなど）からの報せは返せぬ——
+  // inbox write --to は名簿に縛られる。読んだ者がそれと分かるよう、
+  // inbox read の表示にだけ @no-reply を添える。正本の from は変えぬ。
+  const mk = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-noreply-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    const ins = db.prepare(
+      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,?)',
+    );
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+      ]);
+      ins.run('n1', 'karo', '2026-09-25T10:00', 'report_received', 'review_session', '布陣外より', 0);
+      ins.run('n2', 'karo', '2026-09-25T11:00', 'cmd_new', 'shogun', '布陣内より', 0);
+      ins.run('n3', 'karo', '2026-09-25T09:00', 'report_received', 'ashigaru3', '名簿の外の足軽', 1);
+    });
+    return { dbPath, db };
+  };
+
+  test('名簿の外の差出人には @no-reply が付く', () => {
+    const { dbPath } = mk();
+    const r = runInboxRead(dbPath, 'karo', undefined, false);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('review_session @no-reply → karo');
+  });
+
+  test('名簿の中の差出人には付かぬ（陰性対照）', () => {
+    const { dbPath } = mk();
+    const r = runInboxRead(dbPath, 'karo', undefined, false);
+    expect(r.out).toContain('shogun → karo');
+    expect(r.out).not.toContain('shogun @no-reply');
+  });
+
+  test('--all（既読を含む口）でも同じ判じで出る', () => {
+    const { dbPath } = mk();
+    const r = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(r.out).toContain('ashigaru3 @no-reply → karo');
+  });
+
+  test('差出人が名簿へ入れば、同じ報せが印無しで出る。正本の from は変わらぬ', () => {
+    const { dbPath, db } = mk();
+    const before = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(before.out).toContain('ashigaru3 @no-reply');
+
+    // 名簿が動く——ashigaru3 が布陣へ入る。正本の報せには触れぬ。
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+        { id: 'ashigaru3', role: 'worker', cli: 'claude', model: null },
+      ]);
+    });
+
+    const after = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(after.out).toContain('ashigaru3 → karo');
+    expect(after.out).not.toContain('ashigaru3 @no-reply');
+
+    // 表示が変わっても from は一文字も変わらぬ。
+    const row = db.query("SELECT sender FROM inbox WHERE id = 'n3'").get() as { sender: string };
+    expect(row.sender).toBe('ashigaru3');
+    const rowOut = db.query("SELECT sender FROM inbox WHERE id = 'n1'").get() as { sender: string };
+    expect(rowOut.sender).toBe('review_session');
+  });
+
+  test('印は表示の口だけ。list と export は素の from を返す', () => {
+    const { dbPath, db } = mk();
+
+    // list は正本の from をそのまま返す。from で突き合わせる口が頼る。
+    const senders = list(db, 'karo', { all: true }).map((m) => m.sender);
+    expect(senders).toContain('review_session');
+    for (const s of senders) expect(s).not.toContain('@no-reply');
+
+    // export の YAML も素の from。旧形式へ戻す時に差出人が化けてはならぬ。
+    const file = exportAll(db).find((f) => f.path === 'queue/inbox/karo.yaml');
+    expect(file).toBeDefined();
+    expect(file!.body).toContain('from: review_session');
+    expect(file!.body).not.toContain('@no-reply');
+
+    // 陽性対照——同じ正本で、印を付ける口は生きておる。
+    // これが無いと、印の実装ごと壊れた時も上の「付かぬ」が緑のまま通る。
+    // （表示は list を通るゆえ、list が印を混ぜれば表示の印は二重になる。
+    //   上で先に list を見るのは、落ちた所が壊れた口を指すようにするため。）
+    const r = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(r.out).toContain('review_session @no-reply → karo');
   });
 });

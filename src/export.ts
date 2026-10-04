@@ -60,6 +60,7 @@ export function exportAll(db: Database): ExportedFile[] {
       body: yaml({
         messages: msgs.map((m) => ({
           content: m.body,
+          // 素の from。@no-reply の印は表示の口（runInboxRead）だけ——ここへ混ぜると from の突き合わせが壊れる。
           from: m.sender,
           id: m.id,
           read: m.read === 1,
