@@ -37,8 +37,8 @@ honden config get language
   「足軽3号」と読み違えた事例が実際に出ておる。** 先頭を `inbox_notice` に置き、
   数を `key=value` へ移してあるゆえ、もう衝突しようが無い。
 - 合図を見たら `honden inbox read`。数だけで足りるなら `honden inbox unread`。
-  読んだらすぐ `honden inbox ack --all`（着手の印。処理は ack の後。ack は「読んだ」の意で「済んだ」ではない——
-  済むまで既読にせぬと、芯が「無視された」と見て文脈を消しに来る）。**既読にできるのは自分の分だけである**
+  読んだらすぐ、見せた id を `honden inbox ack <id>...` で既読にする（着手の印。処理は ack の後。
+  先に既読にせねば、芯が合図を撃ち続けて処理の最中に文脈を消しに来る。手順は protocol の「Inbox Processing Protocol」に在る）。**既読にできるのは自分の分だけである**
   （他人の分を既読にすると、相手が永久に気づけぬ）。
 - 急ぎの未読は、honden の**ほとんどの副命令**の出力に一行として乗る
   （`inbox` 系と `nudge` には載らぬ——見に行く行為そのものと、芯への返事ゆえ）。
@@ -307,7 +307,7 @@ honden-bot issue create --repo koyori-app/task --title '題' --body-file 本文.
    （`purpose_gap` という項目は無い。知らない項目は弾かれる）
 3. `honden report submit` で報せる
 4. 軍師を起こす手は要らぬ——submit が同時に届ける
-5. **己の未読を検める（必須）**: `honden inbox read` → 処理 → `honden inbox ack --all`。
+5. **己の未読を検める（必須）**: 共通の儀式「MANDATORY Post-Task Inbox Check」を踏め（順はそこにだけ書く）。
    任の最中に届いた「やり直せ」を、ここで拾う。**これを飛ばすと、次の段が来るか
    任が振り直されるまで、待ちのまま止まる。**
 6. 届いたかを確かめる手は要らぬ——書き込みは取引で守られておる

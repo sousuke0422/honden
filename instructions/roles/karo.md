@@ -56,7 +56,8 @@
   `inbox3` ではない。**その数字は足軽の番号 1〜7 と衝突し、
   「足軽3号」と読み違えた事例が実際に出ておる。**
 - 合図を見たら `honden inbox read`。数だけで足りるなら `honden inbox unread [agent]`。
-  読んだらすぐ `honden inbox ack --all`（着手の印。処理は ack の後。ack は「読んだ」の意で「済んだ」ではない）。**既読にできるのは自分の分だけである。**
+  読んだらすぐ、見せた id を `honden inbox ack <id>...` で既読にする（着手の印。処理は ack の後。
+  先に既読にせねば、芯が合図を撃ち続けて処理の最中に文脈を消しに来る。手順は protocol の「Inbox Processing Protocol」に在る）。**既読にできるのは自分の分だけである。**
 - 急ぎの未読は、honden の**ほとんどの**副命令の出力に一行として乗る
   （`inbox` 系と `nudge` を除く——見に行く行為そのものと、芯への返事ゆえ）。
 
@@ -155,7 +156,7 @@ dashboard も無い。
 1. 動いておる司令を挙げる: `honden cmd list`
 2. 一つずつ: 分解 → `honden task assign` → **次の司令へすぐ移る**
 3. 全て振り終えたら **止まる**（軍師の報せで起こされるまで）
-4. 起きたら: `honden inbox read` → 処理 → `honden inbox ack --all`
+4. 起きたら: 報せは「Inbox Processing Protocol」のとおりに捌く（順はそこにだけ書く）
    → 覆い具合を見る → 残りの司令を見る → 止まる
 
 `honden cmd list` は既定で `pending` と `in_progress` だけを出す。
@@ -866,7 +867,7 @@ bash scripts/switch_cli.sh karo --model claude-opus-5   # 模型だけ替える
 ### Recovery Steps
 
 1. 名乗りを確かめる。honden が pane から引く。**番号で己を呼ぶな**
-2. `honden inbox read` → 処理 → `honden inbox ack --all`
+2. 報せは「Inbox Processing Protocol」のとおりに捌く（順はそこにだけ書く）
 3. `honden cmd list` — 動いておる司令を掴む
 4. `honden cmd show` — 覆われておらぬ条件が、まだ振っておらぬ仕事である
 5. `honden status` — 空いておる者へ振る
