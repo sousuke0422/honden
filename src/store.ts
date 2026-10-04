@@ -467,7 +467,9 @@ CREATE TABLE IF NOT EXISTS nudge (
   -- pane の写しは scroll-back ごと消えうる（/clear・再描画）。画面だけを
   -- 見ておると、旗が消えた次の周から梯子が再開し、枠切れの相手に
   -- 文脈消しまで届く。消えた物は読めぬ——読んだ時に覚えるほかない。
-  limited_until TEXT
+  limited_until TEXT,
+  hold_reason   TEXT,   -- 復帰時刻の無い枠切れ、または原因不明の無応答
+  hold_at       TEXT    -- 上役へ判断を委ねた時刻
 );
 
 -- 禁じ手の門の通行手形（OTP）。
@@ -637,6 +639,8 @@ function migrate(db: Database): void {
   addColumn(db, 'inbox', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'nudge', 'reset_count', 'INTEGER NOT NULL DEFAULT 0');
   addColumn(db, 'nudge', 'limited_until', 'TEXT');
+  addColumn(db, 'nudge', 'hold_reason', 'TEXT');
+  addColumn(db, 'nudge', 'hold_at', 'TEXT');
   // 貸与の三欄。型へ足した折に**移行を書き忘れ**、先に建った正本では
   // `honden status` が「no such column: holder」で倒れておった
   // （本番の正本で実見・2026-08-29）。`CREATE TABLE IF NOT EXISTS` は
