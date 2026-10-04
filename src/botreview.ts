@@ -139,10 +139,25 @@ export interface GithubReviewPayload {
 }
 
 /** 指摘一件の見出し。severity は記号として本文へ写る（欄としては落ちる）。 */
-function findingText(f: ReviewFinding): string {
+function findingText(f: ReviewFinding, where = ''): string {
   // 題に既に 💥 等の記号が付いておればそのまま活かし、無ければ severity の記号を添える
   const mark = /^\p{Extended_Pictographic}/u.test(f.title) ? '' : `${SEVERITY_MARK[f.severity]} `;
-  return `${mark}**${f.title}**\n\n${f.body}`;
+  return `${mark}**${f.title}**${where}\n\n${f.body}`;
+}
+
+/**
+ * 本文の列へ移した指摘が持っておる位置。inline に載らぬ指摘は file と line の
+ * どちらかが欠けておるが、持っておる方まで捨てると、どこの話かが消える。
+ * file だけなら file、line だけなら line、両方無ければ何も足さぬ。
+ */
+function locationOf(f: ReviewFinding): string {
+  if (f.file !== undefined) {
+    const tick = f.file.includes('`') ? '``' : '`';
+    const pad = tick === '``' ? ' ' : '';
+    return `（${tick}${pad}${f.file}${pad}${tick}）`;
+  }
+  if (f.line !== undefined) return `（${f.line} 行）`;
+  return '';
 }
 
 /**
@@ -160,7 +175,7 @@ export function renderGithubReview(input: ReviewInput): GithubReviewPayload {
     : 'COMMENT';
   const parts = [input.summary.trim()];
   if (bodyOnly.length > 0) {
-    parts.push(bodyOnly.map((f) => `- ${findingText(f).replace(/\n/g, '\n  ')}`).join('\n'));
+    parts.push(bodyOnly.map((f) => `- ${findingText(f, locationOf(f)).replace(/\n/g, '\n  ')}`).join('\n'));
   }
   if (inline.length > 0) {
     parts.push(`（行に付く指摘 ${inline.length} 件は inline comment に在る）`);

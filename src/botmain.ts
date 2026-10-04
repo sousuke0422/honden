@@ -34,7 +34,7 @@ import {
   type InstallationToken, type BotRank,
 } from './bot';
 import { gateConfig, gateEnv } from './reviewgate';
-import { parseReviewInput, renderGithubReview, renderTaskRound, summarizeReviews, FINDING_STATES } from './botreview';
+import { parseReviewInput, renderGithubReview, renderTaskRound, summarizeReviews, FINDING_STATES, type ReviewInput } from './botreview';
 import { get as configGet } from './config';
 
 const APP_DIR = process.env['SHOGUN_GH_APP_DIR'] ?? join(homedir(), '.shogun', 'github-app');
@@ -57,10 +57,13 @@ const USAGE = `honden-bot — GitHub App（shogun-bot 名義・Issues:write の�
       --no-dup-check     重複探しを飛ばす
       --dry-run          token 鋳造まで。起票せぬ
   honden-bot issue comment --repo OWNER/REPO --number N --body-file 道 [--dry-run]
-  honden-bot review submit --pr N --body-file 道 [--repo OWNER/REPO | --project <id>] [--to github|task] [--dry-run]
+  honden-bot review submit --to github --pr N --body-file 道 (--repo OWNER/REPO | --project <id>) [--dry-run]
+  honden-bot review submit --to task --pr N --body-file 道 [--project <id>] [--dry-run]
       レビューの結果を一束で出す。入力は findings JSON（head_sha/summary/findings）
       github: PR review（summary→body・severity→記号・file+line→inline・state/round は出さぬ）
+              宛先は --repo か、--project の所在の repo
       task:   round + findings（語彙が同じゆえそのまま）。司令層のみ
+              宛先は --project（省けば review.gate の既定）。--repo は拒む（task に repo の口は無い）
   honden-bot review status --pr N [--repo OWNER/REPO | --project <id>] [--to github|task] [--dry-run]
       レビューの現在地を読む。github は review 履歴と数、task は rounds と summary。司令層のみ
   honden-bot task finding move --id UUID --state open|fixed|verified|deferred|rejected [--note 訳] [--project <id>] [--dry-run]
@@ -321,6 +324,44 @@ export function reviewSubmitFailureLines(e: unknown): string[] {
     );
   }
   return lines;
+}
+
+/**
+ * review submit の task 宛て。task CLI を起こす手（run）と支度（gate）は注入にし、
+ * 試験が名乗りの錨や App の鍵に依らず、起こされたかを見張れるようにする。
+ */
+export function reviewSubmitTask(a: {
+  flags: Record<string, string>;
+  pr: number;
+  input: ReviewInput;
+  dryRun: boolean;
+  actor: string;
+  gate: () => { ok: true; bin: string[]; project: string; env?: Record<string, string> } | { ok: false };
+  run: (argv: string[], env: Record<string, string> | undefined, stdin?: string) => number;
+  out: (line: string) => void;
+  audit: (entry: Record<string, string>) => void;
+}): number {
+  // task CLI の review submit に repo の口は無い。黙って無視すると、--repo で選んだ
+  // つもりの宛先と、--project（か既定）で決まる実の宛先が食い違っても気づけぬ。拒む。
+  if (a.flags['repo'] !== undefined) {
+    console.error(
+      '  [入力] task 宛ての review submit に --repo は渡せぬ。task CLI の review submit に repo の口は無い。\n' +
+        '  task 宛ては --project <id> で宛先を決める（GitHub へ出すなら --to github --repo OWNER/REPO）。',
+    );
+    return EXIT_INVALID;
+  }
+  const t = a.gate();
+  if (!t.ok) return EXIT_INVALID;
+  const argv = [...t.bin, 'review', 'submit', '-', '--project', t.project, '--pr', String(a.pr)];
+  if (a.flags['json'] === 'true') argv.push('--json'); // 実装の返り（round の id・採番）をそのまま通す
+  if (a.dryRun) {
+    a.out(`  [dry-run] ${argv.join(' ')}（stdin に findings JSON・${a.input.findings.length} 件）`);
+    a.audit({ action: 'review_submit_dry_run', actor: a.actor, dest: 'task', pr: String(a.pr), status: 'DRY_RUN_OK' });
+    return EXIT_OK;
+  }
+  const code = a.run(argv, t.env, renderTaskRound(a.input));
+  a.audit({ action: 'review_submit', actor: a.actor, dest: 'task', pr: String(a.pr), status: code === 0 ? 'SUCCESS' : `EXIT_${code}` });
+  return code;
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -603,18 +644,10 @@ async function main(argv: string[]): Promise<number> {
     if (!parsed.ok) { console.error(`  ${parsed.message}`); return EXIT_INVALID; }
 
     if (d.dest === 'task') {
-      const t = taskGate();
-      if (!t.ok) return EXIT_INVALID;
-      const argv = [...t.bin, 'review', 'submit', '-', '--project', t.project, '--pr', String(pr)];
-      if (flags['json'] === 'true') argv.push('--json'); // 実装の返り（round の id・採番）をそのまま通す
-      if (dryRun) {
-        console.log(`  [dry-run] ${argv.join(' ')}（stdin に findings JSON・${parsed.input.findings.length} 件）`);
-        audit({ action: 'review_submit_dry_run', actor, dest: 'task', pr: String(pr), status: 'DRY_RUN_OK' });
-        return EXIT_OK;
-      }
-      const code = runTask(argv, t.env, renderTaskRound(parsed.input));
-      audit({ action: 'review_submit', actor, dest: 'task', pr: String(pr), status: code === 0 ? 'SUCCESS' : `EXIT_${code}` });
-      return code;
+      return reviewSubmitTask({
+        flags, pr, input: parsed.input, dryRun, actor,
+        gate: taskGate, run: runTask, out: (l) => console.log(l), audit,
+      });
     }
 
     const repo = resolveRepoFlag(flags, dbPath) ?? '';
