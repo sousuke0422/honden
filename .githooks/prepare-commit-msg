@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+COMMIT_MSG_FILE=$1
+HOOK_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+# shellcheck source=lib/strip-cursor-trailers.sh
+. "$HOOK_DIR/lib/strip-cursor-trailers.sh"
+
+strip_cursor_trailers "$COMMIT_MSG_FILE"
+
+# 殿の Assisted-by 用 global hook（core.hooksPath が ~/.git-hooks のとき）へ委譲する。
+# 本 repo は core.hooksPath=.githooks に据えるため、ここで明示的に呼ぶ。
+CHAIN="${HONDEN_PREPARE_COMMIT_MSG_CHAIN:-$HOME/.git-hooks/prepare-commit-msg}"
+if [ -n "$CHAIN" ] && [ -x "$CHAIN" ] && [ "$CHAIN" != "$0" ]; then
+  "$CHAIN" "$@"
+fi
