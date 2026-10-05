@@ -17,7 +17,7 @@ import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
 import { amendCmd } from '../src/amend';
 import { notifyBlocked, unresolved, depSummary } from '../src/deps';
-import { runCmdList } from '../src/main';
+import { runCmdList, runCmdShow } from '../src/main';
 
 const roster = (db: ReturnType<typeof openStore>) =>
   tx(db, () => {
@@ -201,6 +201,37 @@ describe('amend で足し引きし、跡を残す', () => {
       { before: c, after: '' },
     ]);
   });
+
+  test('依存に触れぬ amend（priority だけ）は依存を保ち、まだ振れぬ。外れるのは depends_on: [] の時だけ', () => {
+    const db = memDb();
+    const a = newCmd(db);
+    const b = newCmd(db, { depends_on: [a] });
+    const r = amendCmd(db, 'shogun', { cmd_id: b, priority: 'high', reason: '殿の命で急ぎとなったため、優先度だけを上げる' });
+    expect(r.ok).toBe(true);
+    expect((db.query('SELECT priority FROM cmd WHERE id = ?').get(b) as { priority: string }).priority).toBe('high');
+    expect(unresolved(db, b).map((n) => n.needs)).toEqual([a]);
+    expect(assign(db, b).ok).toBe(false);
+    // 陰性対照: depends_on: [] を渡した時だけ依存が外れ、振れるようになる
+    // （無ければ「依存を一切動かさぬ実装」でもこの試験は通ってしまう）
+    const t0 = Date.now();
+    while (Date.now() === t0) { /* amend の報せの id がミリ秒で重ならぬよう待つ */ }
+    expect(amend(db, b, []).ok).toBe(true);
+    expect(unresolved(db, b)).toEqual([]);
+    expect(assign(db, b).ok).toBe(true);
+  });
+});
+
+describe('cmd show に依存の一行', () => {
+  test('依存が在れば「依存: cmd_x（status）」、無ければ出さぬ', () => {
+    const { db, path } = fileDb();
+    const a = newCmd(db);
+    const c = newCmd(db);
+    const b = newCmd(db, { depends_on: [a, c] });
+    setStatus(db, c, 'cancelled');
+    const out = runCmdShow(path, b).out ?? '';
+    expect(out).toContain(`依存: ${a}（pending）, ${c}（cancelled）`);
+    expect(runCmdShow(path, a).out ?? '').not.toContain('依存:');
+  });
 });
 
 describe('needs が取り消されれば塞がりの印と、家老への一度の報せ', () => {
@@ -229,6 +260,67 @@ describe('needs が取り消されれば塞がりの印と、家老への一度�
     expect(notifyBlocked(db)).toEqual([]);
     const msgs = db.query("SELECT agent, msg_type FROM inbox WHERE msg_type = 'cmd_blocked'").all();
     expect(msgs).toEqual([{ agent: 'karo', msg_type: 'cmd_blocked' }]);
+  });
+
+  // findBlocked は取引の外で引く。その後・取引の前に依存が解ければ、塞がっておらぬ
+  // 司令について「永久に振れぬ」の急ぎの報せが家老へ届きうる。取引の中で確かめ直す。
+  // beforeTx は試験から差し込む口で、findBlocked の後・取引の前に走る。
+  describe('取引の中で、まだ塞がっておるかを確かめ直す', () => {
+    const blockedPair = () => {
+      const db = memDb();
+      const a = newCmd(db);
+      const b = newCmd(db, { depends_on: [a] });
+      setStatus(db, a, 'cancelled');
+      return { db, a, b };
+    };
+    const notices = (db: ReturnType<typeof openStore>) =>
+      db.query("SELECT id FROM inbox WHERE msg_type = 'cmd_blocked'").all();
+    const journalRows = (db: ReturnType<typeof openStore>) =>
+      db.query("SELECT target FROM ledger WHERE action = 'cmd.blocked.notice'").all();
+
+    test('取引の前に依存の組が外れれば、報せも台帳も作らぬ', () => {
+      const { db, a, b } = blockedPair();
+      const sent = notifyBlocked(db, new Date(), { beforeTx: () => db.run('DELETE FROM cmd_dep WHERE cmd_id = ? AND needs = ?', [b, a]) });
+      expect(sent).toEqual([]);
+      expect(notices(db)).toEqual([]);
+      expect(journalRows(db)).toEqual([]);
+    });
+
+    test('取引の前に依存先が取り消しから外れれば（done 等）、報せも台帳も作らぬ', () => {
+      const { db, a } = blockedPair();
+      const sent = notifyBlocked(db, new Date(), { beforeTx: () => setStatus(db, a, 'done') });
+      expect(sent).toEqual([]);
+      expect(notices(db)).toEqual([]);
+      expect(journalRows(db)).toEqual([]);
+    });
+
+    test('取引の前に依存する司令が閉じれば（done・cancelled）、報せも台帳も作らぬ', () => {
+      for (const closed of ['done', 'cancelled']) {
+        const { db, b } = blockedPair();
+        const sent = notifyBlocked(db, new Date(), { beforeTx: () => setStatus(db, b, closed) });
+        expect(sent, closed).toEqual([]);
+        expect(notices(db), closed).toEqual([]);
+        expect(journalRows(db), closed).toEqual([]);
+      }
+    });
+
+    test('陽性対照: 塞がったままなら、今と同じく一度だけ作る（口を差しても差さずとも）', () => {
+      const { db, b } = blockedPair();
+      let called = 0;
+      expect(notifyBlocked(db, new Date(), { beforeTx: () => { called += 1; } }).map((x) => x.cmdId)).toEqual([b]);
+      expect(called).toBe(1);
+      expect(notifyBlocked(db)).toEqual([]);
+      expect(notices(db)).toHaveLength(1);
+      expect(journalRows(db)).toEqual([{ target: b }]);
+    });
+
+    test('取引の前に依存先が failed へ移れば、引き直した状態で報せる', () => {
+      const { db, a, b } = blockedPair();
+      notifyBlocked(db, new Date(), { beforeTx: () => setStatus(db, a, 'failed') });
+      const body = (db.query("SELECT body FROM inbox WHERE msg_type = 'cmd_blocked'").get() as { body: string }).body;
+      expect(body).toContain(`頼る ${a} が failed で閉じた`);
+      expect(body).toContain(b);
+    });
   });
 
   test('status の合計の一行', () => {

@@ -129,16 +129,24 @@ export interface Blocked {
   dead: Need[];
 }
 
+/**
+ * 「塞がっておる」の条件。**findBlocked と stillBlocked の二か所が、ここだけを使う。**
+ * 依存する司令（c）が生きており、依存の組（d）が在り、依存先（n）が取り消し・
+ * 失敗で閉じておる。二か所で書くと、片方だけ直されて食い違う。
+ */
+const BLOCKED_FROM = `
+       FROM cmd c
+       JOIN cmd_dep d ON d.cmd_id = c.id
+       JOIN cmd n ON n.id = d.needs
+       WHERE c.status IN ('pending','in_progress')
+         AND n.status IN (${DEAD_STATUSES.map((s) => `'${s}'`).join(',')})`;
+
 /** 生きた司令のうち、needs が取り消し・失敗で閉じたもの。振れぬまま永久に塞がる。 */
 export function findBlocked(db: Database): Blocked[] {
   const rows = db
     .query(
       `SELECT c.id cmdId, c.purpose purpose, d.needs needs, n.status status
-       FROM cmd c
-       JOIN cmd_dep d ON d.cmd_id = c.id
-       JOIN cmd n ON n.id = d.needs
-       WHERE c.status IN ('pending','in_progress')
-         AND n.status IN ('cancelled','failed')
+       ${BLOCKED_FROM}
        ORDER BY c.id, d.needs`,
     )
     .all() as { cmdId: string; purpose: string | null; needs: string; status: string }[];
@@ -152,23 +160,49 @@ export function findBlocked(db: Database): Blocked[] {
 }
 
 /**
+ * 一つの組（cmdId が needs に頼る）が、いまも塞がっておるか。塞がっておれば
+ * needs のいまの status を、解けておれば undefined を返す。条件は findBlocked と
+ * 同じ BLOCKED_FROM である。**取引の中で呼ぶこと**——確かめと報せの間に割り込ませぬ。
+ */
+export function stillBlocked(db: Database, cmdId: string, needs: string): string | undefined {
+  const row = db
+    .query(`SELECT n.status status ${BLOCKED_FROM} AND c.id = ? AND d.needs = ?`)
+    .get(cmdId, needs) as { status: string } | null;
+  return row?.status;
+}
+
+/** notifyBlocked に試験から差し込む口。 */
+export interface NotifyBlockedHooks {
+  /** findBlocked の後・各組の取引の前に走る。試験が依存を書き換えて割り込む口。 */
+  beforeTx?: (b: Blocked, d: Need) => void;
+}
+
+/**
  * 塞がった司令を家老へ一度報せる。src/abandoned.ts の notifyAbandoned に倣う。
  *
  * 報せの id を「依存する司令と、閉じた needs」から決めて引く——同じ組なら
  * 同じ id ゆえ、二度目は挿さらぬ。在るかの確かめ・報せ・台帳を一つの取引で
  * 確定する（台帳だけが落ちて inbox が残ると、二度と鳴らぬ）。
  *
+ * **findBlocked は取引の外で引く。** その後・取引の前に依存が解ければ（組が外れる・
+ * needs が取り消しから外れる・依存する司令が閉じる）、塞がっておらぬ司令について
+ * 「永久に振れぬ」の急ぎの報せが届いてしまう。ゆえに取引の中で stillBlocked で
+ * 確かめ直し、解けておれば報せも台帳も作らぬ。報せの文には引き直した status を使う。
+ *
  * 段は上げぬ。報せは未読として残り、芯の合図の梯子（src/nudge.ts）が
  * 家老を起こし続ける。cmd list の印も、依存を外すか閉じるまで消えぬ。
  */
-export function notifyBlocked(db: Database, now: Date = new Date()): Blocked[] {
+export function notifyBlocked(db: Database, now: Date = new Date(), hooks: NotifyBlockedHooks = {}): Blocked[] {
   const sent: Blocked[] = [];
   for (const b of findBlocked(db)) {
     let any = false;
     for (const d of b.dead) {
       const id = `msg_blocked_${b.cmdId}_${d.needs}`;
+      hooks.beforeTx?.(b, d);
       const delivered = tx(db, () => {
         if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(id)) return false;
+        const status = stillBlocked(db, b.cmdId, d.needs);
+        if (status === undefined) return false;
         deliver(db, {
           id,
           agent: ASSIGNER,
@@ -177,7 +211,7 @@ export function notifyBlocked(db: Database, now: Date = new Date()): Blocked[] {
           sender: 'core',
           body:
             `塞がった司令: ${b.cmdId} ${(b.purpose ?? '').split('\n')[0]}\n\n` +
-            `頼る ${d.needs} が ${d.status} で閉じた。このままでは ${b.cmdId} は永久に振れぬ。\n` +
+            `頼る ${d.needs} が ${status} で閉じた。このままでは ${b.cmdId} は永久に振れぬ。\n` +
             `将軍へ上げ、依存を外す（honden cmd amend --cmd_id ${b.cmdId} --depends_on …）か、` +
             `${b.cmdId} を閉じるかを差配されよ。`,
         });
@@ -185,7 +219,7 @@ export function notifyBlocked(db: Database, now: Date = new Date()): Blocked[] {
           actor: 'core',
           action: 'cmd.blocked.notice',
           target: b.cmdId,
-          detail: `needs=${d.needs} status=${d.status}`,
+          detail: `needs=${d.needs} status=${status}`,
         });
         return true;
       });
