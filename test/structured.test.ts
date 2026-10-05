@@ -300,6 +300,54 @@ describe('下流は「出力を読むだけの物」の名簿に載る時だけ�
   });
 });
 
+describe('許しの名簿に、命を走らせる口・書く先を取る口を持つ物を置かぬ', () => {
+  // sort（--compress-program）・rg（--pre）・less/more（前処理と !）・uniq（書く先）は
+  // 名簿から外した。grep の名で据わる ugrep の命を起こす旗も、読むだけと判じぬ。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('外した物と ugrep の旗へ届けば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} | sort -S 1 --compress-program=sh`,
+        `honden guard check --cmd ${p} | rg --pre=sh x`,
+        `honden guard check --cmd ${p} | rg --hostname-bin=sh x`,
+        `honden guard check --cmd ${p} | less`,
+        `honden guard check --cmd ${p} | more`,
+        `honden guard check --cmd ${p} | uniq - /tmp/x`,
+        `honden guard check --cmd ${p} | grep --filter='*:sh' x`,
+        `honden guard check --cmd ${p} | grep -nQ x`,
+        `honden guard check --cmd ${p} | tail -4 | grep --config=/tmp/u x`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule);
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('陽性対照: 残した名簿だけで尽きる下流は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} > /tmp/guard-check.out 2>&1`,
+        `honden guard appeal --cmd ${p} --reason 'test' 2>&1 | head -20`,
+        `honden guard facts --cmd ${p} | head -5`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4 | head -2`,
+        `honden guard check --cmd ${p} | grep -n D0 | wc -l`,
+        `honden guard check --cmd ${p} | cut -f1 | tr a-z A-Z | nl | column -t`,
+        `honden guard check --cmd ${p} | jq -R .`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+});
+
 describe('門の自衛は上書き系の道具でも閉じる', () => {
   test('九経路の Edit / Write / MultiEdit をすべて deny する', () => {
     const settings = JSON.parse(readFileSync(join(ROOT, '.claude/settings.json'), 'utf8')) as {
