@@ -32,8 +32,6 @@ import {
   type Parsed,
   execUnits,
   baseName,
-  SHELLS,
-  WRAPPERS,
 } from './parse';
 import { journal } from './store';
 
@@ -479,6 +477,59 @@ interface GuardTok {
 }
 
 /**
+ * 問いの出力の下流に置いてよい物。読んで絞る・数える・整えるだけで、
+ * 読んだ字面を命として走らせる口も、書く先を取る口も持たぬ。`awk`（system）・
+ * `sed`（e）・`xargs`・shell・解釈系は、その口を持つゆえ載せぬ。
+ * `tee` は書く先を取るゆえ別に判ずる。名簿から外した物とその口:
+ * - `sort`: `--compress-program=PROG` が一時 file の中身を PROG へ流す
+ * - `rg`: `--pre=COMMAND` が読む物を COMMAND に通す
+ * - `less`・`more`: 前処理（LESSOPEN）と、`!` で shell を起こす口を持つ
+ * - `uniq`: 二つ目の引数を書く先に取る（`uniq - /tmp/x`）
+ */
+const PIPE_READERS = new Set([
+  'tail', 'head', 'cat', 'grep', 'egrep', 'fgrep', 'wc', 'cut', 'tr', 'column', 'nl', 'jq',
+]);
+
+/**
+ * grep の名で ugrep が据わる環境が在る（Claude Code の bash の grep も ugrep を
+ * 起こす）。ugrep は `--filter`・`--pager`・`--view`・`-Q`、と設定の file
+ * （`--config`・`---`）で外の命を起こしうる。これらが付けば読むだけと判じぬ。
+ */
+const GREP_RUNNING_FLAGS = /^(?:--(?:filter|pager|view|query|config|save-config)|---|-[^-]*Q)/;
+
+/**
+ * 段 s（門への問い）の出力が、パイプの鎖に沿った下流で**読むだけの物にしか
+ * 届かぬ**か。
+ *
+ * 拒みの名簿（shell・包み・解釈系）では、`awk '{system($0)}'` や `sed e` の
+ * ように、足すたびに次の抜けが見つかる。ゆえに許しの名簿の側へ裏返す。
+ * 下流の**すべての**段の頭が PIPE_READERS に載る時だけ問いと数え、一つでも
+ * 外れれば免除を掛けぬ。外した代価は main と同じ素の判じに戻るだけで、穴は開かぬ。
+ *
+ * - `|` `|&` で継がれる限り下流をすべて歩く。`;` `&&` `||` `&` 改行で鎖が
+ *   切れた先は問いの出力を受けぬゆえ、そこで止める
+ * - 頭が無い（`問い |` で終わる）、頭に代入・変数・glob を含む（実の名が字面に
+ *   無い）時は、読むだけと判じられぬ
+ * - grep の類に ugrep の命を起こす旗が付けば、読むだけと判じぬ
+ * - `tee` は引数が無い時と `/dev/null` だけの時に限る（書く先が file なら、
+ *   そこへ字面を落とす）
+ */
+function pipesOnlyIntoReaders(segments: { toks: GuardTok[]; sep: string }[], s: number): boolean {
+  for (let k = s; segments[k]!.sep === '|' || segments[k]!.sep === '|&'; k += 1) {
+    const [head, ...args] = (segments[k + 1]?.toks ?? []).filter((t) => !t.redir).map((t) => t.value);
+    if (head === undefined || /[$=*?[\]{}]/.test(head)) return false;
+    const name = baseName(head);
+    if (name === 'tee') {
+      if (args.length === 0 || (args.length === 1 && args[0] === '/dev/null')) continue;
+      return false;
+    }
+    if (!PIPE_READERS.has(name)) return false;
+    if (/grep$/.test(name) && args.some((a) => GREP_RUNNING_FLAGS.test(a))) return false;
+  }
+  return true;
+}
+
+/**
  * 単純命令ごとに、門への問いを見分ける。**免除する語の位置を返す。**
  *
  * 出力を絞る（`2>&1 | tail -4`）・file へ落とす（`> out 2>&1`）のは当たり前の
@@ -491,7 +542,8 @@ interface GuardTok {
  *
  * - 置換（引用外の `(` `)` `` ` `` `$(`、二重引用内の `` ` `` `$(`）。二重引用内でも置換は実行される
  * - `$'…'` `$"…"`・heredoc `<<`・行継ぎ・引用内の改行・閉じぬ引用・語頭の `#`
- * - 問いの出力を shell や包みへパイプで流す形（出力に `--cmd` の字面が載りうる）
+ * - 問いの出力を、パイプの鎖の下流で「出力を読むだけの物」の名簿の外へ流す形
+ *   （出力に `--cmd` の字面が載りうる。名簿の外は、それを命として走らせうる）
  *
  * 引用外の改行は `;` と同じ境として扱う。改行の前後はそれぞれ別の単純命令として
  * 裁かれるゆえ、改行の後に禁じ手を置いても止まる。
@@ -650,14 +702,9 @@ function exemptGuardSegments(raw: string): { masked: string; count: number } | u
   for (let s = 0; s < segments.length; s += 1) {
     const seg = segments[s]!;
     if (!isQuery(seg)) continue;
-    // 問いの出力には `--cmd` の字面が載りうる。それを shell や包みへ流す形は
-    // 問いではなく、別の命を走らせる形である
-    if (seg.sep === '|' || seg.sep === '|&') {
-      const consumer = words(segments[s + 1] ?? { toks: [] })[0];
-      if (consumer === undefined) return undefined;
-      const name = baseName(consumer);
-      if (SHELLS.has(name) || WRAPPERS.has(name)) return undefined;
-    }
+    // 問いの出力には `--cmd` の字面が載りうる。下流が出力を読むだけの物で
+    // 尽きる時に限り問いと数える（pipesOnlyIntoReaders）
+    if (!pipesOnlyIntoReaders(segments, s)) return undefined;
     count += 1;
     for (const t of seg.toks) {
       if (t.redir) continue;
