@@ -227,6 +227,70 @@ describe('apply_guard_patch.sh — 試験が落ちれば戻す', () => {
   });
 });
 
+describe('apply_guard_patch.sh — commit と push の段で止まっても、当てた物を残さぬ', () => {
+  /** 作業木の .git/hooks（または遠方の hooks）に hook を置く。 */
+  function hook(dir: string, name: string, body: string) {
+    mkdirSync(dir, { recursive: true });
+    const p = join(dir, name);
+    writeFileSync(p, `#!/bin/sh\n${body}\n`);
+    chmodSync(p, 0o755);
+  }
+
+  test('pre-commit hook が落ちれば、作業木も index も元のまま非ゼロで止まり、遠方は動かぬ', () => {
+    const b = sandbox();
+    const head0 = b.git('rev-parse', 'HEAD');
+    const remote0 = b.remoteTip();
+    hook(join(b.repo, '.git/hooks'), 'pre-commit', 'echo "pre-commit が拒む（作り物）" >&2; exit 1');
+    const r = apply(b, args(b));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('commit が落ちた');
+    expect(r.stderr).toContain('当てた物を戻した');
+    unchanged(b, head0, remote0); // status --porcelain が空ゆえ index も元のまま
+    expect(b.git('diff', '--cached', '--name-only')).toBe('');
+  });
+
+  test('commit-msg hook が trailer を汚せば、commit を解いて戻し、非ゼロで止まる', () => {
+    const b = sandbox();
+    const head0 = b.git('rev-parse', 'HEAD');
+    const remote0 = b.remoteTip();
+    hook(join(b.repo, '.git/hooks'), 'commit-msg', 'printf "Claude-Session: https://example.invalid/x\\n" >> "$1"');
+    const r = apply(b, args(b));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('trailer');
+    expect(r.stderr).toContain('当てた物を戻した');
+    unchanged(b, head0, remote0);
+  });
+
+  test('patch が今の土台に当たらねば（git apply --check が落ちる）、何も変えずに止まる', () => {
+    const b = sandbox();
+    // 別の中身を土台にした patch（文脈の行が今の guard.ts と違う）。sha256 は正しい
+    const good = makePatch(b, 'good.diff', { 'src/guard.ts': GUARD0 + 'export const fixed = true;\n' });
+    const text = readFileSync(good.path, 'utf8');
+    expect(text).toContain(' export const gate = 1;');
+    const offPath = join(b.base, 'off.diff');
+    writeFileSync(offPath, text.replace(' export const gate = 1;', ' export const gate = 7;'));
+    const offSha = run('sha256sum', [offPath], b.base, b.env).stdout.split(' ')[0]!;
+    const head0 = b.git('rev-parse', 'HEAD');
+    const remote0 = b.remoteTip();
+    const r = apply(b, args(b, { patch: offPath, sha256: offSha }));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('git apply --check が落ちた');
+    unchanged(b, head0, remote0);
+  });
+
+  test('遠方が push を拒めば、commit を解いて戻し、非ゼロで止まり、遠方は動かぬ', () => {
+    const b = sandbox();
+    const head0 = b.git('rev-parse', 'HEAD');
+    const remote0 = b.remoteTip();
+    hook(join(b.remote, 'hooks'), 'pre-receive', 'echo "遠方が拒む（作り物）" >&2; exit 1');
+    const r = apply(b, args(b));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('push が拒まれた');
+    expect(r.stderr).toContain('当てた物を戻した');
+    unchanged(b, head0, remote0);
+  });
+});
+
 describe('apply_guard_patch.sh — 旗の誤り', () => {
   test('知らぬ旗・欠けた旗・余る引数・二度の旗・形の誤りは exit 2 で使い方を出し、何もせぬ', () => {
     const b = sandbox();

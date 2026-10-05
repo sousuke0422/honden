@@ -15,9 +15,11 @@
 #   2. git apply --check の後に git apply
 #   3. bunx tsc --noEmit と bun test。落ちれば当てた file を git checkout -- で戻し、戻したと
 #      告げて止まる
-#   4. patch が触った file だけを add して commit（文は --message-file）
+#   4. patch が触った file だけを add して commit（文は --message-file）。add か commit が
+#      落ちれば（pre-commit hook が拒む等）、index から降ろして作業木を戻し、止まる
 #   5. trailer を git cat-file -p で確かめる。違えば commit を解いて当てた物を戻し、止まる
-#   6. git push origin HEAD:<branch>。fast-forward のみで、force は決して使わぬ
+#   6. git push origin HEAD:<branch>。fast-forward のみで、force は決して使わぬ。拒まれれば
+#      commit を解いて当てた物を戻し、遠方の今の先端を告げて止まる
 #   7. 押した SHA を最後の行に出す
 #
 # 試験の差し替えの口: HONDEN_APPLY_GUARD_VERIFY に実行できる file の道を置くと、3 の段で
@@ -181,24 +183,45 @@ else
 fi
 echo "  型と試験が通った"
 
+# index に載せた物を降ろし、作業木も戻す（commit の前で止まる時）。
+unstage_restore() {
+  g reset --quiet -- "${files[@]}"
+  restore
+}
+
+# 作った commit を解き、index と作業木も戻す（commit の後で止まる時）。
+# 手元の先端は --head へ帰る。--soft ゆえ、解くのは commit だけで他の物は消さぬ。
+uncommit_restore() {
+  g reset --quiet --soft "$HEAD_SHA"
+  unstage_restore
+}
+
 # ---- 4. commit ----
-g add -- "${files[@]}"
-g commit --quiet -F "$MSG"
+# set -e のままだと、add や commit（pre-commit hook 等）が落ちた時に、当てた物を
+# index に載せたまま抜ける。落ちを受け止めて戻す。
+if ! g add -- "${files[@]}"; then
+  unstage_restore
+  stop "git add が落ちた"
+fi
+if ! g commit --quiet -F "$MSG"; then
+  unstage_restore
+  stop "commit が落ちた（hook が拒んだ等）"
+fi
 new="$(g rev-parse HEAD)"
 
 # ---- 5. trailer ----
 body="$(g cat-file -p "$new")"
 if grep -qiE '^(Claude-Session|Co-authored-by):' <<<"$body" || ! grep -qx "$ASSISTED" <<<"$body"; then
-  g reset --quiet --soft HEAD^
-  g reset --quiet -- "${files[@]}"
-  restore
+  uncommit_restore
   stop "commit の trailer が「$ASSISTED」の一行だけでない（hook が足した等）。commit を解いて戻した"
 fi
 echo "  commit: $new（trailer は $ASSISTED のみ）"
 
 # ---- 6. 押す（fast-forward のみ。force は使わぬ） ----
 if ! g push origin "HEAD:refs/heads/$BRANCH"; then
-  stop "push が拒まれた。commit $new は手元に残る（遠方は動いておらぬ）"
+  uncommit_restore
+  now="$(g ls-remote origin "refs/heads/$BRANCH" 2>/dev/null | cut -f1 || true)"
+  stop "push が拒まれた。commit $new を解いて戻した（遠方の今の先端: ${now:-引けぬ}）"
 fi
 
 # ---- 7. 押した SHA ----
