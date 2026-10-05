@@ -511,12 +511,17 @@ const GREP_RUNNING_FLAGS = /^(?:--(?:filter|pager|view|query|config|save-config)
  * - 頭が無い（`問い |` で終わる）、頭に代入・変数・glob を含む（実の名が字面に
  *   無い）時は、読むだけと判じられぬ
  * - grep の類に ugrep の命を起こす旗が付けば、読むだけと判じぬ
+ * - 引数のどれかが実行時に展開されうる（変数・glob・brace）なら、読むだけと
+ *   判じぬ。字面に見えぬ旗（`grep "$OPTS"` が `--pager=sh` になる）を読めぬため。
+ *   名簿のすべての読み手に掛ける。`=` は引数では展開を起こさぬゆえ数えぬ
  * - `tee` は引数が無い時と `/dev/null` だけの時に限る（書く先が file なら、
  *   そこへ字面を落とす）
  */
-function pipesOnlyIntoReaders(segments: { toks: GuardTok[]; sep: string }[], s: number): boolean {
+function pipesOnlyIntoReaders(raw: string, segments: { toks: GuardTok[]; sep: string }[], s: number): boolean {
   for (let k = s; segments[k]!.sep === '|' || segments[k]!.sep === '|&'; k += 1) {
-    const [head, ...args] = (segments[k + 1]?.toks ?? []).filter((t) => !t.redir).map((t) => t.value);
+    const words = (segments[k + 1]?.toks ?? []).filter((t) => !t.redir);
+    if (words.slice(1).some((t) => mayExpand(raw.slice(t.start, t.end)))) return false;
+    const [head, ...args] = words.map((t) => t.value);
     if (head === undefined || /[$=*?[\]{}]/.test(head)) return false;
     const name = baseName(head);
     if (name === 'tee') {
@@ -527,6 +532,38 @@ function pipesOnlyIntoReaders(segments: { toks: GuardTok[]; sep: string }[], s: 
     if (/grep$/.test(name) && args.some((a) => GREP_RUNNING_FLAGS.test(a))) return false;
   }
   return true;
+}
+
+/**
+ * 語の生の字面（引用を剥ぐ前）が、実行時に展開されうるか。単一引用の中は
+ * 何も展開されず、二重引用の中は `$` だけが展開され、引用の外は `$` と
+ * glob・brace の字（`* ? [ ] { }`）が展開される。`\` で逃がした字は数えぬ。
+ * 置換（`$(` `` ` ``）と `$'…'` は exemptGuardSegments が先に退けておる。
+ */
+function mayExpand(word: string): boolean {
+  let quote: "'" | '"' | undefined;
+  for (let i = 0; i < word.length; i += 1) {
+    const ch = word[i]!;
+    if (quote === "'") {
+      if (ch === "'") quote = undefined;
+      continue;
+    }
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') quote = undefined;
+      else if (ch === '$') return true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if ('$*?[]{}'.includes(ch)) return true;
+  }
+  return false;
 }
 
 /**
@@ -704,7 +741,7 @@ function exemptGuardSegments(raw: string): { masked: string; count: number } | u
     if (!isQuery(seg)) continue;
     // 問いの出力には `--cmd` の字面が載りうる。下流が出力を読むだけの物で
     // 尽きる時に限り問いと数える（pipesOnlyIntoReaders）
-    if (!pipesOnlyIntoReaders(segments, s)) return undefined;
+    if (!pipesOnlyIntoReaders(raw, segments, s)) return undefined;
     count += 1;
     for (const t of seg.toks) {
       if (t.redir) continue;
