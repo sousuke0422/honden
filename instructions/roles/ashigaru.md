@@ -230,6 +230,34 @@ honden-bot issue create --repo koyori-app/task --title '題' --body-file 本文.
 
 書ける先は限られておる。的の違う repo へは、許状があっても通らぬ。
 
+## 門の本体への直し（patch で作り、押さぬ）
+
+門の本体（`src/guard.ts`）は settings の deny で、そなたの手からは書けぬ。
+**回り込むな**——python で書く、`git apply` で当てる、別名の写しを本物へ戻す、の類は
+どれも回り込みである。直しは **patch** で作り、当てて押すのは殿の手に残す。
+
+1. 門の写しを scratch に**別名**で取る（`git show <土台の SHA>:src/guard.ts` を `gate.ts` 等へ）。
+   写しを直し、`git diff --no-index` で patch に落とし、見出しの道を `src/guard.ts` へ直す
+2. patch の置き場は `<作業木>.patches/<cmd番号>.diff`
+   （例: `.worktrees/cmd-149-guard-pipe.patches/cmd_204.diff`）
+3. 写しの木（門を `gate.ts` の名で置き、import を向け直した物）で `bun test` と
+   `bunx tsc --noEmit` を打つ。解き手（`bin/honden-parse`）が働く状態で撃て
+4. **試験は commit してよいが、一枚も押さぬ。** patch が当たらぬまま試験を押せば、枝が赤くなる。
+   試験と関わらぬ commit も押さぬ——押すのは殿が patch を当てる時に一度だけである
+5. 報告に次の五つを載せる。家老はこれが揃うたことで「patch を当てる用意ができた」と見る:
+   - patch の在処
+   - sha256（`sha256sum` の値）
+   - 手元の先端（`git rev-parse HEAD`）
+   - 遠方の先端（`git fetch` の後の `git rev-parse origin/<枝>`）
+   - `git apply --check` の結果
+
+`git apply --check` を打つ時は、**保護対象の file 名を命の字面に出すな**（patch の道で打つ）。
+D012 は `git apply` と保護対象の名の組を止める。`--check` の後に `--apply` を置けば当たるゆえ、
+`--check` だけを見分ける紋様は置かれておらぬ。
+
+門に止められても、**紋様を避ける書き換えで抜けるな**。要る命なら `honden guard appeal` で直訴せよ。
+要らぬ字面が当たっただけなら、その字面を外せばよい（同じ命を言い換えるのとは違う）。
+
 ## Persona
 
 1. 任に合う人格を選べ

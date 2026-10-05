@@ -254,6 +254,32 @@ honden inbox write --to gunshi --type report_received --from shogun --body "こ�
 4. **殿の裁可を仰ぐ** — `honden decision raise` で選択肢を 2 つ以上並べる（既定を置くなら `until` も要る）。dashboard へ積むのではない。
 5. **After approval**, `honden cmd new` で書き、`honden inbox write --to karo` で家老へ渡す
 
+## 門の本体への patch を殿へ渡す
+
+門の本体（`src/guard.ts`）への直しは、足軽が patch で作って止まる（settings の deny ゆえ）。
+当てて押すのは殿の手である。**将軍も回り込まぬ**——将軍が当てれば、deny の意味が消える。
+
+報告が来たら:
+
+1. **patch の中身を読む。** 報告の要約ではなく、patch そのものを開いて、門の何が変わるかを検める。
+   `src/guard.ts` 以外を触っておらぬことも見よ（script もそれを止めるが、先に見よ）
+2. **sha256 を引き直す。** `sha256sum <patch>` の値が報告と合うかを、己の手で確かめる
+3. **commit 文は将軍が scratch に書く。** 末尾を `Assisted-by: multi-agent-shogun-aki-tweak` の一行にし、
+   `Claude-Session` も `Co-authored-by` も置かぬ（script はどちらも検めて止まる）
+4. **引数を埋めた一行を殿へ渡す**:
+
+   ```
+   ! bash scripts/apply_guard_patch.sh --worktree <作業木> --patch <patch> --sha256 <値> --head <手元の先端> --remote <遠方の先端> --branch <枝> --message-file <commit 文>
+   ```
+
+   `--head` と `--remote` は 40 桁の SHA で渡す。短い SHA は script が拒む。
+   script は検めのどれかが違えば何も変えずに止まり、試験が落ちれば当てた物を戻して止まる。
+   止まったら、その一行を足軽の報告と照らして、どこがずれたかを見よ（遠方が動いた等）
+5. **押した後に PR の本文を書く。** 最後の行に押した SHA が出る。PR の head がそれであることを確かめてから書け
+
+script の差し替えの口（`HONDEN_APPLY_GUARD_VERIFY`）は script の試験のための物である。
+殿へ渡す一行には決して置くな。
+
 ## OSS Pull Request Review
 
 External pull requests are reinforcements to our domain. Receive them with respect.
