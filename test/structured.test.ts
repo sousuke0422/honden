@@ -348,6 +348,51 @@ describe('許しの名簿に、命を走らせる口・書く先を取る口を�
   });
 });
 
+describe('下流の読み手の引数が実行時に展開されうるなら免除せぬ', () => {
+  // 名簿の読み手でも、引数が展開されれば字面に見えぬ旗が付きうる
+  // （`grep "$OPTS"` が実行時に `--pager=sh` になる）。名簿のすべてに掛ける。
+  // `=` は引数では展開を起こさぬゆえ数えぬ（`--color=never` は通す）。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('変数・glob を含む引数へ届けば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `GREP_OPTS=--pager=sh; honden guard check --cmd ${p} | grep "$GREP_OPTS" .`,
+        `honden guard check --cmd ${p} | grep $X`,
+        `honden guard check --cmd ${p} | tail $N`,
+        `honden guard check --cmd ${p} | grep -n D0*`,
+        `honden guard check --cmd ${p} | head -5 | grep "$X" x`,
+        `honden guard check --cmd ${p} | cut -f{1,2}`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule); // 紋様の層が元からこの規則で止める陽性対照
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('陽性対照: 展開されぬ引数（引用の中の glob・単一引用の $・旗の =）は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} | grep -n D0`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} | tail -n 4`,
+        `honden guard check --cmd ${p} | grep --color=never x`,
+        `honden guard check --cmd ${p} | grep -n 'D0*'`,
+        `honden guard check --cmd ${p} | grep -n "D0[0-9]"`,
+        `honden guard check --cmd ${p} | grep -c '$X'`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+});
+
 describe('門の自衛は上書き系の道具でも閉じる', () => {
   test('九経路の Edit / Write / MultiEdit をすべて deny する', () => {
     const settings = JSON.parse(readFileSync(join(ROOT, '.claude/settings.json'), 'utf8')) as {
