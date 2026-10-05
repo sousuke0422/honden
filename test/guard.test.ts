@@ -389,6 +389,90 @@ describe('D012 門そのものへの細工', () => {
       expect(judge(cmd).permission).toBe('allow');
     });
   }
+
+  // 書き換えの道具が紋様から漏れておった（将軍が見つけた・2026-09-30）。
+  // patch を当てる形が門をすり抜けておった。
+  const patchTampers = [
+    'git apply --include=src/guard.ts fix.diff',
+    "git apply <<'EOF'\n--- a/src/guard.ts\n+++ b/src/guard.ts\nEOF",
+    'git -C . apply fix.diff src/guard.ts',
+    'git am --directory=src 0001.diff src/guard.ts',
+    'patch src/guard.ts < fix.diff',
+    'patch -p1 -i fix.diff .claude/settings.json',
+    'git checkout HEAD~3 -- src/guard.ts',
+    'git restore --source=HEAD~3 src/guard.ts',
+    'install -m 755 /tmp/x bin/honden',
+    'ln -sf /tmp/x bin/honden',
+    'rsync /tmp/x bin/honden-parse',
+    'ls && patch src/guard.ts < fix.diff',
+  ];
+  for (const cmd of patchTampers) {
+    test(`止める（書き換えの道具）: ${cmd}`, () => {
+      for (const v of [judge(cmd), judgeStructured(cmd, run)]) {
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe('D012');
+      }
+    });
+  }
+
+  // 道具の名は日常の語でもある。命令位置に立たぬ時と、門の外を指す時は通す
+  const patchFine = [
+    'git apply fix.diff',
+    'git apply --check fix.diff',
+    'git commit -m "patch notes for guard.ts"',
+    'git show HEAD:src/guard.ts',
+    'git diff src/guard.ts',
+    'git checkout main',
+    'git restore --staged README.md',
+    'bun install',
+    'npm install --save-dev typescript',
+    'ln -s ../README.md docs/README.md',
+    'echo install bin/honden',
+  ];
+  for (const cmd of patchFine) {
+    test(`通す（書き換えの道具の名を含むだけ）: ${cmd}`, () => {
+      expect(judge(cmd).permission, cmd).toBe('allow');
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+    });
+  }
+
+  // claude の門の入口（.claude/hooks/guard.sh）が先の列から漏れておった。
+  // cursor・codex と同じ括り（hooks.json と hooks/ の両方に当たる前置き）で塞ぐ。
+  const claudeHookTampers = [
+    'echo "exit 0" > .claude/hooks/guard.sh',
+    'echo x >> .claude/hooks/session-start.sh',
+    'sed -i s/deny/allow/ .claude/hooks/guard.sh',
+    'rm .claude/hooks/guard.sh',
+    'mv .claude/hooks/guard.sh /tmp/guard.sh',
+    'chmod -x .claude/hooks/guard.sh',
+    'tee .claude/hooks/stop-inbox.sh < /tmp/x',
+    'cp /tmp/x .claude/hooks/guard.sh',
+    'patch .claude/hooks/guard.sh < fix.diff',
+    'git checkout HEAD~3 -- .claude/hooks/guard.sh',
+    'echo "{}" > .claude/hooks.json',
+  ];
+  for (const cmd of claudeHookTampers) {
+    test(`止める（claude の hooks）: ${cmd}`, () => {
+      for (const v of [judge(cmd), judgeStructured(cmd, run)]) {
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe('D012');
+      }
+    });
+  }
+
+  const claudeHookFine = [
+    'cat .claude/hooks/guard.sh',
+    'bash .claude/hooks/guard.sh < /tmp/hook-input.json',
+    'git diff .claude/hooks/guard.sh',
+    'ls -la .claude/hooks',
+    'echo x > .claude/notes.md',
+  ];
+  for (const cmd of claudeHookFine) {
+    test(`通す（claude の hooks を読む・走らせる）: ${cmd}`, () => {
+      expect(judge(cmd).permission, cmd).toBe('allow');
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+    });
+  }
 });
 
 describe('env 前置回避（実弾試験が釣った穴）', () => {

@@ -72,10 +72,9 @@ describe('門自身の単独呼び出しは平面の紋様を免除する', () =
     expect(judgeStructured(cmd, run).permission).toBe('deny');
   });
 
-  test('引用外のパイプ・向き替え・置換・改行は免除せぬ', () => {
+  test('引用外のパイプの先・置換・改行の後の命は免除せぬ', () => {
     const unsafe = [
       "honden guard appeal --cmd 'tmux send-keys -t %9 x' | sh",
-      "honden guard appeal --cmd 'tmux send-keys -t %9 x' > /tmp/result",
       "honden guard appeal --cmd 'tmux send-keys -t %9 x' $(rm -rf /)",
       "honden guard appeal --cmd 'tmux send-keys -t %9 x'\nrm -rf /",
     ];
@@ -93,6 +92,349 @@ describe('門自身の単独呼び出しは平面の紋様を免除する', () =
       "echo honden guard appeal --cmd 'tmux send-keys -t %9 x'",
     ]) {
       expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+});
+
+describe('門への問いは単純命令ごとに免除する（出力を絞っても問える）', () => {
+  // 免除を raw 全体ではなく単純命令ごとに判ずる。出力を絞るのは当たり前の
+  // 作法であり、そこで免除が外れると問い（とりわけ直訴）が門に閉じる。
+  const D014 = "'tmux send-keys -t %9 x'";
+
+  test('出力を絞る・file へ落とす形は通す', () => {
+    const pass = [
+      `honden guard check --cmd ${D014} 2>&1 | tail -4`,
+      `honden guard check --cmd ${D014} > /tmp/guard-check.out 2>&1`,
+      `honden guard appeal --cmd ${D014} --reason 'test' 2>&1 | head -20`,
+      `honden guard facts --cmd ${D014} | head -5`,
+      `honden guard check --cmd ${D014} |& grep -c D014`,
+      `bin/honden guard check --cmd ${D014} 2>/dev/null | cat`,
+    ];
+    for (const cmd of pass) {
+      expect(judge(cmd).rule, cmd).toBe('D014'); // 平面だけなら止まる陽性対照
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+    }
+  });
+
+  test('改行で継いだ無害な命は、それぞれ別の単純命令として通す', () => {
+    const cmd = `honden guard check --cmd ${D014}\necho done`;
+    expect(judgeStructured(cmd, run).permission).toBe('allow');
+  });
+
+  test('同じ行に継いだ禁じ手は、どの継ぎ方でも止まる', () => {
+    const stop: [string, string][] = [
+      [`honden guard check --cmd 'ls' ; tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd 'ls' && tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd 'ls' || tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd 'ls' & tmux send-keys -t %9 x`, 'D014'],
+      [`honden guard check --cmd ${D014} | xargs -I{} tmux send-keys -t %9 {}`, 'D014'],
+      [`tmux send-keys -t %9 x ; honden guard check --cmd 'ls'`, 'D014'],
+      [`honden guard check --cmd 'ls'\ntmux send-keys -t %9 x`, 'D014'],
+    ];
+    for (const [cmd, rule] of stop) {
+      const v = judgeStructured(cmd, run);
+      expect(v.permission, cmd).toBe('deny');
+      expect(v.rule, cmd).toBe(rule);
+    }
+  });
+
+  test('問いの出力を shell へ流す形は免除せぬ', () => {
+    for (const cmd of [
+      `honden guard check --cmd ${D014} | sh`,
+      `honden guard check --cmd ${D014} | bash -s`,
+      `honden guard check --cmd ${D014} 2>&1 | xargs sh -c`,
+    ]) {
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+
+  test('二重引用の中の命令置換は免除せぬ（置換は現に走る）', () => {
+    for (const cmd of [
+      `honden guard check --cmd "$(tmux send-keys -t %9 x)" | tail -4`,
+      'honden guard check --cmd "`tmux send-keys -t %9 x`" | tail -4',
+    ]) {
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+
+  test('向き替えの先は免除せぬ（門そのものへ書く形は止まる）', () => {
+    const cmd = `honden guard check --cmd ${D014} > .claude/settings.json`;
+    const v = judgeStructured(cmd, run);
+    expect(v.permission).toBe('deny');
+    expect(v.rule).toBe('D012');
+  });
+
+  test('解き手が無くても、単独の問いは従来どおり通す', () => {
+    const none = () => ({ ok: false, stdout: '' });
+    expect(judgeStructured(`honden guard check --cmd ${D014}`, none).permission).toBe('allow');
+    // 絞った形は構文を解かねば命の境が判らぬ。解けねば拒む
+    expect(judgeStructured(`honden guard check --cmd ${D014} | tail -4`, none).permission).toBe('deny');
+  });
+});
+
+describe('問いの出力がパイプの下流のどこかで命になる形は免除せぬ（#37 のレビュー）', () => {
+  // 免除が下流を一段しか見ねば、`| tail | sh` のように間に一段挟むだけで
+  // 問いの字面が shell へ届く。main は全体を紋様に照らしておったゆえ deny であった。
+  // 鎖に沿って下流をすべて歩き、どこかで shell・包み・eval に届けば免除を掛けぬ。
+  //
+  // payload は二種: 紋様が命令位置に依らず当たる D012 と、絶対域（区画を壊す D007）。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+  const SINKS = ['| tail | sh', '| cat | bash', '| tail | eval', '| tail | env sh', '| a | b | c | zsh'];
+
+  test('下流に shell・包み・eval が在れば、段の数に依らず main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      const cmds = [
+        ...SINKS.map((s) => `honden guard check --cmd ${p} 2>&1 ${s}`),
+        `honden guard appeal --cmd ${p} --reason 'x' 2>&1 | tail -4 | sh`,
+        `honden guard facts --cmd ${p} | head -5 | bash`,
+      ];
+      for (const cmd of cmds) {
+        // main の判定（全体を紋様に照らす）と同じ規則で止まる
+        expect(judge(cmd).rule, cmd).toBe(rule);
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('stdin を命として読む解釈系と、頭が判じられぬ形（代入・変数）も免除を掛けぬ側へ倒す', () => {
+    for (const cmd of [
+      "honden guard check --cmd 'tee bin/honden' | tail | python3",
+      "honden guard check --cmd 'tee bin/honden' | head | perl",
+      "honden guard check --cmd 'tee bin/honden' | tail | X=1 sh",
+      "honden guard check --cmd 'tee bin/honden' | tail | $SHELL",
+      "honden guard check --cmd 'tee bin/honden' | tail |",
+    ]) {
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+
+  test('陽性対照: 下流に shell の無い多段は通す', () => {
+    for (const [p] of PAYLOADS) {
+      const cmd = `honden guard check --cmd ${p} 2>&1 | tail -4 | head -2`;
+      expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+    }
+  });
+
+  test('陽性対照: 狙いの四形は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} > /tmp/guard-check.out 2>&1`,
+        `honden guard appeal --cmd ${p} --reason 'test' 2>&1 | head -20`,
+        `honden guard facts --cmd ${p} | head -5`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny');
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+
+  test('鎖が ; && || 改行で切れた先は、問いの出力を受けぬゆえ歩かぬ', () => {
+    const D014 = "'tmux send-keys -t %9 x'";
+    for (const cmd of [
+      `honden guard check --cmd ${D014} 2>&1 | tail -4 ; sh -c 'echo ok'`,
+      `honden guard check --cmd ${D014} 2>&1 | tail -4 && sh -c 'echo ok'`,
+      `honden guard check --cmd ${D014} 2>&1 | tail -4 || sh -c 'echo ok'`,
+      `honden guard check --cmd ${D014} 2>&1 | tail -4\nsh -c 'echo ok'`,
+    ]) {
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+    }
+  });
+});
+
+describe('下流は「出力を読むだけの物」の名簿に載る時だけ免除する（拒みの名簿を裏返す）', () => {
+  // 拒みの名簿では awk の system や sed の e のように、足すたびに次の抜けが出る。
+  // 名簿の外へ一段でも届けば免除を掛けず、main と同じ素の判じに戻る。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('名簿の外（awk・sed・xargs・書く先を取る tee）へ届けば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} | awk '{system($0)}'`,
+        `honden guard check --cmd ${p} | sed e`,
+        `honden guard check --cmd ${p} | tail | awk '{print $0}'`,
+        `honden guard check --cmd ${p} | xargs sh`,
+        `honden guard check --cmd ${p} | tee /tmp/x | sh`,
+        `honden guard check --cmd ${p} | tee /tmp/x | tail`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule);
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('tee >(sh) は置換ゆえ既存の判じで止まる', () => {
+    for (const [p] of PAYLOADS) {
+      const cmd = `honden guard check --cmd ${p} | tee >(sh)`;
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+
+  test('陽性対照: 名簿だけで尽きる下流は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} > /tmp/guard-check.out 2>&1`,
+        `honden guard appeal --cmd ${p} --reason 'test' 2>&1 | head -20`,
+        `honden guard facts --cmd ${p} | head -5`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4 | head -2`,
+        `honden guard check --cmd ${p} | grep -n D0 | wc -l`,
+        `honden guard check --cmd ${p} | tee | tail -4`,
+        `honden guard check --cmd ${p} | tee /dev/null | tail -4`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+});
+
+describe('許しの名簿に、命を走らせる口・書く先を取る口を持つ物を置かぬ', () => {
+  // sort（--compress-program）・rg（--pre）・less/more（前処理と !）・uniq（書く先）は
+  // 名簿から外した。grep の名で据わる ugrep の命を起こす旗も、読むだけと判じぬ。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('外した物と ugrep の旗へ届けば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} | sort -S 1 --compress-program=sh`,
+        `honden guard check --cmd ${p} | rg --pre=sh x`,
+        `honden guard check --cmd ${p} | rg --hostname-bin=sh x`,
+        `honden guard check --cmd ${p} | less`,
+        `honden guard check --cmd ${p} | more`,
+        `honden guard check --cmd ${p} | uniq - /tmp/x`,
+        `honden guard check --cmd ${p} | grep --filter='*:sh' x`,
+        `honden guard check --cmd ${p} | grep -nQ x`,
+        `honden guard check --cmd ${p} | tail -4 | grep --config=/tmp/u x`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule);
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('陽性対照: 残した名簿だけで尽きる下流は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} > /tmp/guard-check.out 2>&1`,
+        `honden guard appeal --cmd ${p} --reason 'test' 2>&1 | head -20`,
+        `honden guard facts --cmd ${p} | head -5`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4 | head -2`,
+        `honden guard check --cmd ${p} | grep -n D0 | wc -l`,
+        `honden guard check --cmd ${p} | cut -f1 | tr a-z A-Z | nl | column -t`,
+        `honden guard check --cmd ${p} | jq -R .`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+});
+
+describe('下流の読み手の引数が実行時に展開されうるなら免除せぬ', () => {
+  // 名簿の読み手でも、引数が展開されれば字面に見えぬ旗が付きうる
+  // （`grep "$OPTS"` が実行時に `--pager=sh` になる）。名簿のすべてに掛ける。
+  // `=` は引数では展開を起こさぬゆえ数えぬ（`--color=never` は通す）。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('変数・glob を含む引数へ届けば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `GREP_OPTS=--pager=sh; honden guard check --cmd ${p} | grep "$GREP_OPTS" .`,
+        `honden guard check --cmd ${p} | grep $X`,
+        `honden guard check --cmd ${p} | tail $N`,
+        `honden guard check --cmd ${p} | grep -n D0*`,
+        `honden guard check --cmd ${p} | head -5 | grep "$X" x`,
+        `honden guard check --cmd ${p} | cut -f{1,2}`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule); // 紋様の層が元からこの規則で止める陽性対照
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('陽性対照: 展開されぬ引数（引用の中の glob・単一引用の $・旗の =）は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} | grep -n D0`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} | tail -n 4`,
+        `honden guard check --cmd ${p} | grep --color=never x`,
+        `honden guard check --cmd ${p} | grep -n 'D0*'`,
+        `honden guard check --cmd ${p} | grep -n "D0[0-9]"`,
+        `honden guard check --cmd ${p} | grep -c '$X'`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+});
+
+describe('問いと下流の書き出し先が展開されうるなら免除せぬ', () => {
+  // 書き出し先が変数や glob だと、紋様は先を読めず、門そのものへ書く形（D012）を
+  // 見分けられぬ。変更前は payload の字面で止まっておった形ゆえ、免除で開けてはならぬ。
+  // fd の複製（2>&1）は先を取らぬゆえ数えず、字面のままの先は通す。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('書き出し先が展開されうれば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `GUARD=.claude/hooks/guard.sh; honden guard check --cmd ${p} > "$GUARD"`,
+        `honden guard check --cmd ${p} > $F`,
+        `honden guard check --cmd ${p} 2>$F`,
+        `honden guard check --cmd ${p} | tail > $F`,
+        `honden guard check --cmd ${p} | tail 2>> "$F"`,
+        `honden guard check --cmd ${p} > /tmp/*.out`,
+        `honden guard check --cmd ${p} 2>&1 | head -5 | tail -2 > "$OUT"`,
+        `honden guard check --cmd ${p} >`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule); // 紋様の層が元からこの規則で止める陽性対照
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('陽性対照: 字面のままの書き出し先と fd の複製は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} > /tmp/guard-check.out`,
+        `honden guard check --cmd ${p} > /tmp/guard-check.out 2>&1`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} | tail -4 > /tmp/x`,
+        `honden guard check --cmd ${p} > '/tmp/$x.out'`,
+        `honden guard check --cmd ${p} >&2`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
     }
   });
 });
