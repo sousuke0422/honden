@@ -393,6 +393,52 @@ describe('下流の読み手の引数が実行時に展開されうるなら免�
   });
 });
 
+describe('問いと下流の書き出し先が展開されうるなら免除せぬ', () => {
+  // 書き出し先が変数や glob だと、紋様は先を読めず、門そのものへ書く形（D012）を
+  // 見分けられぬ。変更前は payload の字面で止まっておった形ゆえ、免除で開けてはならぬ。
+  // fd の複製（2>&1）は先を取らぬゆえ数えず、字面のままの先は通す。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('書き出し先が展開されうれば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `GUARD=.claude/hooks/guard.sh; honden guard check --cmd ${p} > "$GUARD"`,
+        `honden guard check --cmd ${p} > $F`,
+        `honden guard check --cmd ${p} 2>$F`,
+        `honden guard check --cmd ${p} | tail > $F`,
+        `honden guard check --cmd ${p} | tail 2>> "$F"`,
+        `honden guard check --cmd ${p} > /tmp/*.out`,
+        `honden guard check --cmd ${p} 2>&1 | head -5 | tail -2 > "$OUT"`,
+        `honden guard check --cmd ${p} >`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule); // 紋様の層が元からこの規則で止める陽性対照
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('陽性対照: 字面のままの書き出し先と fd の複製は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} > /tmp/guard-check.out`,
+        `honden guard check --cmd ${p} > /tmp/guard-check.out 2>&1`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} | tail -4 > /tmp/x`,
+        `honden guard check --cmd ${p} > '/tmp/$x.out'`,
+        `honden guard check --cmd ${p} >&2`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+});
+
 describe('門の自衛は上書き系の道具でも閉じる', () => {
   test('九経路の Edit / Write / MultiEdit をすべて deny する', () => {
     const settings = JSON.parse(readFileSync(join(ROOT, '.claude/settings.json'), 'utf8')) as {
