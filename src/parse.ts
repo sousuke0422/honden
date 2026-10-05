@@ -349,9 +349,6 @@ const WRAP: Record<string, { value?: string[]; pos?: number; scriptFlag?: string
   },
 };
 
-/** 別の命を起こす包みの名。門の問いの出力をここへ流す形を見分けるのに使う。 */
-export const WRAPPERS: ReadonlySet<string> = new Set(Object.keys(WRAP));
-
 const MAX_UNITS = 64;
 
 /** 文字列で渡された命を解き直して降りる。 */
