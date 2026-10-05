@@ -9,7 +9,8 @@
 # 止まる。他に要る file（試験・作法）は、足軽が普通の commit で足す。
 #
 # 手順。どの段で止まっても、それより前の段の変更は残さぬ:
-#   1. 検め: 旗・commit 文の trailer・patch の sha256・patch が触る file（git apply --numstat）・
+#   1. 検め: 旗・押す枝が既定の枝（main・master・遠方の既定）でないこと・
+#      commit 文の trailer・patch の sha256・patch が触る file（git apply --numstat）・
 #      手元の先端（--head）と枝・作業木が清いこと・遠方の先端（git fetch して FETCH_HEAD が
 #      --remote）・手元が遠方の子であること。どれか違えば何も変えずに非ゼロで止まる
 #   2. git apply --check の後に git apply
@@ -46,7 +47,8 @@ usage() {
   --sha256        patch の sha256（64 桁の 16 進）
   --head          手元の先端（40 桁の SHA）。作業木の HEAD と合わねば止まる
   --remote        遠方の先端（40 桁の SHA）。fetch した origin/<押す枝> と合わねば止まる
-  --branch        押す枝の名
+  --branch        押す枝の名（PR の枝。refs/heads/<名> でもよい）。既定の枝（main・master・
+                  遠方の既定）は拒む——既定の枝へはレビューを通して入れる
   --message-file  commit 文。末尾が "Assisted-by: multi-agent-shogun-aki-tweak" であること。
                   Claude-Session か Co-authored-by の行が在れば止まる
   --help          この使い方を出す
@@ -111,12 +113,27 @@ MSG="${opt[message-file]}"
 [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || die_usage "--head は 40 桁の SHA で（短い SHA は取り違えを生む）"
 [[ "$REMOTE_SHA" =~ ^[0-9a-f]{40}$ ]] || die_usage "--remote は 40 桁の SHA で"
 [[ "$BRANCH" != -* ]] || die_usage "--branch が - で始まる"
+# refs/heads/<名> の形でも渡せる。以後は名で扱う（既定の枝の判じも、押す先も）。
+BRANCH="${BRANCH#refs/heads/}"
+[[ -n "$BRANCH" ]] || die_usage "--branch の名が空"
 
 g() { git -C "$WT" "$@"; }
 
 # ---- 1. 検め（何も変えぬ） ----
 [[ -d "$WT" ]] || stop "作業木が無い: $WT"
 [[ "$(g rev-parse --is-inside-work-tree 2>/dev/null || true)" == "true" ]] || stop "git の作業木ではない: $WT"
+# 既定の枝へは押さぬ。この script は PR の枝へ押す物で、既定の枝へ直に押せば門の直しが
+# レビューを通らずに入る。既定は main・master と、遠方の既定（手元の origin/HEAD か、
+# 遠方に問うた HEAD。どちらかで引ければその名）。引けぬ時は main と master だけで判ずる。
+defaults=(main master)
+local_default="$(g symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+[[ -z "$local_default" ]] || defaults+=("${local_default#origin/}")
+remote_default="$(g ls-remote --symref origin HEAD 2>/dev/null | awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }' || true)"
+[[ -z "$remote_default" ]] || defaults+=("$remote_default")
+for d in "${defaults[@]}"; do
+  [[ "$BRANCH" != "$d" ]] || stop "--branch $BRANCH は既定の枝である。この script は PR の枝へ押す物で、既定の枝へはレビューを通して入れる"
+done
+
 [[ -f "$PATCH" ]] || stop "patch が無い: $PATCH"
 PATCH="$(cd "$(dirname "$PATCH")" && pwd)/$(basename "$PATCH")"
 [[ -f "$MSG" ]] || stop "commit 文の file が無い: $MSG"

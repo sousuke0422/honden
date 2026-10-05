@@ -291,6 +291,98 @@ describe('apply_guard_patch.sh — commit と push の段で止まっても、�
   });
 });
 
+describe('apply_guard_patch.sh — 既定の枝へは押さぬ', () => {
+  // この script は PR の枝へ押す物である。既定の枝へ直に押せば、門の直しがレビューを
+  // 通らずに入る。当てる前に、何も変えずに止まる。
+  test('--branch main・--branch refs/heads/main・master は止まり、何も変えぬ（作業木がその枝に居ても）', () => {
+    // 作業木をその枝に置き、遠方にもその枝を置く。ほかの検めはすべて通る形にして、
+    // 既定の枝の判じだけが止めることを見る（直す前の版はここで押してしまう）。
+    for (const [branch, name] of [['main', 'main'], ['refs/heads/main', 'main'], ['master', 'master']] as const) {
+      const b = sandbox();
+      b.git('checkout', '-q', '-b', name);
+      b.git('push', '-q', 'origin', `HEAD:refs/heads/${name}`);
+      const tip = (ref: string) =>
+        run('git', ['--git-dir', b.remote, 'rev-parse', ref], b.base, b.env).stdout.trim();
+      const head0 = b.git('rev-parse', 'HEAD');
+      const remoteFeat0 = b.remoteTip();
+      const remoteName0 = tip(`refs/heads/${name}`);
+      const r = apply(b, args(b, { branch, remote: remoteName0 }));
+      expect(r.status, branch).toBe(1);
+      expect(r.stderr, branch).toContain('既定の枝');
+      expect(r.stderr, branch).toContain('PR の枝');
+      unchanged(b, head0, remoteFeat0);
+      expect(tip(`refs/heads/${name}`), branch).toBe(remoteName0);
+    }
+  });
+
+  /** 遠方の既定を trunk に立てる。遠方に trunk の枝を置き、bare の HEAD をそれへ向ける。 */
+  const trunkRemote = (b: Box) => {
+    b.git('push', '-q', 'origin', 'HEAD:refs/heads/trunk');
+    expect(run('git', ['--git-dir', b.remote, 'symbolic-ref', 'HEAD', 'refs/heads/trunk'], b.base, b.env).status).toBe(0);
+  };
+
+  test('遠方の既定の枝の名（trunk）も止まる——手元の origin/HEAD で引ける形', () => {
+    const b = sandbox();
+    trunkRemote(b);
+    b.git('fetch', '-q', 'origin');
+    b.git('remote', 'set-head', 'origin', '--auto');
+    expect(b.git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD')).toBe('origin/trunk');
+    // 遠方の HEAD は生まれておらぬ枝へ向け、遠方に問うても既定が引けぬ形にする
+    // （手元の origin/HEAD で引く道だけが止めることを見る）
+    expect(run('git', ['--git-dir', b.remote, 'symbolic-ref', 'HEAD', 'refs/heads/unborn'], b.base, b.env).status).toBe(0);
+    expect(run('git', ['ls-remote', '--symref', 'origin', 'HEAD'], b.repo, b.env).stdout).not.toContain('trunk');
+    const head0 = b.git('rev-parse', 'HEAD');
+    const remote0 = b.remoteTip();
+    const trunk0 = run('git', ['--git-dir', b.remote, 'rev-parse', 'refs/heads/trunk'], b.base, b.env).stdout.trim();
+    const r = apply(b, args(b, { branch: 'trunk', remote: trunk0 }));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('既定の枝');
+    unchanged(b, head0, remote0);
+    expect(run('git', ['--git-dir', b.remote, 'rev-parse', 'refs/heads/trunk'], b.base, b.env).stdout.trim()).toBe(trunk0);
+  });
+
+  test('遠方の既定の枝の名（trunk）も止まる——手元に origin/HEAD が無く、遠方に問うて引く形', () => {
+    const b = sandbox();
+    trunkRemote(b);
+    expect(run('git', ['symbolic-ref', '-q', 'refs/remotes/origin/HEAD'], b.repo, b.env).status).not.toBe(0);
+    const head0 = b.git('rev-parse', 'HEAD');
+    const remote0 = b.remoteTip();
+    const trunk0 = run('git', ['--git-dir', b.remote, 'rev-parse', 'refs/heads/trunk'], b.base, b.env).stdout.trim();
+    const r = apply(b, args(b, { branch: 'refs/heads/trunk', remote: trunk0 }));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('既定の枝');
+    unchanged(b, head0, remote0);
+  });
+
+  test('陽性対照: 遠方の既定が trunk でも、普通の枝（feat/x・refs/heads/feat/x）へは今どおり押す', () => {
+    for (const branch of [BRANCH, `refs/heads/${BRANCH}`]) {
+      const b = sandbox();
+      trunkRemote(b);
+      b.git('fetch', '-q', 'origin');
+      b.git('remote', 'set-head', 'origin', '--auto');
+      const r = apply(b, args(b, { branch }));
+      expect(r.status, `${branch}: ${r.stderr}`).toBe(0);
+      const lines = r.stdout.trim().split('\n');
+      expect(b.remoteTip()).toBe(lines[lines.length - 1]!);
+    }
+  });
+});
+
+describe('apply_guard_patch.sh — 手元が遠方の先端の子でなければ止まる', () => {
+  test('遠方が別の commit へ進んでおれば（--remote はその先端に合わせても）、何も変えずに止まる', () => {
+    const b = sandbox();
+    const head0 = b.git('rev-parse', 'HEAD');
+    // 手元の作業木は動かさず、遠方だけを先へ進める（commit-tree で子を作って押す）
+    const ahead = b.git('commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', '遠方だけが進んだ');
+    b.git('push', '-q', 'origin', `${ahead}:refs/heads/${BRANCH}`);
+    expect(b.remoteTip()).toBe(ahead);
+    const r = apply(b, args(b, { remote: ahead }));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('遠方の先端の子ではない');
+    unchanged(b, head0, ahead);
+  });
+});
+
 describe('apply_guard_patch.sh — 旗の誤り', () => {
   test('知らぬ旗・欠けた旗・余る引数・二度の旗・形の誤りは exit 2 で使い方を出し、何もせぬ', () => {
     const b = sandbox();

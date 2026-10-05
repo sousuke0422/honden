@@ -273,6 +273,8 @@ honden inbox write --to gunshi --type report_received --from shogun --body "こ�
    ```
 
    `--head` と `--remote` は 40 桁の SHA で渡す。短い SHA は script が拒む。
+   `--branch` は PR の枝である。既定の枝（`main`・`master`・遠方の既定）は script が拒む——
+   既定の枝へは、PR のレビューを通して入れる。
    script は検めのどれかが違えば何も変えずに止まり、試験が落ちれば当てた物を戻して止まる。
    止まったら、その一行を足軽の報告と照らして、どこがずれたかを見よ（遠方が動いた等）
 5. **押した後に PR の本文を書く。** 最後の行に押した SHA が出る。PR の head がそれであることを確かめてから書け
