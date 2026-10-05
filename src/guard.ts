@@ -566,6 +566,42 @@ function mayExpand(word: string): boolean {
   return false;
 }
 
+/** 向き替えの演算子の語か（`>` `2>>` `&>` `>&2` `<` 等）。先の語は道ゆえ違う。 */
+function isRedirOp(raw: string, t: GuardTok): boolean {
+  return t.redir && /^\d*[<>&]/.test(raw.slice(t.start, t.end));
+}
+
+/**
+ * 段の向き替えの先のどれかが、実行時に展開されうるか（mayExpand）。
+ * fd の複製（`>&1` `2>&1` `>&-`）は先を取らぬゆえ数えぬ。演算子の後に先が
+ * 見えぬ（判じが付かぬ）時は、展開されうる側へ倒す。
+ */
+function redirTargetMayExpand(raw: string, seg: { toks: GuardTok[] }): boolean {
+  for (let i = 0; i < seg.toks.length; i += 1) {
+    const t = seg.toks[i]!;
+    if (!isRedirOp(raw, t)) continue;
+    if (/&[\d-]+$/.test(t.value)) continue;
+    const target = seg.toks[i + 1];
+    if (target === undefined || !target.redir || isRedirOp(raw, target)) return true;
+    if (mayExpand(raw.slice(target.start, target.end))) return true;
+  }
+  return false;
+}
+
+/**
+ * 段 s（門への問い）と、パイプの鎖に沿った下流のすべての段の向き替えの先の
+ * どれかが、実行時に展開されうるか。`;` `&&` `||` `&` 改行で鎖が切れた先は
+ * 問いと別の命ゆえ、伏せずに裁かれる——ここでは見ぬ。
+ */
+function chainRedirMayExpand(raw: string, segments: { toks: GuardTok[]; sep: string }[], s: number): boolean {
+  for (let k = s; ; k += 1) {
+    const seg = segments[k];
+    if (seg === undefined) return false;
+    if (redirTargetMayExpand(raw, seg)) return true;
+    if (seg.sep !== '|' && seg.sep !== '|&') return false;
+  }
+}
+
 /**
  * 単純命令ごとに、門への問いを見分ける。**免除する語の位置を返す。**
  *
@@ -581,6 +617,9 @@ function mayExpand(word: string): boolean {
  * - `$'…'` `$"…"`・heredoc `<<`・行継ぎ・引用内の改行・閉じぬ引用・語頭の `#`
  * - 問いの出力を、パイプの鎖の下流で「出力を読むだけの物」の名簿の外へ流す形
  *   （出力に `--cmd` の字面が載りうる。名簿の外は、それを命として走らせうる）
+ * - 問いの段か、その下流の段の向き替えの先が、実行時に展開されうる形
+ *   （`> "$F"`・`2>> $F`・`> /tmp/*.out`）。先が字面に見えねば、門そのものへ書く
+ *   形（D012）を紋様が見分けられぬ。先の無い向き替えも同じく免除せぬ
  *
  * 引用外の改行は `;` と同じ境として扱う。改行の前後はそれぞれ別の単純命令として
  * 裁かれるゆえ、改行の後に禁じ手を置いても止まる。
@@ -742,6 +781,8 @@ function exemptGuardSegments(raw: string): { masked: string; count: number } | u
     // 問いの出力には `--cmd` の字面が載りうる。下流が出力を読むだけの物で
     // 尽きる時に限り問いと数える（pipesOnlyIntoReaders）
     if (!pipesOnlyIntoReaders(raw, segments, s)) return undefined;
+    // 書き出し先が字面に見えねば、門そのものへ書く形を紋様が見分けられぬ
+    if (chainRedirMayExpand(raw, segments, s)) return undefined;
     count += 1;
     for (const t of seg.toks) {
       if (t.redir) continue;
