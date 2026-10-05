@@ -248,6 +248,58 @@ describe('問いの出力がパイプの下流のどこかで命になる形は�
   });
 });
 
+describe('下流は「出力を読むだけの物」の名簿に載る時だけ免除する（拒みの名簿を裏返す）', () => {
+  // 拒みの名簿では awk の system や sed の e のように、足すたびに次の抜けが出る。
+  // 名簿の外へ一段でも届けば免除を掛けず、main と同じ素の判じに戻る。
+  const PAYLOADS: [string, string][] = [
+    ["'tee bin/honden'", 'D012'],
+    ["'dd if=/dev/zero of=/dev/sda'", 'D007'],
+  ];
+
+  test('名簿の外（awk・sed・xargs・書く先を取る tee）へ届けば main と同じく止まる', () => {
+    for (const [p, rule] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} | awk '{system($0)}'`,
+        `honden guard check --cmd ${p} | sed e`,
+        `honden guard check --cmd ${p} | tail | awk '{print $0}'`,
+        `honden guard check --cmd ${p} | xargs sh`,
+        `honden guard check --cmd ${p} | tee /tmp/x | sh`,
+        `honden guard check --cmd ${p} | tee /tmp/x | tail`,
+      ]) {
+        expect(judge(cmd).rule, cmd).toBe(rule);
+        const v = judgeStructured(cmd, run);
+        expect(v.permission, cmd).toBe('deny');
+        expect(v.rule, cmd).toBe(rule);
+      }
+    }
+  });
+
+  test('tee >(sh) は置換ゆえ既存の判じで止まる', () => {
+    for (const [p] of PAYLOADS) {
+      const cmd = `honden guard check --cmd ${p} | tee >(sh)`;
+      expect(judgeStructured(cmd, run).permission, cmd).toBe('deny');
+    }
+  });
+
+  test('陽性対照: 名簿だけで尽きる下流は通す', () => {
+    for (const [p] of PAYLOADS) {
+      for (const cmd of [
+        `honden guard check --cmd ${p} 2>&1 | tail -4`,
+        `honden guard check --cmd ${p} > /tmp/guard-check.out 2>&1`,
+        `honden guard appeal --cmd ${p} --reason 'test' 2>&1 | head -20`,
+        `honden guard facts --cmd ${p} | head -5`,
+        `honden guard check --cmd ${p} 2>&1 | tail -4 | head -2`,
+        `honden guard check --cmd ${p} | grep -n D0 | wc -l`,
+        `honden guard check --cmd ${p} | tee | tail -4`,
+        `honden guard check --cmd ${p} | tee /dev/null | tail -4`,
+      ]) {
+        expect(judge(cmd).permission, cmd).toBe('deny'); // 平面だけなら止まる
+        expect(judgeStructured(cmd, run).permission, cmd).toBe('allow');
+      }
+    }
+  });
+});
+
 describe('門の自衛は上書き系の道具でも閉じる', () => {
   test('九経路の Edit / Write / MultiEdit をすべて deny する', () => {
     const settings = JSON.parse(readFileSync(join(ROOT, '.claude/settings.json'), 'utf8')) as {
