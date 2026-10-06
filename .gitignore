@@ -16,6 +16,8 @@
 # 意図して載せるのと紛れて載るのは違う。追う物は名指しで開ける。
 !/.gitignore
 !/.gitattributes
+!/.githooks/
+!/.githooks/**
 !/.gitleaks.toml
 # 秘密検めの見逃し帳。追跡から漏れると CI が毎回同じ物を釣る
 !/.betterleaksignore
@@ -157,6 +159,9 @@
 !scripts/setup_task_cli.sh
 !scripts/setup_skills.sh
 !scripts/setup_addons.sh
+!scripts/setup_githooks.sh
+!scripts/check_githooks.sh
+!scripts/setup_global_githooks.sh
 !scripts/agent_status.sh
 !scripts/ratelimit_check.sh
 !scripts/switch_cli.sh

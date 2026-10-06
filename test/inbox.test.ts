@@ -8,13 +8,27 @@
  */
 
 import { expect, test, describe } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { openStore, tx, signalPathOf } from '../src/store';
 import { syncRoster } from '../src/roster';
 import { inboxWrite } from '../src/cli';
-import { existsSync, statSync, mkdtempSync } from 'node:fs';
+import { existsSync, statSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { list, summarize, nudgeText, ack, ackAll, urgentRideAlong, rideAlongSuppressed } from '../src/inbox';
+import {
+  list,
+  summarize,
+  nudgeText,
+  ack,
+  ackAll,
+  ackFor,
+  readOwnUnread,
+  INBOX_ACK_SCAN_LIMIT,
+  urgentRideAlong,
+  rideAlongSuppressed,
+} from '../src/inbox';
+import { runInboxRead } from '../src/main';
+import { exportAll } from '../src/export';
 
 const seeded = () => {
   const db = openStore({ path: ':memory:' });
@@ -75,6 +89,7 @@ describe('開く前に分かること', () => {
 
   test('無ければそう言う', () => {
     const db = seeded();
+    readOwnUnread(db, 'karo');
     ackAll(db, 'karo');
     expect(nudgeText(summarize(db, 'karo'))).toBe('inbox_notice unread=0');
   });
@@ -129,11 +144,167 @@ describe('既読にする', () => {
 
   test('全部既読にできる', () => {
     const db = seeded();
+    readOwnUnread(db, 'karo');
     const r = ackAll(db, 'karo');
     expect(r.changed.sort()).toEqual(['m1', 'm2', 'm3']);
     expect(summarize(db, 'karo').total).toBe(0);
     // 他人のには触らぬ
     expect(summarize(db, 'gunshi').total).toBe(1);
+  });
+
+  test('read 無しの ack --all は断る', () => {
+    const db = seeded();
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('inbox read をまだ打っておらぬ');
+    expect(summarize(db, 'karo').total).toBe(3);
+  });
+
+  test('read のあとに届いた未読は読まれぬまま既読にできぬ', () => {
+    const db = seeded();
+    readOwnUnread(db, 'karo');
+    db.prepare(
+      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,?)',
+    ).run('m_new', 'karo', '2099-01-01T00:00:00.000Z', 'cmd_new', 'shogun', '間に届いた', 0);
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('m_new');
+    expect(summarize(db, 'karo').total).toBe(4);
+    expect((db.query('SELECT read FROM inbox WHERE id = ?').get('m_new') as { read: number }).read).toBe(0);
+  });
+
+  test('未読 101 件でも read が見せた 100 件は ack --all できる（101 件目は未読のまま）', () => {
+    const db = openStore({ path: ':memory:' });
+    const ins = db.prepare(
+      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
+    );
+    tx(db, () => {
+      for (let i = 0; i < 101; i++) {
+        const n = String(i).padStart(3, '0');
+        ins.run(`u${n}`, 'karo', `2026-08-24T10:${n}`, 'report_received', 'x', `body ${n}`);
+      }
+    });
+    const shown = readOwnUnread(db, 'karo');
+    expect(shown.length).toBe(100);
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(true);
+    expect(r.changed.length).toBe(100);
+    expect(summarize(db, 'karo').total).toBe(1);
+    expect((db.query('SELECT id FROM inbox WHERE agent = ? AND read = 0').all('karo') as { id: string }[])[0]
+      ?.id).toBe('u100');
+  });
+
+  // ── cmd_208: read の境は一覧と同じ取引で挿入の順（rowid）で採り、新着の判じに件数の上限を掛けぬ ──
+
+  const insertArrival = (db: ReturnType<typeof openStore>, id: string, createdAt: string) =>
+    db
+      .prepare('INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)')
+      .run(id, 'karo', createdAt, 'cmd_new', 'shogun', `届いた ${id}`);
+  const unreadIds = (db: ReturnType<typeof openStore>) =>
+    (db.query('SELECT id FROM inbox WHERE agent = ? AND read = 0 ORDER BY rowid').all('karo') as { id: string }[]).map(
+      (r) => r.id,
+    );
+
+  test('一覧を引いた後に報せが届いても（刻が read より古くても）新着と数え、ack --all は断って何も既読にせぬ', () => {
+    const db = seeded();
+    // 一覧を引いた直後（境を採る取引の中）に割り込む。刻は全部より古い——刻の比べでは「届いておらぬ」に見える。
+    readOwnUnread(db, 'karo', { onListed: () => insertArrival(db, 'm_between', '2000-01-01T00:00:00.000Z') });
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('m_between');
+    expect(r.message).toContain('1 件届いた');
+    expect(unreadIds(db)).toEqual(['m1', 'm2', 'm3', 'm_between']); // 一件も既読にならぬ
+  });
+
+  test('古い未読が走査の上限を越えて並んでも、その後に届いた一件を新着と数えて断る', () => {
+    const db = openStore({ path: ':memory:' });
+    const ins = db.prepare(
+      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)',
+    );
+    const total = INBOX_ACK_SCAN_LIMIT + 5;
+    tx(db, () => {
+      for (let i = 0; i < total; i++) {
+        const n = String(i).padStart(5, '0');
+        ins.run(`old${n}`, 'karo', `2026-08-24T10:${n}`, 'report_received', 'x', `body ${n}`);
+      }
+    });
+    const shown = readOwnUnread(db, 'karo');
+    expect(shown.length).toBe(100); // 見せたのは先頭の 100 件だけ
+    // read の後に届く一件。刻は最後尾——走査が古い順に上限で切られる旧い作りでは、走査の外に出て見逃される。
+    insertArrival(db, 'm_after', '2026-09-01T00:00:00.000Z');
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('m_after');
+    expect(r.changed).toEqual([]);
+    expect((db.query('SELECT count(*) AS n FROM inbox WHERE read = 1').get() as { n: number }).n).toBe(0);
+  });
+
+  test('陽性対照: 新着が無ければ見せた id だけを既読にする（断った後も、読み直せば通る）', () => {
+    const db = seeded();
+    readOwnUnread(db, 'karo', { onListed: () => insertArrival(db, 'm_between', '2000-01-01T00:00:00.000Z') });
+    expect(ackAll(db, 'karo').ok).toBe(false);
+    // 読み直す（境が進み、m_between も見せた範囲に入る）
+    const shown = readOwnUnread(db, 'karo');
+    expect(shown.map((m) => m.id)).toContain('m_between');
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(true);
+    expect(r.changed.sort()).toEqual(['m1', 'm2', 'm3', 'm_between']);
+    expect(summarize(db, 'karo').total).toBe(0);
+    expect(summarize(db, 'gunshi').total).toBe(1); // 他人のには触らぬ
+  });
+
+  test('新着の件数と先頭の id を断る文に出す（五件を越えれば ほか）', () => {
+    const db = seeded();
+    readOwnUnread(db, 'karo');
+    for (let i = 0; i < 7; i++) insertArrival(db, `n${i}`, '2000-01-01T00:00:00.000Z');
+    const r = ackAll(db, 'karo');
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain('7 件届いた（n0, n1, n2, n3, n4 ほか）');
+  });
+
+  test('境の無い古い写しでは ack --all は断る（断る側へ倒す）', () => {
+    const db = seeded();
+    // 古い版が残した写し: boundary 欄が無かった頃の形（id の配列そのもの／{ ids, readAt }）
+    for (const ids of [JSON.stringify(['m1', 'm2', 'm3']), JSON.stringify({ ids: ['m1', 'm2', 'm3'], readAt: '2026-09-01T00:00:00.000Z' })]) {
+      db.prepare('INSERT OR REPLACE INTO inbox_read_snapshot(agent, ids, boundary) VALUES (?, ?, NULL)').run('karo', ids);
+      const r = ackAll(db, 'karo');
+      expect(r.ok).toBe(false);
+      expect(r.message).toContain('境が無い');
+      expect(unreadIds(db)).toEqual(['m1', 'm2', 'm3']);
+    }
+    // 読み直せば境つきの写しになり、通る
+    readOwnUnread(db, 'karo');
+    expect(ackAll(db, 'karo').ok).toBe(true);
+  });
+
+  test('境の欄は、古い正本を開くだけで追い付く（既存の写しは境が NULL のまま残る）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'inbox-boundary-migration-'));
+    try {
+      const path = join(dir, 'old.db');
+      const old = new Database(path);
+      // 境の欄が無かった頃の写しの表と、一件の写し
+      old.run('CREATE TABLE inbox_read_snapshot (agent TEXT PRIMARY KEY, ids TEXT NOT NULL)');
+      old.run("INSERT INTO inbox_read_snapshot(agent, ids) VALUES ('karo', '[\"m1\"]')");
+      old.close();
+      const db = openStore({ path });
+      const cols = (db.query('PRAGMA table_info(inbox_read_snapshot)').all() as { name: string }[]).map((c) => c.name);
+      expect(cols).toContain('boundary');
+      const row = db.query("SELECT boundary FROM inbox_read_snapshot WHERE agent = 'karo'").get() as {
+        boundary: number | null;
+      };
+      expect(row.boundary).toBeNull();
+      expect(ackAll(db, 'karo').message).toContain('境が無い');
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('ackFor は read 写しを要らぬ（家老が当人の未読を片付ける）', () => {
+    const db = seeded();
+    const r = ackFor(db, { agent: 'gunshi', by: 'karo', reason: '当人が止まっておる' });
+    expect(r.ok).toBe(true);
+    expect(r.changed).toEqual(['g1']);
   });
 
   test('既読は台帳に残る', () => {
@@ -269,5 +440,96 @@ describe('rideAlongSuppressed — 横乗せを載せてはならぬ口', () => {
     expect(rideAlongSuppressed(['brief'])).toBe(false);
     expect(rideAlongSuppressed(['status'])).toBe(false);
     expect(rideAlongSuppressed(['cmd', 'list'])).toBe(false);
+  });
+});
+
+describe('名簿の外からの報せ', () => {
+  // 布陣の外（standalone セッションなど）からの報せは返せぬ——
+  // inbox write --to は名簿に縛られる。読んだ者がそれと分かるよう、
+  // inbox read の表示にだけ @no-reply を添える。正本の from は変えぬ。
+  const mk = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-noreply-'));
+    const dbPath = join(dir, 'h.db');
+    const db = openStore({ path: dbPath });
+    const ins = db.prepare(
+      'INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,?)',
+    );
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+      ]);
+      ins.run('n1', 'karo', '2026-09-25T10:00', 'report_received', 'review_session', '布陣外より', 0);
+      ins.run('n2', 'karo', '2026-09-25T11:00', 'cmd_new', 'shogun', '布陣内より', 0);
+      ins.run('n3', 'karo', '2026-09-25T09:00', 'report_received', 'ashigaru3', '名簿の外の足軽', 1);
+    });
+    return { dbPath, db };
+  };
+
+  test('名簿の外の差出人には @no-reply が付く', () => {
+    const { dbPath } = mk();
+    const r = runInboxRead(dbPath, 'karo', undefined, false);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('review_session @no-reply → karo');
+  });
+
+  test('名簿の中の差出人には付かぬ（陰性対照）', () => {
+    const { dbPath } = mk();
+    const r = runInboxRead(dbPath, 'karo', undefined, false);
+    expect(r.out).toContain('shogun → karo');
+    expect(r.out).not.toContain('shogun @no-reply');
+  });
+
+  test('--all（既読を含む口）でも同じ判じで出る', () => {
+    const { dbPath } = mk();
+    const r = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(r.out).toContain('ashigaru3 @no-reply → karo');
+  });
+
+  test('差出人が名簿へ入れば、同じ報せが印無しで出る。正本の from は変わらぬ', () => {
+    const { dbPath, db } = mk();
+    const before = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(before.out).toContain('ashigaru3 @no-reply');
+
+    // 名簿が動く——ashigaru3 が布陣へ入る。正本の報せには触れぬ。
+    tx(db, () => {
+      syncRoster(db, [
+        { id: 'shogun', role: 'commander', cli: 'claude', model: null },
+        { id: 'karo', role: 'commander', cli: 'cursor', model: null },
+        { id: 'ashigaru3', role: 'worker', cli: 'claude', model: null },
+      ]);
+    });
+
+    const after = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(after.out).toContain('ashigaru3 → karo');
+    expect(after.out).not.toContain('ashigaru3 @no-reply');
+
+    // 表示が変わっても from は一文字も変わらぬ。
+    const row = db.query("SELECT sender FROM inbox WHERE id = 'n3'").get() as { sender: string };
+    expect(row.sender).toBe('ashigaru3');
+    const rowOut = db.query("SELECT sender FROM inbox WHERE id = 'n1'").get() as { sender: string };
+    expect(rowOut.sender).toBe('review_session');
+  });
+
+  test('印は表示の口だけ。list と export は素の from を返す', () => {
+    const { dbPath, db } = mk();
+
+    // list は正本の from をそのまま返す。from で突き合わせる口が頼る。
+    const senders = list(db, 'karo', { all: true }).map((m) => m.sender);
+    expect(senders).toContain('review_session');
+    for (const s of senders) expect(s).not.toContain('@no-reply');
+
+    // export の YAML も素の from。旧形式へ戻す時に差出人が化けてはならぬ。
+    const file = exportAll(db).find((f) => f.path === 'queue/inbox/karo.yaml');
+    expect(file).toBeDefined();
+    expect(file!.body).toContain('from: review_session');
+    expect(file!.body).not.toContain('@no-reply');
+
+    // 陽性対照——同じ正本で、印を付ける口は生きておる。
+    // これが無いと、印の実装ごと壊れた時も上の「付かぬ」が緑のまま通る。
+    // （表示は list を通るゆえ、list が印を混ぜれば表示の印は二重になる。
+    //   上で先に list を見るのは、落ちた所が壊れた口を指すようにするため。）
+    const r = runInboxRead(dbPath, 'karo', undefined, true);
+    expect(r.out).toContain('review_session @no-reply → karo');
   });
 });

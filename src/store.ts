@@ -177,6 +177,22 @@ CREATE TABLE IF NOT EXISTS cmd_acceptance (
   PRIMARY KEY (cmd_id, idx)
 );
 
+-- 司令の依存。cmd_id は needs が済むまで振れぬ (src/deps.ts)。
+--
+-- **解けたかは持たぬ。** 毎度 needs 側の cmd.status から引く（done なら解けておる）。
+-- 印を書き換える手を置くと、その手が遅れた時に済んだ依存が塞がったまま残る
+-- （Claude Code の Agent Teams が Limitations に挙げた詰まり）。
+-- 既存の表には欄を足さぬゆえ、移行は要らぬ——新しい表が一つ生えるだけである。
+CREATE TABLE IF NOT EXISTS cmd_dep (
+  cmd_id     TEXT NOT NULL REFERENCES cmd(id) ON DELETE CASCADE,
+  needs      TEXT NOT NULL REFERENCES cmd(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  by         TEXT NOT NULL,
+  PRIMARY KEY (cmd_id, needs),
+  CHECK (cmd_id != needs)
+);
+CREATE INDEX IF NOT EXISTS ix_cmd_dep_needs ON cmd_dep(needs);
+
 -- 殿の裁定を仰ぐもの。
 --
 -- 現行は dashboard.md の 🚨要対応 節に散文で積む。実測（2026-08-26）:
@@ -320,6 +336,15 @@ CREATE TABLE IF NOT EXISTS inbox (
   origin     TEXT NOT NULL DEFAULT 'native' CHECK (origin IN ('native','import'))
 );
 CREATE INDEX IF NOT EXISTS ix_inbox_unread ON inbox(agent, read, created_at);
+
+-- inbox read が見せた未読 id の写し。ack --all はここだけ既読にする。
+CREATE TABLE IF NOT EXISTS inbox_read_snapshot (
+  agent TEXT PRIMARY KEY,
+  ids     TEXT NOT NULL,
+  -- read が見せた範囲の境。inbox の rowid（挿入の順）で、一覧を引く取引の中で採る。
+  -- これより大きい rowid の未読が「read の後に届いた物」。NULL は境を持たぬ古い写し（断る側へ倒す）。
+  boundary INTEGER
+);
 
 -- 報告。
 --
@@ -647,6 +672,7 @@ function migrate(db: Database): void {
   addColumn(db, 'nudge', 'hold_at', 'TEXT');
   addColumn(db, 'nudge', 'hold_resend_count', 'INTEGER NOT NULL DEFAULT 0');
   addColumn(db, 'nudge', 'hold_resent_at', 'TEXT');
+  addColumn(db, 'inbox_read_snapshot', 'boundary', 'INTEGER');
   // 貸与の三欄。型へ足した折に**移行を書き忘れ**、先に建った正本では
   // `honden status` が「no such column: holder」で倒れておった
   // （本番の正本で実見・2026-08-29）。`CREATE TABLE IF NOT EXISTS` は

@@ -128,16 +128,45 @@ const HEADERS_BASE = {
   'User-Agent': 'honden-bot',
 };
 
-/** 失敗応答を人の読める形へ。token や Authorization は決して混ぜぬ。 */
+/**
+ * 失敗応答を人の読める形へ。token や Authorization は決して混ぜぬ。
+ *
+ * GitHub の言う理由（errors[] の各件）も捨てぬ。422 の因は message
+ * （「Unprocessable Entity」の類）だけでは分からず、errors[] に在る
+ * （例: PR review の inline の行が diff の外にある時の
+ * 「PullRequestReviewComment line: … must be part of the diff」）。
+ * 捨てると、因が権限の話として説明され、本当の因が見えなくなる。
+ */
 async function fail(r: Response, doing: string): Promise<never> {
   let detail = '';
   try {
-    const j = (await r.json()) as { message?: string };
+    const j = (await r.json()) as { message?: string; errors?: unknown };
     detail = j.message ?? '';
+    const reasons = errorReasons(j.errors);
+    if (reasons.length > 0) detail += `${detail ? ' — ' : ''}${reasons.join(' / ')}`;
   } catch {
     /* 本文が JSON でない失敗はそのまま */
   }
   throw new Error(`${doing} に失敗した（HTTP ${r.status}${detail ? `: ${detail}` : ''}）`);
+}
+
+/** errors[] の各件を一行ずつへ。resource・field・message の在る物だけを拾う。 */
+function errorReasons(errors: unknown): string[] {
+  if (!Array.isArray(errors)) return [];
+  const out: string[] = [];
+  for (const e of errors) {
+    if (typeof e === 'string') {
+      if (e.trim() !== '') out.push(e.trim());
+      continue;
+    }
+    if (typeof e !== 'object' || e === null) continue;
+    const { resource, field, message } = e as { resource?: unknown; field?: unknown; message?: unknown };
+    const where = [resource, field].filter((x): x is string => typeof x === 'string' && x !== '').join(' ');
+    const what = typeof message === 'string' ? message : '';
+    const line = where && what ? `${where}: ${what}` : where || what;
+    if (line) out.push(line);
+  }
+  return out;
 }
 
 /** JWT → installation token。1 時間有効。 */
@@ -267,6 +296,47 @@ export async function explainRepoAccess(f: FetchLike, token: string, repo: strin
     `  入っておるのは: ${repos.length > 0 ? repos.join(', ') : '（一つも無い）'}\n` +
     '  入居先を増やすには GitHub の App 設定で repo を足されよ。'
   );
+}
+
+/**
+ * PR へ review を一束で出す（body + event + inline comments）。
+ * 写しの規則は src/botreview.ts が持ち、ここは運ぶだけ。
+ * 失敗文の段名は呼び手が付ける（ここは github の言葉のまま返す）。
+ */
+export async function createPrReview(
+  f: FetchLike,
+  token: string,
+  repo: string,
+  pr: number,
+  payload: { commit_id: string; body: string; event: string; comments: { path: string; line: number; body: string }[] },
+): Promise<{ url: string; id: number }> {
+  const r = await f(`${API}/repos/${repo}/pulls/${pr}/reviews`, {
+    method: 'POST',
+    headers: auth(token),
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) await fail(r, 'PR review の投稿');
+  const j = (await r.json()) as { html_url: string; id: number };
+  return { url: j.html_url, id: j.id };
+}
+
+/** PR の review の履歴（現在地の材料）。頁を繰る——listLabels と同じ理由。 */
+export async function listPrReviews(
+  f: FetchLike,
+  token: string,
+  repo: string,
+  pr: number,
+  maxPages = 5,
+): Promise<{ state: string; user?: string; submittedAt?: string }[]> {
+  const out: { state: string; user?: string; submittedAt?: string }[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const r = await f(`${API}/repos/${repo}/pulls/${pr}/reviews?per_page=100&page=${page}`, { headers: auth(token) });
+    if (!r.ok) await fail(r, 'PR review 履歴の取得');
+    const j = (await r.json()) as { state: string; user?: { login?: string }; submitted_at?: string }[];
+    out.push(...j.map((x) => ({ state: x.state, user: x.user?.login, submittedAt: x.submitted_at })));
+    if (j.length < 100) break;
+  }
+  return out;
 }
 
 export async function createIssue(

@@ -63,13 +63,24 @@ import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
-import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
+import {
+  list,
+  summarize,
+  nudgeText,
+  ack,
+  ackAll,
+  ackFor,
+  readOwnUnread,
+  urgentRideAlong,
+  rideAlongSuppressed,
+} from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import {
   submitReport, submitQc, cmdDone, coverageOf, criteriaOf, listPendingReviews, formatPendingReview,
 } from './report';
 import { plan, send, record, startClocks, withNudgeLock, revive, holdForReview, HOLD_RECHECK_MS, markLimited } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
+import { depMark, depSummary, needsOf, notifyBlocked } from './deps';
 import { findStalled, notifyStalled } from './stalled';
 import { notifyUnreviewed } from './unreviewed';
 import { captureBusy, captureLimitState, type LimitState, isWorking } from './busy';
@@ -111,7 +122,7 @@ import { normsRoot, setSetting } from './settings';
 import { resolve as resolvePath } from 'node:path';
 import { live as liveClaims, conflicts as claimConflicts, explainConflict, release as releaseClaim, normalize as normClaim, type Kind } from './claim';
 import { summarize as summarizeInbox } from './inbox';
-import { roster as rosterOf, roleOf as roleOfId, isWorker } from './roster';
+import { roster as rosterOf, roleOf as roleOfId, isWorker, isKnown } from './roster';
 import { leaseState, expired, release, renew, DEFAULT_LEASE_MINUTES } from './lease';
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
@@ -478,9 +489,11 @@ export function runInboxRead(
     };
   }
   const db = openStore({ path: dbPath });
-  const msgs = list(db, agent, { all });
-  const s = summarize(db, agent);
   const peeking = target !== undefined && target !== selfId;
+  const ownUnreadRead = !all && !peeking && agent === selfId;
+  // 己の未読を読む道だけ、見せた範囲を境つきで正本に残す（境の採取・一覧・写しは一つの取引）。
+  const msgs = ownUnreadRead ? readOwnUnread(db, agent) : list(db, agent, { all });
+  const s = summarize(db, agent);
   // 他人の受け渡しを覗いたなら跡を残す。
   //
   // 旧環境は queue/inbox/* を **役ごとに read_deny** で塞いでいた
@@ -504,8 +517,13 @@ export function runInboxRead(
   const body = msgs
     .map((m) => {
       const mark = m.read ? '  ' : '● ';
+      // 名簿の外からの報せは返せぬ（inbox write --to は名簿に縛られる）。
+      // 読んだ者がそれと分かるよう、表示にだけ @no-reply を添える。
+      // 正本の from は変えぬ。名簿は動くゆえ、覚えずに読むたびに引く——
+      // 差出人が後から名簿へ入れば、同じ報せが印無しで出る。
+      const sender = isKnown(db, m.sender) ? m.sender : `${m.sender} @no-reply`;
       return (
-        `\n  ${mark}${m.id}  [${m.type}] ${m.sender} → ${m.agent}  ${m.createdAt}\n` +
+        `\n  ${mark}${m.id}  [${m.type}] ${sender} → ${m.agent}  ${m.createdAt}\n` +
         m.body
           .split('\n')
           .map((l) => `      ${l}`)
@@ -920,11 +938,15 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
         ? `閉じて${ago(r.completed_at)}`
         : `起草から${ago(r.created_at)}`;
     const mark = abandoned.has(r.id) ? '  ⚠見捨てられ（振られた跡のみ残り、握る者も報告も無い）' : '';
+    // 依存の印。done でない needs だけを出す（済んだ依存は印から消える——状態を
+    // 書き換えずとも、needs の status から毎度引くゆえ。src/deps.ts）。
+    // 閉じた司令には出さぬ。もう振らぬものに「待ち」を言うても読み手を惑わすだけである。
+    const dep = r.status === 'pending' || r.status === 'in_progress' ? depMark(needsOf(db, r.id)) : '';
     const review =
       pendingByCmd.has(r.id)
         ? `  検め待ち: ${pendingByCmd.get(r.id)!.map(formatPendingReview).join(', ')}`
         : '';
-    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}${review}`;
+    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}${dep}${review}`;
   });
   const pendingTail =
     pending.length > 0
@@ -957,6 +979,8 @@ export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined
     lines.push(`    ${c.idx}. ${c.text}`);
     lines.push(got ? `       覆済 ← #${got.reportId} ${got.agent}: ${got.evidence}` : '       未達');
   }
+  const deps = needsOf(db, cmd.id);
+  if (deps.length > 0) lines.push(`  依存: ${deps.map((d) => `${d.needs}（${d.status}）`).join(', ')}`);
   lines.push(`  検め: ${cov.passing.map((p) => `#${p.id} ${p.verdict}`).join(', ') || 'まだ無い'}`);
   if (cov.unreviewed.length > 0) {
     lines.push(`  検め待ち: ${cov.unreviewed.map((u) => `#${u.id} ${u.agent}/${u.taskId}`).join(', ')}`);
@@ -1117,6 +1141,27 @@ async function runNudgeInner(
       });
       if (n > 0) lines.push(`  縁を ${n} 枚書き直した`);
     } catch { /* 縁は飾り */ }
+  }
+
+  // 依存が取り消し・失敗で閉じ、永久に振れぬ司令を家老へ一度報せる。
+  // 見捨ての報せ（下）と同じ型——見つけの失敗で合図の輪は落とさぬ (src/deps.ts)。
+  if (!dryRun) {
+    try {
+      const found = notifyBlocked(db, now);
+      if (found.length > 0) {
+        lines.push(`  依存で塞がった司令を家老へ報せた: ${found.map((b) => b.cmdId).join(', ')}`);
+      }
+    } catch (e) {
+      try {
+        journal(db, {
+          actor: 'core',
+          action: 'cmd.blocked.notice.error',
+          target: 'cmd_blocked',
+          detail: e instanceof Error ? e.message : String(e),
+          at: now,
+        });
+      } catch { /* 報せも台帳も次の周で試す */ }
+    }
   }
 
   // 見捨てられた司令（振られた跡があり、誰も握らず、報告も無いまま
@@ -1491,6 +1536,9 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
   }
   if (absent > 0) tail.push(`${absent} 名が布陣に居らぬ`);
   if (urgent > 0) tail.push(`${urgent} 名に急ぎの未読`);
+  // 依存で振れぬ司令の数。中身は cmd list の ⛓ / ⛔ の印で見る（src/deps.ts）。
+  const dep = depSummary(db);
+  if (dep !== '') tail.push(dep);
   const pending = listPendingReviews(db);
   if (pending.length > 0) {
     tail.push(
