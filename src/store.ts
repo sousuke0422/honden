@@ -337,6 +337,15 @@ CREATE TABLE IF NOT EXISTS inbox (
 );
 CREATE INDEX IF NOT EXISTS ix_inbox_unread ON inbox(agent, read, created_at);
 
+-- inbox read が見せた未読 id の写し。ack --all はここだけ既読にする。
+CREATE TABLE IF NOT EXISTS inbox_read_snapshot (
+  agent TEXT PRIMARY KEY,
+  ids     TEXT NOT NULL,
+  -- read が見せた範囲の境。inbox の rowid（挿入の順）で、一覧を引く取引の中で採る。
+  -- これより大きい rowid の未読が「read の後に届いた物」。NULL は境を持たぬ古い写し（断る側へ倒す）。
+  boundary INTEGER
+);
+
 -- 報告。
 --
 -- verdict は instructions/gunshi_at.md が定める 4 値だけを受ける。
@@ -657,6 +666,7 @@ function migrate(db: Database): void {
   addColumn(db, 'nudge', 'limited_until', 'TEXT');
   addColumn(db, 'nudge', 'hold_reason', 'TEXT');
   addColumn(db, 'nudge', 'hold_at', 'TEXT');
+  addColumn(db, 'inbox_read_snapshot', 'boundary', 'INTEGER');
   // 貸与の三欄。型へ足した折に**移行を書き忘れ**、先に建った正本では
   // `honden status` が「no such column: holder」で倒れておった
   // （本番の正本で実見・2026-08-29）。`CREATE TABLE IF NOT EXISTS` は

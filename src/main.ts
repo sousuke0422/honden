@@ -63,7 +63,17 @@ import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
 import { ingestAll } from './ingest';
-import { list, summarize, nudgeText, ack, ackAll, ackFor, urgentRideAlong, rideAlongSuppressed } from './inbox';
+import {
+  list,
+  summarize,
+  nudgeText,
+  ack,
+  ackAll,
+  ackFor,
+  readOwnUnread,
+  urgentRideAlong,
+  rideAlongSuppressed,
+} from './inbox';
 import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import {
   submitReport, submitQc, cmdDone, coverageOf, criteriaOf, listPendingReviews, formatPendingReview,
@@ -479,9 +489,11 @@ export function runInboxRead(
     };
   }
   const db = openStore({ path: dbPath });
-  const msgs = list(db, agent, { all });
-  const s = summarize(db, agent);
   const peeking = target !== undefined && target !== selfId;
+  const ownUnreadRead = !all && !peeking && agent === selfId;
+  // 己の未読を読む道だけ、見せた範囲を境つきで正本に残す（境の採取・一覧・写しは一つの取引）。
+  const msgs = ownUnreadRead ? readOwnUnread(db, agent) : list(db, agent, { all });
+  const s = summarize(db, agent);
   // 他人の受け渡しを覗いたなら跡を残す。
   //
   // 旧環境は queue/inbox/* を **役ごとに read_deny** で塞いでいた
