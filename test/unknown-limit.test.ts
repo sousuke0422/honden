@@ -71,7 +71,7 @@ function scenario(body: string) {
     const source = `
       import { openStore } from './src/store';
       import { syncRoster } from './src/roster';
-      import { deliver, ackAll, list, recordReadSnapshot } from './src/inbox';
+      import { deliver, ackAll, readOwnUnread } from './src/inbox';
       import { runNudge } from './src/main';
       import { limitState } from './src/busy';
       import { stateOf, revive } from './src/nudge';
@@ -240,7 +240,7 @@ test('未読0で保留を忘れ、新しい未読へ合図を出す', () => {
   const result = scenario(`
     await tick(); screen = '›';
     // #39: ack --all は直近の read が見せた分だけを既読にする。実際の手順（read → ack --all）を再現する。
-    recordReadSnapshot(db, agent, list(db, agent));
+    readOwnUnread(db, agent);
     ackAll(db, agent);
     await tick();
     const cleared = stateOf(db, agent);
@@ -256,7 +256,7 @@ test('周の間に未読が片付いて入れ替わっても、前の保留を�
   const result = scenario(`
     await tick(); screen = '›';
     // #39: ack --all は直近の read が見せた分だけを既読にする。実際の手順（read → ack --all）を再現する。
-    recordReadSnapshot(db, agent, list(db, agent));
+    readOwnUnread(db, agent);
     ackAll(db, agent);
     deliver(db, { id: 'm2', agent, at: new Date().toISOString(), type: 'task_assigned', sender: 'karo', body: 'next' });
     await tick();

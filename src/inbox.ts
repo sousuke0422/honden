@@ -52,10 +52,10 @@ const toMessage = (r: Record<string, unknown>): Message => ({
   read: r['read'] === 1,
 });
 
-/** inbox read の既定表示件数。ack --all の走査上限は別（`INBOX_ACK_SCAN_LIMIT`）。 */
+/** inbox read の既定表示件数。 */
 export const INBOX_LIST_DEFAULT_LIMIT = 100;
 
-/** ack --all が未読を数える上限（read の表示上限より大きい）。 */
+/** ackFor（他人の未読を代わりに片付ける）が走査する上限。ack --all は上限なしの EXISTS で判じる。 */
 export const INBOX_ACK_SCAN_LIMIT = 1000;
 
 /** 未読、または全件を古い順に返す。 */
@@ -233,60 +233,66 @@ export function ack(db: Database, selfId: string, ids: string[]): AckResult {
   return { ok: true, changed: toMark, already };
 }
 
-type ReadSnapshot = { ids: string[]; readAt: string };
+/**
+ * 直近の read が見せた範囲。
+ *
+ * boundary は inbox の rowid（挿入の順）で、**一覧を引く取引の中で**採った境である。
+ * 刻（created_at）の比べに頼らぬ理由: 刻は一覧を引いた**後**に採られ、その間に届いた報せを
+ * 「届いておらぬ」と数えてしまう。同じ刻の報せも在りうる。rowid は挿入の順で単調ゆえ、
+ * 境より大きければ、読まれておらぬ新着と言い切れる。null は境を持たぬ古い写し。
+ */
+type ReadSnapshot = { ids: string[]; boundary: number | null };
 
-/** 直近の inbox read（己の未読）が見せた id と read した時刻を正本に残す。 */
-export function recordReadSnapshot(db: Database, agent: string, shown: Message[]): void {
-  const payload: ReadSnapshot = {
-    ids: shown.map((m) => m.id),
-    readAt: new Date().toISOString(),
-  };
+/** inbox の今の最大の rowid（挿入の順の先頭）。空なら 0。 */
+function maxInboxRowid(db: Database): number {
+  const row = db.query('SELECT COALESCE(MAX(rowid), 0) AS m FROM inbox').get() as { m: number };
+  return row.m;
+}
+
+/** 直近の inbox read（己の未読）が見せた id と、その境（rowid）を正本に残す。 */
+export function recordReadSnapshot(db: Database, agent: string, shown: Message[], boundary: number): void {
   db.prepare(
-    `INSERT INTO inbox_read_snapshot(agent, ids) VALUES (?, ?)
-     ON CONFLICT(agent) DO UPDATE SET ids = excluded.ids`,
-  ).run(agent, JSON.stringify(payload));
+    `INSERT INTO inbox_read_snapshot(agent, ids, boundary) VALUES (?, ?, ?)
+     ON CONFLICT(agent) DO UPDATE SET ids = excluded.ids, boundary = excluded.boundary`,
+  ).run(agent, JSON.stringify({ ids: shown.map((m) => m.id) }), boundary);
+}
+
+/**
+ * 己の未読を読み、見せた範囲を境つきで正本に残す。`inbox read` の己の未読の道。
+ *
+ * 境の採取・一覧・写しの書き込みを**一つの取引**（IMMEDIATE）でする。境を一覧より先に採るのは、
+ * 一覧の後に届いた物を、必ず境より後に置くため（境が一覧の後なら、その間の報せが境の内に入って
+ * 「読んだ」と数えられる）。onListed は試験から割り込む口で、一覧を引いた直後に呼ぶ。
+ */
+export function readOwnUnread(db: Database, agent: string, opts: { onListed?: () => void } = {}): Message[] {
+  return db
+    .transaction(() => {
+      const boundary = maxInboxRowid(db);
+      const msgs = list(db, agent);
+      opts.onListed?.();
+      recordReadSnapshot(db, agent, msgs, boundary);
+      return msgs;
+    })
+    .immediate();
 }
 
 function loadReadSnapshot(db: Database, agent: string): ReadSnapshot | null {
-  const row = db.query('SELECT ids FROM inbox_read_snapshot WHERE agent = ?').get(agent) as
-    | { ids: string }
+  const row = db.query('SELECT ids, boundary FROM inbox_read_snapshot WHERE agent = ?').get(agent) as
+    | { ids: string; boundary: number | null }
     | null;
   if (!row) return null;
   const parsed = JSON.parse(row.ids) as unknown;
+  const boundary = typeof row.boundary === 'number' ? row.boundary : null;
+  // 古い写しは id の配列そのものか、{ ids, readAt } だった。id だけを引き継ぎ、境は持たぬものとして扱う。
   if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
-    return { ids: parsed, readAt: '' };
+    return { ids: parsed, boundary };
   }
-  if (
-    parsed &&
-    typeof parsed === 'object' &&
-    Array.isArray((parsed as ReadSnapshot).ids) &&
-    typeof (parsed as ReadSnapshot).readAt === 'string'
-  ) {
-    const p = parsed as ReadSnapshot;
-    if (!p.ids.every((x) => typeof x === 'string')) return null;
-    return p;
+  if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { ids?: unknown }).ids)) {
+    const ids = (parsed as { ids: unknown[] }).ids;
+    if (!ids.every((x) => typeof x === 'string')) return null;
+    return { ids: ids as string[], boundary };
   }
   return null;
-}
-
-function maxCreatedAtForIds(db: Database, ids: string[]): string {
-  if (ids.length === 0) return '';
-  const rows = db
-    .query(`SELECT created_at FROM inbox WHERE id IN (${ids.map(() => '?').join(',')})`)
-    .all(...ids) as { created_at: string }[];
-  return rows.reduce((max, r) => (r.created_at > max ? r.created_at : max), '');
-}
-
-/** 写しに無い未読のうち、read より後に作られたものだけを「届いた」と見る。 */
-function unreadArrivedSinceRead(db: Database, snap: ReadSnapshot, currentUnread: Message[]): string[] {
-  const snapSet = new Set(snap.ids);
-  const notInSnapshot = currentUnread.filter((m) => !snapSet.has(m.id));
-  if (notInSnapshot.length === 0) return [];
-
-  const cutoff = snap.readAt || maxCreatedAtForIds(db, snap.ids);
-  if (!cutoff) return notInSnapshot.map((m) => m.id);
-
-  return notInSnapshot.filter((m) => m.createdAt > cutoff).map((m) => m.id);
 }
 
 function clearReadSnapshot(db: Database, agent: string): void {
@@ -297,41 +303,69 @@ function clearReadSnapshot(db: Database, agent: string): void {
  * 自分の未読を、直近の read が見せた分だけ既読にする。
  *
  * read 以降に届いた未読があるなら一件も触らず断る——読まれぬまま既読にしない。
+ * 「届いた」は、境（rowid）より後に入った己宛ての未読が一件でも在るか、**件数の上限なしの EXISTS**
+ * で判じる（走査に上限があると、古い未読が上限を越えて並ぶ時、新着が走査の外に出て見逃される）。
+ * その判じと既読化は同じ取引の中で行う（間に届いた物を、既読化の後で見逃さぬ）。
  */
 export function ackAll(db: Database, selfId: string): AckResult {
-  const snapshot = loadReadSnapshot(db, selfId);
-  if (snapshot === null) {
-    return {
-      ok: false,
-      changed: [],
-      already: [],
-      message:
-        'inbox read をまだ打っておらぬ。見せた報せが無いまま ack --all はできぬ。\n' +
-        '  先に honden inbox read して、届いた分を読んだ上で ack --all せよ。',
-    };
-  }
+  return db
+    .transaction((): AckResult => {
+      const snapshot = loadReadSnapshot(db, selfId);
+      if (snapshot === null) {
+        return {
+          ok: false,
+          changed: [],
+          already: [],
+          message:
+            'inbox read をまだ打っておらぬ。見せた報せが無いまま ack --all はできぬ。\n' +
+            '  先に honden inbox read して、届いた分を読んだ上で ack --all せよ。',
+        };
+      }
+      if (snapshot.boundary === null) {
+        return {
+          ok: false,
+          changed: [],
+          already: [],
+          message:
+            'inbox read の写しに境が無い（古い版が残した写し）。どこまで見せたか分からぬゆえ、既読にできぬ。\n' +
+            '  もう一度 honden inbox read してから ack --all せよ。',
+        };
+      }
 
-  const currentUnread = list(db, selfId, { limit: INBOX_ACK_SCAN_LIMIT });
-  const arrivedSinceRead = unreadArrivedSinceRead(db, snapshot, currentUnread);
-  if (arrivedSinceRead.length > 0) {
-    return {
-      ok: false,
-      changed: [],
-      already: [],
-      message:
-        `inbox read のあとに未読が ${arrivedSinceRead.length} 件届いた（${arrivedSinceRead.join(', ')}）。\n` +
-        '  読まれぬまま既読にできぬ。もう一度 honden inbox read してから ack --all せよ。',
-    };
-  }
+      const arrived = db
+        .query('SELECT EXISTS (SELECT 1 FROM inbox WHERE agent = ? AND read = 0 AND rowid > ?) AS e')
+        .get(selfId, snapshot.boundary) as { e: number };
+      if (arrived.e === 1) {
+        // 断る文のために件数と先頭の id を引く（判じは上の EXISTS。ここは言葉の材料だけ）。
+        const n = (
+          db
+            .query('SELECT count(*) AS n FROM inbox WHERE agent = ? AND read = 0 AND rowid > ?')
+            .get(selfId, snapshot.boundary) as { n: number }
+        ).n;
+        const head = (
+          db
+            .query('SELECT id FROM inbox WHERE agent = ? AND read = 0 AND rowid > ? ORDER BY rowid LIMIT 5')
+            .all(selfId, snapshot.boundary) as { id: string }[]
+        ).map((r) => r.id);
+        return {
+          ok: false,
+          changed: [],
+          already: [],
+          message:
+            `inbox read のあとに未読が ${n} 件届いた（${head.join(', ')}${n > head.length ? ' ほか' : ''}）。\n` +
+            '  読まれぬまま既読にできぬ。もう一度 honden inbox read してから ack --all せよ。',
+        };
+      }
 
-  if (snapshot.ids.length === 0 && currentUnread.length === 0) {
-    clearReadSnapshot(db, selfId);
-    return { ok: true, changed: [], already: [] };
-  }
-
-  const r = ack(db, selfId, snapshot.ids);
-  if (r.ok) clearReadSnapshot(db, selfId);
-  return r;
+      if (snapshot.ids.length === 0) {
+        clearReadSnapshot(db, selfId);
+        return { ok: true, changed: [], already: [] };
+      }
+      const r = ack(db, selfId, snapshot.ids);
+      if (r.ok) clearReadSnapshot(db, selfId);
+      return r;
+    })
+    .immediate();
 }
 
 /**
