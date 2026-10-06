@@ -240,6 +240,15 @@ export function ack(db: Database, selfId: string, ids: string[]): AckResult {
  * 刻（created_at）の比べに頼らぬ理由: 刻は一覧を引いた**後**に採られ、その間に届いた報せを
  * 「届いておらぬ」と数えてしまう。同じ刻の報せも在りうる。rowid は挿入の順で単調ゆえ、
  * 境より大きければ、読まれておらぬ新着と言い切れる。null は境を持たぬ古い写し。
+ *
+ * **rowid が単調なのは、inbox から行を消さぬ間だけである。** inbox は暗黙の rowid（AUTOINCREMENT
+ * ではない）ゆえ、最大の rowid の行を消すと、次の挿入がその番号を使い回す（使い捨ての正本で実測）。
+ * 境がその番号なら、新着が「境より大きい」を満たさず、読まれておらぬ新着を見逃す。
+ * 今は src に inbox から行を消す者が居らぬ（inbox への DELETE は 0 件）ゆえ成り立つ。
+ * **間引き（掃除）を足すなら**、次のどちらかを守れ。
+ *   - 最大の rowid の行を残す（番号の使い回しを起こさぬ）。
+ *   - 消した後に `inbox_read_snapshot` の境を落とし（写しの行を消す／boundary を NULL にする）、
+ *     読み直させる。境が無ければ ack --all は断る側へ倒れて止まる（ackAll の「写し無し」「境無し」の道）。
  */
 type ReadSnapshot = { ids: string[]; boundary: number | null };
 
