@@ -72,6 +72,8 @@ command: |
   Detailed instruction for Karo...
 project: project-id
 priority: high
+depends_on:          # 任意。先に済ませるべき司令
+  - cmd_NNN
 EOF
 ```
 
@@ -81,6 +83,7 @@ EOF
 - **command**: Required. 家老への指示本文。
 - **project**: Required. どの案件か。
 - **priority**: `high` / `medium` / `low`。既定は `medium`。
+- **depends_on**: 任意。先に済ませるべき司令の番号の一覧（下の「司令の依存」）。
 
 番号（`cmd_NNN`）は honden が採る。`id` も `timestamp` も `status` も書くな。
 
@@ -105,6 +108,29 @@ honden inbox write --to karo --type cmd_new --from shogun --body "cmd_XXX を書
 
 閉じた司令（`done` / `cancelled`）は書き換えられぬ。閉じた後に条件を直しても誰にも届かぬゆえ、
 やり直させるなら `honden cmd new` で新しく書け。
+
+### 司令の依存
+
+司令の順を頭で持つな。**頭で持つものは落ちる。** `depends_on` で正本に持たせよ。
+
+- 頼る司令（needs）が **`done` になるまで、家老はその司令を振れぬ**（`honden task assign` が
+  「cmd_x が済んでおらぬ」で断る）。needs が done になれば、**何もせずとも振れる**——
+  解けた印は書かず、毎度 needs の status から引くゆえ（`src/deps.ts`）。
+- 順を飛ばす正当な理由があるなら、**将軍だけが既存の `--bypass --reason "…"` で振れる**。
+  台帳の `task.assign.bypass` に「未解の依存」が残る。依存のための新しい抜け道は無い。
+- 足し引きは `honden cmd amend` に `depends_on:`（一覧を丸ごと。空の一覧で全て外す）。
+  跡は `cmd_revision` に残り、知らせは他の書き換えと同じ取引で飛ぶ。
+- 在らぬ司令・己自身・**輪になる依存は書く時に拒まれる**（二つの輪も、三つ以上の輪も）。
+- `honden cmd list` に `⛓ cmd_x 待ち`（済んでおらぬ依存）が、`honden status` の尻に
+  依存待ちの数が出る。
+- needs が `cancelled` / `failed` で閉じれば、依存する司令は**永久に振れぬ**。
+  `cmd list` に `⛔ cmd_x（cancelled）で塞がり` が立ち、芯が家老へ `cmd_blocked` を一度報せる。
+  依存を外すか、その司令を閉じるかを判ぜよ。
+
+**限り——守るのは司令と司令の間の順だけである。** 一つの司令の中の積み重ね
+（PR の A→B→C を三本の枝に積む類、PR の merge の順）は依存では表せぬ。
+それは受け入れ条件と家老の差配の領分である。PR の merge の順を依存で持たせたいなら、
+PR ごとに司令を分けるしかない——分けるに値するかは都度判ぜよ。
 
 ### Good vs Bad examples
 

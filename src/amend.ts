@@ -46,6 +46,7 @@ import { checkReason, validate, explain } from './validate';
 import { deliver, signal } from './inbox';
 import { CMD_AUTHOR, ASSIGNER } from './dispatch';
 import { parseUnified, applyHunks } from './patch';
+import { DepError, deleteNeeds, insertNeeds, needsOf, normalizeNeeds } from './deps';
 
 export interface AmendResult {
   ok: boolean;
@@ -54,7 +55,7 @@ export interface AmendResult {
 }
 
 /** 書き換えられる欄。`status` はここでは触らせない（cmd done / reopen が持つ）。 */
-export const AMENDABLE = ['north_star', 'purpose', 'command', 'project', 'priority', 'acceptance_criteria'] as const;
+export const AMENDABLE = ['north_star', 'purpose', 'command', 'project', 'priority', 'acceptance_criteria', 'depends_on'] as const;
 
 const COLUMN: Record<string, string> = {
   north_star: 'north_star',
@@ -208,14 +209,35 @@ export function amendCmd(
     for (const [idx, text] of oldByIdx) critChanges.push({ idx, before: text, after: null });
   }
 
-  if (changes.length === 0 && critChanges.length === 0) {
+  // 依存。丸ごとの一覧で受け、今との差（足す・外す）に均す。空の一覧は「全て外す」。
+  let depChange: { before: string[]; after: string[]; add: string[]; drop: string[] } | null = null;
+  if (input['depends_on'] !== undefined) {
+    const after = normalizeNeeds(input['depends_on']);
+    if (!Array.isArray(after)) return { ok: false, message: `${after.error}\n  書き込みは行っておらぬ。` };
+    const before = needsOf(db, cmdId).map((n) => n.needs);
+    const add = after.filter((n) => !before.includes(n));
+    const drop = before.filter((n) => !after.includes(n));
+    if (add.length > 0 || drop.length > 0) depChange = { before, after, add, drop };
+  }
+
+  if (changes.length === 0 && critChanges.length === 0 && depChange === null) {
     return { ok: false, message: '変わるものが無い。渡した値は今と同じである。' };
   }
 
   const at = now.toISOString();
   const workers = workersOn(db, cmdId);
 
+  try {
   tx(db, () => {
+    if (depChange) {
+      // 外してから足す。足す側の循環の検めは、外した後の姿で行う。
+      // 在らぬ司令・己自身・循環なら投げ、取引ごと巻き戻す（他の欄も書かぬ）。
+      deleteNeeds(db, cmdId, depChange.drop);
+      insertNeeds(db, cmdId, depChange.add, selfId, at);
+      db.prepare(
+        'INSERT INTO cmd_revision(cmd_id, at, by, field, before, after, reason) VALUES (?,?,?,?,?,?,?)',
+      ).run(cmdId, at, selfId, 'depends_on', depChange.before.join(','), depChange.after.join(','), reason);
+    }
     for (const c of changes) {
       db.prepare(`UPDATE cmd SET ${COLUMN[c.field]} = ? WHERE id = ?`).run(c.after, cmdId);
       db.prepare(
@@ -242,6 +264,9 @@ export function amendCmd(
     const body =
       `${cmdId} を書き換えた。\n理由: ${reason}\n\n` +
       changes.map((c) => `  ${c.field} が変わった`).join('\n') +
+      (depChange
+        ? `${changes.length > 0 ? '\n' : ''}  依存が変わった: [${depChange.before.join(', ')}] → [${depChange.after.join(', ')}]`
+        : '') +
       (changes.length > 0 && critChanges.length > 0 ? '\n' : '') +
       critChanges
         .map((c) =>
@@ -273,10 +298,14 @@ export function amendCmd(
       action: 'cmd.amend',
       target: cmdId,
       detail:
-        `欄=[${changes.map((c) => c.field).join(',')}] 条件=[${critChanges.map((c) => c.idx).join(',')}] ` +
+        `欄=[${[...changes.map((c) => c.field), ...(depChange ? ['depends_on'] : [])].join(',')}] 条件=[${critChanges.map((c) => c.idx).join(',')}] ` +
         `知らせた先=[${[ASSIGNER, ...workers.map((w) => w.agent)].join(',')}] reason=${JSON.stringify(reason)}`,
     });
   });
+  } catch (e) {
+    if (e instanceof DepError) return { ok: false, message: `${e.message}\n  書き込みは行っておらぬ。` };
+    throw e;
+  }
   signal(db);
 
   const told = [ASSIGNER, ...workers.map((w) => w.agent)];
@@ -285,6 +314,7 @@ export function amendCmd(
     out: [
       `  ${cmdId} を書き換えた。`,
       ...changes.map((c) => `    ${c.field} を変えた`),
+      ...(depChange ? [`    依存を [${depChange.before.join(', ')}] から [${depChange.after.join(', ')}] へ変えた`] : []),
       ...critChanges.map((c) =>
         c.after === null ? `    条件 ${c.idx} を消した` : `    条件 ${c.idx} を ${c.before === null ? '足した' : '変えた'}`,
       ),

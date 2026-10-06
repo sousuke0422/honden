@@ -80,6 +80,7 @@ import {
 } from './report';
 import { plan, send, record, startClocks, withNudgeLock, revive, holdForReview, HOLD_RECHECK_MS, markLimited } from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
+import { depMark, depSummary, needsOf, notifyBlocked } from './deps';
 import { findStalled, notifyStalled } from './stalled';
 import { notifyUnreviewed } from './unreviewed';
 import { captureBusy, captureLimitState, type LimitState, isWorking } from './busy';
@@ -938,11 +939,15 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
         ? `閉じて${ago(r.completed_at)}`
         : `起草から${ago(r.created_at)}`;
     const mark = abandoned.has(r.id) ? '  ⚠見捨てられ（振られた跡のみ残り、握る者も報告も無い）' : '';
+    // 依存の印。done でない needs だけを出す（済んだ依存は印から消える——状態を
+    // 書き換えずとも、needs の status から毎度引くゆえ。src/deps.ts）。
+    // 閉じた司令には出さぬ。もう振らぬものに「待ち」を言うても読み手を惑わすだけである。
+    const dep = r.status === 'pending' || r.status === 'in_progress' ? depMark(needsOf(db, r.id)) : '';
     const review =
       pendingByCmd.has(r.id)
         ? `  検め待ち: ${pendingByCmd.get(r.id)!.map(formatPendingReview).join(', ')}`
         : '';
-    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}${review}`;
+    return `  ${r.id.padEnd(12)} [${r.status.padEnd(11)}] ${r.priority.padEnd(6)}${who}${p}  ${t}${mark}${dep}${review}`;
   });
   const pendingTail =
     pending.length > 0
@@ -975,6 +980,8 @@ export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined
     lines.push(`    ${c.idx}. ${c.text}`);
     lines.push(got ? `       覆済 ← #${got.reportId} ${got.agent}: ${got.evidence}` : '       未達');
   }
+  const deps = needsOf(db, cmd.id);
+  if (deps.length > 0) lines.push(`  依存: ${deps.map((d) => `${d.needs}（${d.status}）`).join(', ')}`);
   lines.push(`  検め: ${cov.passing.map((p) => `#${p.id} ${p.verdict}`).join(', ') || 'まだ無い'}`);
   if (cov.unreviewed.length > 0) {
     lines.push(`  検め待ち: ${cov.unreviewed.map((u) => `#${u.id} ${u.agent}/${u.taskId}`).join(', ')}`);
@@ -1132,6 +1139,27 @@ async function runNudgeInner(
       });
       if (n > 0) lines.push(`  縁を ${n} 枚書き直した`);
     } catch { /* 縁は飾り */ }
+  }
+
+  // 依存が取り消し・失敗で閉じ、永久に振れぬ司令を家老へ一度報せる。
+  // 見捨ての報せ（下）と同じ型——見つけの失敗で合図の輪は落とさぬ (src/deps.ts)。
+  if (!dryRun) {
+    try {
+      const found = notifyBlocked(db, now);
+      if (found.length > 0) {
+        lines.push(`  依存で塞がった司令を家老へ報せた: ${found.map((b) => b.cmdId).join(', ')}`);
+      }
+    } catch (e) {
+      try {
+        journal(db, {
+          actor: 'core',
+          action: 'cmd.blocked.notice.error',
+          target: 'cmd_blocked',
+          detail: e instanceof Error ? e.message : String(e),
+          at: now,
+        });
+      } catch { /* 報せも台帳も次の周で試す */ }
+    }
   }
 
   // 見捨てられた司令（振られた跡があり、誰も握らず、報告も無いまま
@@ -1506,6 +1534,9 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
   }
   if (absent > 0) tail.push(`${absent} 名が布陣に居らぬ`);
   if (urgent > 0) tail.push(`${urgent} 名に急ぎの未読`);
+  // 依存で振れぬ司令の数。中身は cmd list の ⛓ / ⛔ の印で見る（src/deps.ts）。
+  const dep = depSummary(db);
+  if (dep !== '') tail.push(dep);
   const pending = listPendingReviews(db);
   if (pending.length > 0) {
     tail.push(
