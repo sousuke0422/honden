@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
-import { deliver, ackAll } from '../src/inbox';
+import { deliver, ackAll, readOwnUnread } from '../src/inbox';
 import { plan, record, stateOf, holdForReview, revive, markLimited } from '../src/nudge';
 import { runNudge } from '../src/main';
 
@@ -149,7 +149,10 @@ describe('解除と数え直し', () => {
     db.close();
     expect((await tick(path)).sent.length).toBe(1);
     let d = openStore({ path });
-    ackAll(d, AGENT);
+    // ackAll は直近の read が見せた未読だけを既読にする（写しが無ければ断る）。
+    // 本人が read してから片付ける作法どおりに、先に写しを作る。
+    readOwnUnread(d, AGENT);
+    expect(ackAll(d, AGENT).ok).toBe(true);
     d.close();
     await tick(path); // 未読 0 ゆえ覚えを消す
     d = openStore({ path });
