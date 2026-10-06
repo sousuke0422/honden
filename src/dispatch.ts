@@ -54,6 +54,7 @@ import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
 import { maxBloomOf } from './routing';
 import { validate, explain, checkReason, type Schema } from './validate';
+import { DepError, insertNeeds, normalizeNeeds, unresolved } from './deps';
 
 const PRIORITIES = ['high', 'medium', 'low'] as const;
 
@@ -69,6 +70,8 @@ const CMD_SCHEMA: Schema = {
   command: { required: true, about: '家老への指示本文' },
   project: { required: true, about: 'どの案件か' },
   priority: { oneOf: PRIORITIES, about: '既定は medium' },
+  // 一覧（YAML）でも「cmd_1,cmd_2」（旗）でも受けるゆえ、型は自前で見る (src/deps.ts)。
+  depends_on: { structured: true, about: '先に済ませるべき司令の番号の一覧。済むまで振れぬ' },
 };
 
 export interface DispatchResult {
@@ -120,8 +123,11 @@ export function createCmd(
     project: string;
     priority?: string;
   };
+  const needs = normalizeNeeds(input['depends_on']);
+  if (!Array.isArray(needs)) return { ok: false, message: `${needs.error}\n  書き込みは行っておらぬ。` };
   const at = new Date().toISOString();
   let id = '';
+  try {
   tx(db, () => {
     id = nextCmdId(db);
     db.prepare(
@@ -141,13 +147,22 @@ export function createCmd(
     // 番号は 1 から。人が読んで指す番号ゆえ、0 から数えると
     // 「条件 0」という言い方が要る。honden cmd show の並びと揃える。
     v.acceptance_criteria.forEach((text, i) => ins.run(id, i + 1, String(text)));
+    // 依存は司令を書いた後に挿す。番号が決まってからでないと「己自身」を見分けられぬ。
+    // 在らぬ司令・己自身・循環なら投げ、取引ごと巻き戻す（司令そのものも書かぬ）。
+    insertNeeds(db, id, needs, selfId, at);
     journal(db, {
       actor: selfId,
       action: 'cmd.create',
       target: id,
-      detail: `project=${v.project} 受入条件=${v.acceptance_criteria.length}件`,
+      detail:
+        `project=${v.project} 受入条件=${v.acceptance_criteria.length}件` +
+        (needs.length > 0 ? ` 依存=${needs.join(',')}` : ''),
     });
   });
+  } catch (e) {
+    if (e instanceof DepError) return { ok: false, message: `${e.message}\n  書き込みは行っておらぬ。` };
+    throw e;
+  }
   return { ok: true, id };
 }
 
@@ -313,8 +328,27 @@ export function assignTask(
     };
   }
   let result: DispatchResult = { ok: false };
+  // 振る時に解けておらなんだ依存。迂回した時に台帳へ残す。
+  let openNeeds: string[] = [];
   try {
     tx(db, () => {
+      // 依存が解けておらねば振らぬ。解けたかは毎度 needs の status から引く
+      // （解けた印を書く形にせぬ訳は src/deps.ts の頭に書いた）。
+      // 覆す道は既存の --bypass だけ。新しい抜け道は作らぬ。
+      const open = unresolved(db, v.cmd_id);
+      openNeeds = open.map((n) => n.needs);
+      if (open.length > 0 && !wantsBypass) {
+        result = {
+          ok: false,
+          message:
+            open.map((n) => `${n.needs} が済んでおらぬ（${n.status}）`).join('\n') +
+            `\n  ${v.cmd_id} はこれらに頼っておる。済んでから振られよ。\n` +
+            '  順を飛ばす正当な理由があるなら、将軍が --bypass --reason "…" で振れる。\n' +
+            '  書き込みは行っておらぬ。',
+        };
+        throw new Error('claim-conflict');
+      }
+
       // 持ち場の様子は取引の中で見直す。
       //
       // 上の検めは、断る時に手厚い文を出すためのもの。**門はここである。**
@@ -402,7 +436,8 @@ export function assignTask(
       detail:
         `${taskId} cmd=${v.cmd_id}${v.bloom ? ` bloom=${v.bloom}` : ''}` +
         (wantsBypass
-          ? ` reason=${JSON.stringify(input['reason'])} 迂回時の家老=[${observeBypassed(db, ASSIGNER)}]`
+          ? ` reason=${JSON.stringify(input['reason'])} 迂回時の家老=[${observeBypassed(db, ASSIGNER)}]` +
+            (openNeeds.length > 0 ? ` 未解の依存=${openNeeds.join(',')}` : '')
           : '') +
         (wantsTakeover
           ? ` reason=${JSON.stringify(input['reason'])} 引き継いだ仕事=${cur?.task_id ?? '不明'} 期限=${cur?.lease_until ?? 'なし'}`
