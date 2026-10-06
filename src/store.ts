@@ -494,7 +494,11 @@ CREATE TABLE IF NOT EXISTS nudge (
   -- 文脈消しまで届く。消えた物は読めぬ——読んだ時に覚えるほかない。
   limited_until TEXT,
   hold_reason   TEXT,   -- 復帰時刻の無い枠切れ、または原因不明の無応答
-  hold_at       TEXT    -- 上役へ判断を委ねた時刻
+  hold_at       TEXT,   -- 上役へ判断を委ねた時刻
+  -- 刻の無い枠切れの保留中の打ち直し。回数と最後に打った刻を覚え、芯を立て直しても
+  -- 間が 30 分へ巻き戻らぬようにする（src/nudge.ts の UNDATED_RESEND_STEPS_MS）。
+  hold_resend_count INTEGER NOT NULL DEFAULT 0,
+  hold_resent_at    TEXT
 );
 
 -- 禁じ手の門の通行手形（OTP）。
@@ -666,6 +670,8 @@ function migrate(db: Database): void {
   addColumn(db, 'nudge', 'limited_until', 'TEXT');
   addColumn(db, 'nudge', 'hold_reason', 'TEXT');
   addColumn(db, 'nudge', 'hold_at', 'TEXT');
+  addColumn(db, 'nudge', 'hold_resend_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn(db, 'nudge', 'hold_resent_at', 'TEXT');
   addColumn(db, 'inbox_read_snapshot', 'boundary', 'INTEGER');
   // 貸与の三欄。型へ足した折に**移行を書き忘れ**、先に建った正本では
   // `honden status` が「no such column: holder」で倒れておった
