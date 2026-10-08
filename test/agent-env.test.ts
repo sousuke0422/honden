@@ -65,6 +65,32 @@ describe('env の欄を読む（agentEnv）', () => {
     }
   });
 
+  test('CODEX_HOME は / で始まる絶対の道に限る（~・相対・空・.. は止める）', () => {
+    // 値は単引用で載るゆえ ~ も $HOME も展開されぬ。selftest が読む先と codex が使う先を
+    // 食い違わせぬため、絶対の道だけを受ける。.. は畳まずに止める（symlink を越えると
+    // 字面の正規化と実の在り処がずれうる）。
+    for (const [v, said] of [
+      ['~/.codex-x', '絶対の道'],
+      ['codex-x', '絶対の道'],
+      ['./codex-x', '絶対の道'],
+      ['$HOME/.codex-x', '絶対の道'],
+      ['', '絶対の道'],
+      ['/home/me/../me/.codex-x', '..'],
+      ['/home/me/.codex-x/..', '..'],
+    ] as const) {
+      const r = agentEnv({ cli: { agents: { a: { env: { CODEX_HOME: v } } } } }, 'a');
+      expect(r.ok, v).toBe(false);
+      if (!r.ok) {
+        expect(r.message, v).toContain(said);
+        expect(r.message, v).toContain('$HOME を展開した絶対の道');
+      }
+    }
+    // 陽性対照: 絶対の道は通る（空白や $ を含む名の dir も、.. を含まねば通る）
+    for (const v of ['/home/me/.codex-x', '/tmp/a b$c', '/home/me/..codex']) {
+      expect(agentEnv({ cli: { agents: { a: { env: { CODEX_HOME: v } } } } }, 'a'), v).toEqual({ ok: true, env: [['CODEX_HOME', v]] });
+    }
+  });
+
   test('写像でない形・文でない値・制御の字は止める', () => {
     expect(agentEnv(y('cli:\n  agents:\n    a:\n      env: [CODEX_HOME]\n'), 'a').ok).toBe(false);
     expect(agentEnv(y('cli:\n  agents:\n    a:\n      env: CODEX_HOME=/x\n'), 'a').ok).toBe(false);
@@ -96,6 +122,22 @@ describe('honden config env <名>', () => {
     const bad = runConfigEnv(db, 'a3');
     expect(bad.code).not.toBe(0);
     expect(bad.err).toContain('許しておらぬ');
+  });
+
+  test('CODEX_HOME が絶対の道でなければ非ゼロ（出陣と立て直しはこの口で止まる）', () => {
+    const db = store(
+      'cli:\n  agents:\n    t:\n      type: codex\n      env:\n        CODEX_HOME: "~/.codex-x"\n' +
+        '    r:\n      type: codex\n      env:\n        CODEX_HOME: codex-x\n' +
+        '    e:\n      type: codex\n      env:\n        CODEX_HOME: ""\n' +
+        '    ok:\n      type: codex\n      env:\n        CODEX_HOME: /home/me/.codex-x\n',
+    );
+    for (const a of ['t', 'r', 'e']) {
+      const res = runConfigEnv(db, a);
+      expect(res.code, a).not.toBe(0);
+      expect(res.err, a).toContain('$HOME を展開した絶対の道');
+      expect(res.out ?? '', a).toBe(''); // 前置きを返さぬ（命に載せぬ）
+    }
+    expect(runConfigEnv(db, 'ok')).toEqual({ code: 0, out: `CODEX_HOME='/home/me/.codex-x'` });
   });
 
   test('急ぎの未読の横乗せを載せぬ（$( ) で受ける口ゆえ、一行混ざると命が割れる）', () => {
@@ -185,6 +227,23 @@ describe('guard selftest — codex の信頼を足軽ごとに見る', () => {
     expect(res.code).toBe(0);
     expect(codexLines(res.out ?? '')).toHaveLength(1);
     expect(codexLines(res.out ?? '')[0]).toContain('名簿に codex の足軽が居らぬ');
+  });
+
+  test('CODEX_HOME が絶対の道でない足軽は、その者を「効いておらぬ」として非ゼロ（読む先を推し量らぬ）', () => {
+    const r = root();
+    codexHome(join(HOME, '.codex'), r, true);
+    // ~/.codex-x の形。selftest が展開して読めば緑に見えうるが、codex は単引用の ~ を展開せぬ
+    codexHome(join(HOME, '.codex-x'), r, true);
+    for (const v of ['~/.codex-x', '.codex-x', '']) {
+      const db = store(`cli:\n  agents:\n    ashigaru1:\n      type: codex\n      env:\n        CODEX_HOME: "${v}"\n    ashigaru2: { type: codex }\n`);
+      const res = runGuardSelftest(r, db, HOME);
+      expect(res.code, v).not.toBe(0);
+      const l1 = codexLines(res.out ?? '').find((l) => l.includes('ashigaru1'));
+      expect(l1, v).toContain('**効いておらぬ**');
+      expect(l1, v).toContain('絶対の道');
+      // 陽性対照: 同じ正本の、判じを通る足軽は今どおり生きておる
+      expect(codexLines(res.out ?? '').find((l) => l.includes('ashigaru2')), v).toContain('生きておる');
+    }
   });
 
   test('env の欄が誤った codex の足軽は、その者を「効いておらぬ」として非ゼロ', () => {

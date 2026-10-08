@@ -101,6 +101,31 @@ export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME'];
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
+/**
+ * 名ごとの値の掟。名の判じと同じ所で、値も判ずる。外れれば理由と直し方を返す。
+ *
+ * **CODEX_HOME は `/` で始まる絶対の道に限る。** 値は単引用で命に載るゆえ、`~` も
+ * `$HOME` も展開されぬ。`~/.codex-x` は codex の側では「今の dir の下の `~` という dir」
+ * になり、selftest が `~` を展開して読めば、見張る先と codex が使う先が食い違う。
+ * 相対の道も同じく、起こした dir 次第で先が変わる。
+ *
+ * **`..` は畳まずに止める。** 字面で畳むと、symlink を越える道で実の在り処とずれうる
+ * （`/a/link/../b` の `..` は、shell では字面で、kernel では link の先で解かれる）。
+ * 畳まずに受ける形を一つに絞れば、selftest が読む先と codex が開く先は必ず同じになる。
+ */
+const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
+  CODEX_HOME: (v) => {
+    const fix = '$HOME を展開した絶対の道（例: /home/me/.codex-ashigaru3）で書かれよ';
+    if (!v.startsWith('/')) {
+      return `絶対の道（/ で始まる）で書かれよ: ${JSON.stringify(v)}。値は単引用で載るゆえ ~ も $HOME も展開されず、相対の道は起こした dir で先が変わる。${fix}`;
+    }
+    if (v.split('/').includes('..')) {
+      return `.. を含む: ${JSON.stringify(v)}。畳むと symlink を越えて実の在り処とずれうるゆえ受けぬ。${fix}`;
+    }
+    return null;
+  },
+};
+
 /** shell の単引用で包む。単引用そのものは `'\''` で抜ける。空白・`$`・`!` も崩れぬ。 */
 export function shellQuote(v: string): string {
   return `'${v.replace(/'/g, `'\\''`)}'`;
@@ -142,6 +167,8 @@ export function agentEnv(doc: unknown, agent: string): { ok: true; env: [string,
     if (/[\u0000-\u001f\u007f]/.test(v)) {
       return { ok: false, message: `cli.agents.${agent}.env.${name} の値に改行などの制御の字が在る。` };
     }
+    const bad = ENV_VALUE_RULES[name]?.(v);
+    if (bad) return { ok: false, message: `cli.agents.${agent}.env.${name} の値の誤り——${bad}` };
     env.push([name, v]);
   }
   return { ok: true, env };
