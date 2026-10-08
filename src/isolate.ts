@@ -184,8 +184,9 @@ export function requiredTools(cfg: IsolationCfg): string[] {
 /**
  * 一体を起こす命を包む。
  *
- * 中の命は `bash -lc` に**単引用で**渡す。tmux send-keys を経るゆえ、
- * 中身に単引用があれば包めぬ——その時は拒む（黙って裸で起こさぬ）。
+ * 中の命は `bash -lc` に**単引用で**渡す。tmux send-keys を経るゆえ、二重引用では
+ * `!` が履歴の展開に食われる。中身の単引用は `'\''` で抜けて包む（足軽ごとの env の
+ * 値が単引用で来る）。前は拒んでおったが、抜けば包めぬ形は残らぬ。
  *
  * file は縛らぬ（`--dev-bind / /`）。v1 の床は網だけである。
  * `--die-with-parent` で、pane が消えれば中身も残らぬ。
@@ -249,17 +250,18 @@ export function wrapLaunch(
   opts: WrapOpts = {},
 ): { ok: true; cmd: string } | { ok: false; message: string } {
   if (cfg.level === 'none') return { ok: true, cmd: inner };
-  if (inner.includes("'")) {
-    return { ok: false, message: `起こす命に単引用が含まれ、包めぬ: ${inner}` };
-  }
+  // 起こす命は `bash -lc '…'` の単引用の中へ包む。命に単引用が在れば `'\''` で抜ける
+  // （閉じ・逃がした単引用・開き）。足軽ごとの env の値（`CODEX_HOME='…'`）が単引用で
+  // 包まれて来るゆえ、断らずに正しく包む。外の shell が解けば、元の命が一字違わず戻る。
+  const quoted = inner.replace(/'/g, `'\\''`);
   const exists = opts.exists ?? ((p: string) => require('node:fs').existsSync(p));
   const home = opts.home ?? require('node:os').homedir();
   const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home).join(' ') : '--dev-bind / /';
   if (!cfg.outbound && cfg.tcpPorts.length === 0) {
     // 外も要らぬなら pasta ごと要らぬ。bwrap が網を切る（空の loopback だけ残る）
-    return { ok: true, cmd: `bwrap ${binds} --die-with-parent --unshare-net -- bash -lc '${inner}'` };
+    return { ok: true, cmd: `bwrap ${binds} --die-with-parent --unshare-net -- bash -lc '${quoted}'` };
   }
-  let core = `bash -lc '${inner}'`;
+  let core = `bash -lc '${quoted}'`;
   if (cfg.tcpPorts.length > 0) {
     if (!cageBin) return { ok: false, message: '口の許し（tcp/<口>）には honden-cage が要るが、在り処が渡されておらぬ。' };
     // 檻が最も内側。pasta（母屋の隔て）→ bwrap（束ね）→ 檻（口の枷）→ CLI

@@ -148,18 +148,36 @@ roster_of() {
 
 cli_of()   { HONDEN_DB="$DB" "$HONDEN_BIN" config get "cli.agents.$1.type"  2>/dev/null; }
 model_of() { HONDEN_DB="$DB" "$HONDEN_BIN" config get "cli.agents.$1.model" 2>/dev/null; }
+# 足軽ごとの env の前置き（`CODEX_HOME='…'`）。値は honden が単引用で包んで返す。
+# 名が外れておれば非ゼロ——陣を立てる前に env_check で止まる（launch_cmd は $( ) で
+# 受けられるゆえ、中で止まっても親は進む。検めは外で先に済ませる）。
+env_of()   { HONDEN_DB="$DB" "$HONDEN_BIN" config env "$1"; }
 
 # 一体を起こす命。旧 lib/cli_adapter.sh の build_cli_command を移した。
 launch_cmd() {
-  local agent="$1" cli model
+  local agent="$1" cli model envs
   cli=$(cli_of "$agent"); model=$(model_of "$agent")
+  envs=$(env_of "$agent" 2>/dev/null)
   case "$cli" in
-    claude)   echo "claude${model:+ --model $model} --dangerously-skip-permissions" ;;
-    cursor)   echo "cursor-agent --yolo${model:+ --model $model}" ;;
-    codex)    echo "codex${model:+ --model $model} --search --dangerously-bypass-approvals-and-sandbox --no-alt-screen" ;;
-    opencode) echo "opencode${model:+ --model $model}" ;;
+    claude)   echo "${envs:+$envs }claude${model:+ --model $model} --dangerously-skip-permissions" ;;
+    cursor)   echo "${envs:+$envs }cursor-agent --yolo${model:+ --model $model}" ;;
+    codex)    echo "${envs:+$envs }codex${model:+ --model $model} --search --dangerously-bypass-approvals-and-sandbox --no-alt-screen" ;;
+    opencode) echo "${envs:+$envs }opencode${model:+ --model $model}" ;;
     *)        echo "" ;;
   esac
+}
+
+# 召喚する全員の env を先に検める。一人でも外れておれば、誰も起こさずに止まる
+# （半分だけ起こした陣は、どれが新しい env で起きたかが分からぬ）。
+env_check() {
+  local a msg bad=0
+  for a in "$@"; do
+    if ! msg=$(env_of "$a" 2>&1 >/dev/null); then
+      warn "$a: env の欄が誤っておる——${msg:-理由が返らぬ}"
+      bad=1
+    fi
+  done
+  return "$bad"
 }
 
 # 起こす命を隔離の構えで包む。既定（isolation 無し）は素通し。
@@ -212,6 +230,8 @@ up() {
   order+=("${rest[@]}")
   for a in "${agents[@]}"; do [ "$a" = gunshi ] && order+=("$a"); done
   ok "顔ぶれ ${#order[@]} 体（+ 将軍）"
+  # 足軽ごとの env を、陣を立てる前に検める。外れておれば陣も立てず、誰も起こさぬ。
+  env_check shogun "${order[@]}" || die "env の欄が誤っておる者が居る。settings.yaml を直してから出陣されよ（陣は立てておらぬ）"
 
   # ── 本陣（将軍）──
   #

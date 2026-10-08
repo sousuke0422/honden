@@ -112,3 +112,62 @@ run_up() { run bash "$FAKE/shutsujin_departure.sh" up; }
   run bash -c "grep -c '^tmux send-keys' '$CALLS' || true"
   assert_output "0"
 }
+
+# 足軽ごとの env を答える贋の honden。将軍にだけ、空白と $ を含む値を返す
+# （tmux の贋物が pane を返さぬゆえ、召喚されるのは将軍だけ）。値は本物と同じく
+# 単引用で包んだ形で返す（src/config.ts の shellQuote）。$1 の case 行が先に当たる。
+env_honden() {
+  {
+    cat <<'EOF'
+#!/usr/bin/env bash
+printf "honden" >> "$CALLS"; for a in "$@"; do printf " %s" "$a" >> "$CALLS"; done; printf "\n" >> "$CALLS"
+case "$1 $2" in
+EOF
+    printf '%s\n' "${1:-}"
+    cat <<'EOF'
+  "roster ") printf "shogun\nkaro\nashigaru1\ngunshi\n" ;;
+  "config get") printf "codex\n" ;;
+  "config env") [ "$3" = shogun ] && printf '%s\n' "CODEX_HOME='/tmp/a b\$c'" ;;
+esac
+exit 0
+EOF
+  } > "$STUB/honden"
+  chmod +x "$STUB/honden"
+  cp "$STUB/honden" "$FAKE/bin/honden"
+}
+
+@test "**足軽ごとの env が、出陣の命の頭に載る**（空白と \$ を含む値も崩れぬ）" {
+  fake_root
+  stub tmux 1 ""
+  env_honden
+  run_up
+  [ "$status" -eq 0 ]
+  called_with tmux "CODEX_HOME='/tmp/a b\$c' codex --model codex --search"
+  # 召喚の前に全員の env を検めた（将軍・家老・足軽・軍師）
+  run bash -c "grep -c '^honden config env' '$CALLS'"
+  [ "$output" -ge 4 ]
+}
+
+@test "**env は隔離の包みにも渡る**（包む前の命に載っておる）" {
+  fake_root
+  stub tmux 1 ""
+  env_honden '  "isolate wrap") printf "WRAPPED[%s]\n" "$4" ;;'
+  run_up
+  [ "$status" -eq 0 ]
+  called_with honden "isolate wrap --cmd CODEX_HOME='/tmp/a b\$c' codex --model codex --search"
+  called_with tmux "WRAPPED[CODEX_HOME='/tmp/a b\$c' codex --model codex --search"
+}
+
+@test "**env の名が外れておれば、陣を立てずに止まる**" {
+  fake_root
+  stub tmux 1 ""
+  env_honden '  "config env") [ "$3" = ashigaru1 ] && { echo "cli.agents.ashigaru1.env の名 \"bad-name\" は [A-Z_][A-Z0-9_]* の形でない。" >&2; exit 2; } ;;'
+  run_up
+  [ "$status" -ne 0 ]
+  assert_output --partial "env の欄が誤っておる"
+  assert_output --partial "bad-name"
+  run bash -c "grep -c '^tmux new-session' '$CALLS' || true"
+  assert_output "0"
+  run bash -c "grep -c '^tmux send-keys' '$CALLS' || true"
+  assert_output "0"
+}

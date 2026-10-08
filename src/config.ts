@@ -89,6 +89,80 @@ export function dig(doc: unknown, dotted: string): { kind: 'scalar'; value: stri
 }
 
 /**
+ * 足軽ごとの env で許す名。
+ *
+ * **名簿で許す。すべては許さぬ。** env の値は起こす命の字面に載り、tmux の pane・
+ * shell の履歴・`ps` に残る。何でも許せば、API の鍵や token をここへ書く道が開く。
+ * 秘密は env の欄ではなく、別の置き場（鍵の file）で渡すのが筋である。
+ * ここに載せるのは、CLI の設定の在り処を足軽ごとに分ける名だけとする。
+ * 名を足す時は、秘密を運ばぬ名かを判じて、この名簿へ足す（試験も足す）。
+ */
+export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME'];
+
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+
+/** shell の単引用で包む。単引用そのものは `'\''` で抜ける。空白・`$`・`!` も崩れぬ。 */
+export function shellQuote(v: string): string {
+  return `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * `cli.agents.<名>.env` を読む。無ければ空。名と値の組の写像であること。
+ * 名は `[A-Z_][A-Z0-9_]*` で、AGENT_ENV_ALLOWED に載ること。値は文か数で、
+ * 改行などの制御の字を含まぬこと（起こす命が一行で打たれるため）。
+ */
+export function agentEnv(doc: unknown, agent: string): { ok: true; env: [string, string][] } | { ok: false; message: string } {
+  const found = dig(doc, `cli.agents.${agent}.env`);
+  if (found.kind === 'none') return { ok: true, env: [] };
+  if (found.kind === 'scalar') {
+    if (found.value === '') return { ok: true, env: [] };
+    return { ok: false, message: `cli.agents.${agent}.env は名と値の組（写像）で書かれよ。値が一つだけ在る。` };
+  }
+  const raw = (doc as Record<string, any>).cli.agents[agent].env;
+  if (Array.isArray(raw)) {
+    return { ok: false, message: `cli.agents.${agent}.env は名と値の組（写像）で書かれよ。一覧ではない。` };
+  }
+  const env: [string, string][] = [];
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!ENV_NAME.test(name)) {
+      return { ok: false, message: `cli.agents.${agent}.env の名 ${JSON.stringify(name)} は [A-Z_][A-Z0-9_]* の形でない。` };
+    }
+    if (!AGENT_ENV_ALLOWED.includes(name)) {
+      return {
+        ok: false,
+        message:
+          `cli.agents.${agent}.env の名 ${name} は許しておらぬ（許す名: ${AGENT_ENV_ALLOWED.join(', ')}）。\n` +
+          '  env の値は起こす命の字面に載り、pane や履歴に残る。秘密は鍵の file で渡されよ。',
+      };
+    }
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return { ok: false, message: `cli.agents.${agent}.env.${name} の値は文で書かれよ。` };
+    }
+    const v = String(value);
+    if (/[\u0000-\u001f\u007f]/.test(v)) {
+      return { ok: false, message: `cli.agents.${agent}.env.${name} の値に改行などの制御の字が在る。` };
+    }
+    env.push([name, v]);
+  }
+  return { ok: true, env };
+}
+
+/** 起こす命の頭に置く代入の並び（`CODEX_HOME='…' `の形）。env が無ければ空。 */
+export function envPrefix(env: [string, string][]): string {
+  return env.map(([n, v]) => `${n}=${shellQuote(v)}`).join(' ');
+}
+
+/** `honden config env <名>` の中身。設定を読み、検めて、前置きを返す。 */
+export function envOf(db: Database, agent: string): ConfigResult {
+  if (agent.trim() === '') return { ok: false, message: '誰の env か渡されよ。例: honden config env ashigaru3' };
+  const doc = load(db);
+  if (!doc.ok) return { ok: false, message: doc.message };
+  const r = agentEnv(doc.doc, agent);
+  if (!r.ok) return { ok: false, message: r.message };
+  return { ok: true, value: envPrefix(r.env) };
+}
+
+/**
  * 一つ引く。
  *
  * 値は**そのまま**返す。shell が `$(...)` で受けるゆえ、飾りを付けない。

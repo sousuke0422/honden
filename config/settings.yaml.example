@@ -19,6 +19,25 @@ language: ja
 #
 # 足軽は 1 体から 7 体まで。要らぬ者は消してよい。
 # 出陣は名簿の順に pane を配るので、**軍師は最後に置く**。
+#
+# `env` は、その者を起こす命の頭に置く環境の変数（名と値の組）。出陣（shutsujin.sh）と
+# 立て直し（switch_cli.sh）の両方で載り、隔離の包み（isolation）の内へも渡る。
+# 値は honden が shell の単引用で包むゆえ、空白や `$` を含んでもそのまま書いてよい。
+# 名は `[A-Z_][A-Z0-9_]*` で、**許す名は `CODEX_HOME` だけ**。外れれば出陣の前に止まる。
+#
+# **ここに秘密を書くな。** env の値は起こす命の字面に載り、pane・shell の履歴・`ps` に残る。
+# API の鍵や token は env の欄ではなく、鍵の file（CLI の設定・`.envrc` 等）で渡すこと。
+# 許す名が要る時は、秘密を運ばぬ名かを判じて src/config.ts の AGENT_ENV_ALLOWED へ足す。
+#
+# 例（codex の足軽ごとに設定の在り処を分ける。信頼の記録も在り処ごとに分かれるゆえ、
+# 分けた在り処では codex を対話で起こし /hooks で信頼を与えること。
+# `honden guard selftest` が足軽ごとに見て、欠けておれば「効いておらぬ」と言う）:
+#
+#   ashigaru3:
+#     type: codex
+#     model: gpt-5.6-sol
+#     env:
+#       CODEX_HOME: /home/me/.codex-ashigaru3
 
 cli:
   default: claude

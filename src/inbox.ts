@@ -139,6 +139,9 @@ export function rideAlongSuppressed(rest: readonly string[]): boolean {
   if (rest.length === 0) return true;
   if (rest[0] === 'inbox' || rest[0] === 'nudge') return true;
   if (rest[0] === 'guard' && rest[1] === 'hook') return true;
+  // config は script が $( ) で受ける口である（出陣・立て直しが値や env の前置きを
+  // 起こす命へ埋める）。一行混ざれば命が二行に割れて壊れる。
+  if (rest[0] === 'config') return true;
   return false;
 }
 

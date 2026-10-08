@@ -99,12 +99,12 @@ import { exportAll } from './export';
 import { serve as serveHttp, LOOPBACK, DASHBOARD_PORT } from './serve';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
-import { judge as guardJudge, judgeStructured as guardJudgeStructured, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
+import { judge as guardJudge, judgeStructured as guardJudgeStructured, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS, type GateCheck } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
-import { get as configGet, load as configLoad, dig as configDig, SETTINGS_PATH_KEY } from './config';
+import { get as configGet, load as configLoad, dig as configDig, envOf as configEnvOf, agentEnv as configAgentEnv, SETTINGS_PATH_KEY } from './config';
 import { settingsPath as settingsPathOf } from './config';
 import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import {
@@ -694,6 +694,7 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden roster                                        いまの顔ぶれ
   honden config                                        設定の在り処と上の段
   honden config get <鍵>                               設定を一つ引く（値だけ返す）
+  honden config env <名>                               その者を起こす命の頭に置く env（CODEX_HOME='…'）
   honden import [--root PATH] [--sub queue,saytask]   shogun の YAML を取り込む
   honden cmd new <<'EOF'                               司令を書く（将軍だけ）
     north_star: …
@@ -1433,13 +1434,93 @@ export function runGuardFacts(
 export const runGuardHookClaude = runGuardHookCodex;
 
 /**
+ * codex の門の行を、足軽ごとの信頼で作り直す。
+ *
+ * codex は未信頼の hook を**黙って飛ばす**。信頼の記録は各足軽の `CODEX_HOME` の
+ * `config.toml` に在り、足軽ごとに env で `CODEX_HOME` を分けておれば在り処も分かれる。
+ * 一つの `~/.codex` だけを見ると、別の在り処の足軽の門が死んでおっても「生きておる」と
+ * 言いうる。ゆえに codex で起こす足軽ごとに在り処を決め（env の `CODEX_HOME`、無ければ
+ * `~/.codex`）、同じ在り処の者をまとめて一行ずつ見る。どれか一つでも信頼を欠けば
+ * 「効いておらぬ」とする。
+ *
+ * 皮が据わっておらぬ・拒めぬ時は、信頼を見るまでもなく元の一行を返す。
+ * 名簿に codex の足軽が居らぬ（設定が読めぬを含む）時は、従来どおり `~/.codex` を見る。
+ */
+function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home: string): GateCheck[] {
+  if (!c.configured || !c.denies) return [c];
+  const cfg = `${base}/.codex/hooks.json`;
+  const fallback = join(home, '.codex');
+
+  // 名簿の設定から codex の足軽を引く。正本が無ければ作ってまで見ぬ。
+  const agents: { id: string; codexHome?: string; bad?: string }[] = [];
+  const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+  if (path === ':memory:' || existsSync(path)) {
+    try {
+      const doc = configLoad(openStore({ path }));
+      if (doc.ok) {
+        const list = configDig(doc.doc, 'cli.agents');
+        for (const id of list.kind === 'branch' ? list.keys : []) {
+          const t = configDig(doc.doc, `cli.agents.${id}.type`);
+          if (t.kind !== 'scalar' || t.value !== 'codex') continue;
+          const env = configAgentEnv(doc.doc, id);
+          if (!env.ok) {
+            agents.push({ id, bad: env.message.split('\n')[0] });
+            continue;
+          }
+          agents.push({ id, codexHome: env.env.find(([n]) => n === 'CODEX_HOME')?.[1] });
+        }
+      }
+    } catch {
+      /* 設定が読めねば従来どおり ~/.codex だけを見る */
+    }
+  }
+
+  const rows: GateCheck[] = [];
+  for (const a of agents.filter((x) => x.bad)) {
+    rows.push({ cli: 'codex', configured: true, denies: false, note: `${a.id}: env の欄が誤っておる——${a.bad}` });
+  }
+  const groups = new Map<string, string[]>();
+  const good = agents.filter((x) => !x.bad);
+  if (good.length === 0 && agents.length === 0) groups.set(fallback, []);
+  for (const a of good) {
+    const h = a.codexHome ?? fallback;
+    groups.set(h, [...(groups.get(h) ?? []), a.id]);
+  }
+  for (const [h, ids] of groups) {
+    let trusted = false;
+    try {
+      trusted = readFileSync(join(h, 'config.toml'), 'utf8').includes(cfg);
+    } catch {
+      trusted = false;
+    }
+    const who = ids.length > 0 ? `${ids.join(', ')}（CODEX_HOME=${h}）` : `（名簿に codex の足軽が居らぬ。${h} を見た）`;
+    rows.push({
+      cli: 'codex',
+      configured: true,
+      denies: trusted,
+      note: trusted
+        ? who
+        : `${who} — **信頼の記録が無い。codex は未信頼の hook を黙って飛ばす**——その CODEX_HOME で対話で起こし、/hooks で信頼を与えよ`,
+    });
+  }
+  return rows;
+}
+
+/**
  * `honden guard selftest` — 門が生きておるかを、実際に叩いて確かめる。
  *
  * 据えた後に静かに消えるのが門の常である（信頼切れ・設定の書き換え・
  * 名簿の読み込み時期）。定期的に叩くほかない。
  */
-export function runGuardSelftest(root: string | undefined): RunResult {
+export function runGuardSelftest(
+  root: string | undefined,
+  dbPath?: string,
+  /** 試験の口。家の道（~ の在り処）。省けば os の homedir。 */
+  home: string = homedir(),
+): RunResult {
   const base = resolvePath(root ?? process.cwd());
+  // codex の信頼は門（src/guard.ts）の外で、足軽ごとに見る（下の codexRows）。
+  // 門の selftest へは信頼の口を渡さぬ——渡すと一つの ~/.codex だけで判じてしまう。
   const checks = guardSelftest({
     root: base,
     exists: (p) => existsSync(p),
@@ -1454,20 +1535,13 @@ export function runGuardSelftest(root: string | undefined): RunResult {
         return null;
       }
     },
-    codexTrusted: (cfg) => {
-      try {
-        const toml = readFileSync(join(homedir(), '.codex/config.toml'), 'utf8');
-        return toml.includes(cfg);
-      } catch {
-        return false;
-      }
-    },
   });
-  const lines = checks.map((c) => {
+  const rows = checks.flatMap((c) => (c.cli === 'codex' ? codexRows(c, base, dbPath, home) : [c]));
+  const lines = rows.map((c) => {
     const mark = c.denies ? '生きておる' : c.configured ? '**効いておらぬ**' : '据わっておらぬ';
     return `  ${c.cli.padEnd(7)} ${mark}${c.note ? `  — ${c.note}` : ''}`;
   });
-  const dead = checks.filter((c) => c.configured && !c.denies);
+  const dead = rows.filter((c) => c.configured && !c.denies);
   // 据わっておるのに効かぬのが最も危うい。据わっておらぬのは見れば分かるが、
   // 「据えたつもりで効いておらぬ」は静かである。
   return {
@@ -2306,6 +2380,17 @@ export function runConfig(dbPath: string | undefined, key: string | undefined): 
   return r.ok ? { code: EXIT_OK, out: r.value } : { code: EXIT_INVALID, err: r.message };
 }
 
+/**
+ * `honden config env <名>` — その足軽を起こす命の頭に置く env の前置き（`CODEX_HOME='…'`）。
+ * 無ければ空を返す。名が外れておれば非ゼロで止まる——出陣と立て直しは、起こす前に
+ * これを引いて止まる。値は shell の単引用で包んである（src/config.ts の shellQuote）。
+ */
+export function runConfigEnv(dbPath: string | undefined, agent: string): RunResult {
+  const db = openStore({ path: dbPath });
+  const r = configEnvOf(db, agent);
+  return r.ok ? { code: EXIT_OK, out: r.value } : { code: EXIT_INVALID, err: r.message };
+}
+
 /** `honden decisions` — いま殿の裁定を待っておるもの。**開いておるものだけ。** */
 export function runDecisions(dbPath: string | undefined): RunResult {
   const db = openStore({ path: dbPath });
@@ -3013,7 +3098,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
       });
       return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
     }
-    if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
+    if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root'], dbPath));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard charter[s] / guard charter-revoke / guard appeal / guard facts / guard denials / guard selftest のいずれかである' });
   }
 
@@ -3155,6 +3240,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
 
   if (rest[0] === 'config') {
     if (rest[1] === 'get') return emit(runConfig(dbPath, rest[2] ?? ''));
+    if (rest[1] === 'env') return emit(runConfigEnv(dbPath, rest[2] ?? ''));
     return emit(runConfig(dbPath, undefined));
   }
 

@@ -86,9 +86,17 @@ describe('包む', () => {
     expect(r.cmd).not.toContain('pasta');
   });
 
-  test('**単引用を含む命は包めぬと言って拒む**（黙って裸で起こさぬ）', () => {
-    const r = wrapLaunch(OUT, "echo 'x'");
-    expect(r.ok).toBe(false);
+  test('**単引用を含む命も、抜けて正しく包む**（外の shell が解けば元の命が戻る）', () => {
+    // 足軽ごとの env の値が単引用で来る（CODEX_HOME='…'）。空白・$・!・単引用そのものを含む形
+    const inner = `CODEX_HOME='/tmp/a b$c!d'\\''e' codex --search`;
+    for (const cfg of [OUT, IN]) {
+      const r = wrapLaunch(cfg, inner);
+      if (!r.ok) throw new Error(r.message);
+      // bash -lc の引数を、外の shell に解かせて取り出す
+      const arg = r.cmd.slice(r.cmd.indexOf('bash -lc ') + 'bash -lc '.length);
+      const p = Bun.spawnSync(['bash', '-c', `printf %s ${arg}`]);
+      expect(p.stdout.toString()).toBe(inner);
+    }
   });
 
   test('要る道具: outbound あり=pasta+bwrap / なし=bwrap / none=無し', () => {
