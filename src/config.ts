@@ -174,6 +174,22 @@ export function agentEnv(doc: unknown, agent: string): { ok: true; env: [string,
   return { ok: true, env };
 }
 
+/**
+ * その足軽の実効の CODEX_HOME。env に在ればそれ（agentEnv の判じを通った絶対の道）、
+ * 無ければ `<home>/.codex`。**selftest が信頼を読む先と、隔離の包みが rw で bind する先は、
+ * ここだけから引く**——二か所で決めると、見張る先と codex が書く先が分かれうる。
+ */
+export function codexHomeOf(
+  doc: unknown,
+  agent: string,
+  home: string,
+): { ok: true; path: string; custom: boolean } | { ok: false; message: string } {
+  const r = agentEnv(doc, agent);
+  if (!r.ok) return { ok: false, message: r.message };
+  const v = r.env.find(([n]) => n === 'CODEX_HOME')?.[1];
+  return v === undefined ? { ok: true, path: `${home}/.codex`, custom: false } : { ok: true, path: v, custom: true };
+}
+
 /** 起こす命の頭に置く代入の並び（`CODEX_HOME='…' `の形）。env が無ければ空。 */
 export function envPrefix(env: [string, string][]): string {
   return env.map(([n, v]) => `${n}=${shellQuote(v)}`).join(' ');

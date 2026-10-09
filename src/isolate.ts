@@ -198,6 +198,50 @@ export interface WrapOpts {
   exists?: (p: string) => boolean;
   /** ~ の展開先。試験で注ぎ替える。 */
   home?: string;
+  /**
+   * codex の足軽の実効の CODEX_HOME（settings の env。src/config.ts の codexHomeOf）。
+   * 在れば codex の書き道の `~/.codex` を置き換える。無ければ従来どおり `~/.codex`。
+   */
+  codexHome?: string;
+}
+
+/** 道を比べる形に均す。判じを通った絶対の道（.. を含まぬ）ゆえ、// と尻の / を畳むだけでよい。 */
+function canon(p: string): string {
+  const q = p.replace(/\/+/g, '/');
+  return q.length > 1 ? q.replace(/\/$/, '') : q;
+}
+const within = (p: string, dir: string) => p === dir || p.startsWith(dir === '/' ? '/' : `${dir}/`);
+
+/**
+ * 隔離の下で、CODEX_HOME として rw で bind してはならぬ道か。ならぬなら訳を返す。
+ *
+ * - `/tmp` の下: 檻は /tmp を tmpfs で専有する。bind しても tmpfs の影に隠れ、
+ *   codex が書く先は檻の中だけの空の道になる（母屋の道と食い違い、信頼も auth も消える）
+ * - `$HOME` そのものと、その祖先（`/` を含む）: 家ごと rw になり、fs.default: deny が飾りになる
+ * - `~/.honden` の下と、正本の在る dir: 本陣の正本を檻の中から書き換えられる
+ * - honden の repo の内・その祖先: repo の `.codex/hooks.json` と皮は門の繋ぎである。
+ *   rw になれば、檻の中から門を外せる
+ */
+export function isolatedCodexHomeProblem(
+  path: string,
+  where: { home: string; dbDir?: string; repoRoot?: string },
+): string | null {
+  const p = canon(path);
+  const home = canon(where.home);
+  if (within(p, '/tmp')) {
+    return '/tmp の下である。檻は /tmp を tmpfs で専有するゆえ、bind しても隠れ、codex は母屋と違う空の道へ書く';
+  }
+  if (within(home, p)) {
+    return p === home ? '$HOME そのものである。家ごと rw になり、fs の縛りが飾りになる' : `$HOME（${home}）の祖先である。家ごと rw になり、fs の縛りが飾りになる`;
+  }
+  for (const d of [`${home}/.honden`, ...(where.dbDir ? [canon(where.dbDir)] : [])]) {
+    if (within(p, d) || within(d, p)) return `本陣の正本の在り処（${d}）に掛かる。檻の中から正本を書き換えられる`;
+  }
+  if (where.repoRoot) {
+    const r = canon(where.repoRoot);
+    if (within(p, r) || within(r, p)) return `honden の repo（${r}）に掛かる。門の繋ぎ（.codex/hooks.json と皮）が檻の中から書ける`;
+  }
+  return null;
 }
 
 /**
@@ -215,11 +259,15 @@ export function fsArgs(
   cli: string | undefined,
   exists: (p: string) => boolean,
   home: string,
+  /** codex の足軽の実効の CODEX_HOME。在れば `~/.codex` に代えて rw、その packages を ro で重ねる */
+  codexHome?: string,
 ): string[] {
   const expand = (p: string) => (p.startsWith('~/') ? home + p.slice(1) : p);
   const rw: string[] = fs.write.map(expand);
   const ro: string[] = [];
-  const need = cli ? CLI_WRITES[cli] : undefined;
+  // 足軽ごとの CODEX_HOME も、~/.codex と同じ守り（rw の上に packages を ro・#13 の封じ）で載せる
+  const need =
+    cli === 'codex' && codexHome ? { rw: [codexHome], ro: [`${codexHome}/packages`] } : cli ? CLI_WRITES[cli] : undefined;
   if (need) {
     rw.push(...need.rw.map(expand));
     ro.push(...need.ro.map(expand));
@@ -256,7 +304,7 @@ export function wrapLaunch(
   const quoted = inner.replace(/'/g, `'\\''`);
   const exists = opts.exists ?? ((p: string) => require('node:fs').existsSync(p));
   const home = opts.home ?? require('node:os').homedir();
-  const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home).join(' ') : '--dev-bind / /';
+  const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home, opts.codexHome).join(' ') : '--dev-bind / /';
   if (!cfg.outbound && cfg.tcpPorts.length === 0) {
     // 外も要らぬなら pasta ごと要らぬ。bwrap が網を切る（空の loopback だけ残る）
     return { ok: true, cmd: `bwrap ${binds} --die-with-parent --unshare-net -- bash -lc '${quoted}'` };

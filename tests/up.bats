@@ -171,3 +171,34 @@ EOF
   run bash -c "grep -c '^tmux send-keys' '$CALLS' || true"
   assert_output "0"
 }
+
+@test "**隔離の包みは足軽の名を受け、召喚の前に全員ぶんを試す**" {
+  fake_root
+  stub tmux 1 ""
+  env_honden
+  run_up
+  [ "$status" -eq 0 ]
+  # 陣を立てる前に、全員ぶんの包みを --agent つきで試す
+  for a in shogun karo ashigaru1 gunshi; do
+    called_with honden "isolate wrap --cmd true --cli codex --agent $a"
+  done
+  k=$(grep -n "^honden isolate wrap --cmd true" "$CALLS" | tail -1 | cut -d: -f1)
+  n=$(grep -n "^tmux new-session" "$CALLS" | head -1 | cut -d: -f1)
+  [ "$k" -lt "$n" ]
+  # 実際に起こす命の包みにも名が渡る（将軍）
+  called_with honden "--no-alt-screen --cli codex --agent shogun"
+}
+
+@test "**一人の包みが隔離の下で断られれば、陣を立てずに止まる**（許せぬ CODEX_HOME）" {
+  fake_root
+  stub tmux 1 ""
+  env_honden '  "isolate wrap") [ "$8" = ashigaru1 ] && { echo "ashigaru1 の CODEX_HOME（/tmp/codex-a1）は隔離の下で使えぬ——/tmp の下である" >&2; exit 2; } ;;'
+  run_up
+  [ "$status" -ne 0 ]
+  assert_output --partial "隔離の包みに失敗した"
+  assert_output --partial "/tmp の下"
+  run bash -c "grep -c '^tmux new-session' '$CALLS' || true"
+  assert_output "0"
+  run bash -c "grep -c '^tmux send-keys' '$CALLS' || true"
+  assert_output "0"
+}

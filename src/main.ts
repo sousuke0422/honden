@@ -15,7 +15,7 @@ import { resolve as resolveIdentity, mayActAs, type Identity } from './identity'
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn, panes, type Pane, type TmuxRunner } from './pane';
 import { applyBorders } from './border';
-import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, type IsolationCfg } from './isolate';
+import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, isolatedCodexHomeProblem, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
@@ -104,7 +104,7 @@ import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
-import { get as configGet, load as configLoad, dig as configDig, envOf as configEnvOf, agentEnv as configAgentEnv, SETTINGS_PATH_KEY } from './config';
+import { get as configGet, load as configLoad, dig as configDig, envOf as configEnvOf, codexHomeOf as configCodexHomeOf, SETTINGS_PATH_KEY } from './config';
 import { settingsPath as settingsPathOf } from './config';
 import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import {
@@ -1452,6 +1452,7 @@ function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home:
   const fallback = join(home, '.codex');
 
   // 名簿の設定から codex の足軽を引く。正本が無ければ作ってまで見ぬ。
+  // 在り処は codexHomeOf だけから引く——隔離の包みが rw で bind する先と同じ所である。
   const agents: { id: string; codexHome?: string; bad?: string }[] = [];
   const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
   if (path === ':memory:' || existsSync(path)) {
@@ -1462,12 +1463,12 @@ function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home:
         for (const id of list.kind === 'branch' ? list.keys : []) {
           const t = configDig(doc.doc, `cli.agents.${id}.type`);
           if (t.kind !== 'scalar' || t.value !== 'codex') continue;
-          const env = configAgentEnv(doc.doc, id);
-          if (!env.ok) {
-            agents.push({ id, bad: env.message.split('\n')[0] });
+          const ch = configCodexHomeOf(doc.doc, id, home);
+          if (!ch.ok) {
+            agents.push({ id, bad: ch.message.split('\n')[0] });
             continue;
           }
-          agents.push({ id, codexHome: env.env.find(([n]) => n === 'CODEX_HOME')?.[1] });
+          agents.push({ id, codexHome: ch.path });
         }
       }
     } catch {
@@ -2095,16 +2096,64 @@ export function runIsolateShow(dbPath: string | undefined): RunResult {
 }
 
 /**
- * `honden isolate wrap --cmd '<命>'` — 一体を起こす命を、構えどおりに包んで返す。
+ * `honden isolate wrap --cmd '<命>' [--cli <CLI>] [--agent <名>]` — 一体を起こす命を、構えどおりに包んで返す。
  *
  * 出陣（scripts/shutsujin.sh）がここを通る。**設定が壊れておる・道具が無い・
  * 包めぬ、のいずれも非 0 で止まる**——裸のまま起こして「隔離したつもり」を作らぬ。
+ *
+ * `--agent` を渡されれば、codex の足軽の実効の CODEX_HOME を settings から引く
+ * （src/config.ts の codexHomeOf。selftest が信頼を読む先と同じ一つの所）。隔離の下では
+ * その道を rw・packages を ro で bind し、許せぬ道（isolatedCodexHomeProblem）なら止まる。
+ * 道を shell から運ばせず settings から引くのは、判じの所を一つに保ち、引用の崩れの口を
+ * 増やさぬためである。
  */
-export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefined, cli?: string): RunResult {
+export function runIsolateWrap(
+  dbPath: string | undefined,
+  cmd: string | undefined,
+  cli?: string,
+  agent?: string,
+  /** 試験の口。家の道（~ の在り処）。省けば os の homedir。 */
+  home: string = homedir(),
+): RunResult {
   if (!cmd) return { code: EXIT_INVALID, err: '--cmd に起こす命を渡されよ。' };
   const db = openStore({ path: dbPath });
   const r = isolationOf(db);
   if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  let codexHome: string | undefined;
+  if (r.cfg.level === 'bwrap' && cli === 'codex' && agent) {
+    const loaded = configLoad(db);
+    if (loaded.ok) {
+      const ch = configCodexHomeOf(loaded.doc, agent, home);
+      if (!ch.ok) return { code: EXIT_INVALID, err: `  ${ch.message}` };
+      if (ch.custom) {
+        const dbFile = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+        const why = isolatedCodexHomeProblem(ch.path, {
+          home,
+          ...(dbFile === ':memory:' ? {} : { dbDir: dirname(dbFile) }),
+          repoRoot: REPO_ROOT,
+        });
+        if (why) {
+          return {
+            code: EXIT_INVALID,
+            err:
+              `  ${agent} の CODEX_HOME（${ch.path}）は隔離の下で使えぬ——${why}。\n` +
+              `  $HOME の下の、本陣の正本にも honden の repo にも掛からぬ dir（例: ${home}/.codex-${agent}）へ置き直されよ。`,
+          };
+        }
+        // fs の縛りの下では、在らぬ道は bind されず黙って飛ばされる（src/isolate.ts の fsArgs）。
+        // codex が檻の中で auth も帳も書けぬまま起きるゆえ、起こす前に止める
+        if (r.cfg.fs && !existsSync(ch.path)) {
+          return {
+            code: EXIT_INVALID,
+            err:
+              `  ${agent} の CODEX_HOME（${ch.path}）が在らぬ。fs の縛りの下では在らぬ道は bind されず、codex が書けぬまま起きる。\n` +
+              `  先に mkdir -p で作り、その CODEX_HOME で codex を対話で起こして /hooks で信頼を与えられよ。`,
+          };
+        }
+        codexHome = ch.path;
+      }
+    }
+  }
   for (const t of requiredTools(r.cfg)) {
     if (!Bun.which(t)) {
       return { code: EXIT_INVALID, err: `  隔離に ${t} が要るが、道に無い。入れるか、isolation を外されよ。` };
@@ -2114,7 +2163,7 @@ export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefin
   if (r.cfg.tcpPorts.length > 0 && !existsSync(cage)) {
     return { code: EXIT_INVALID, err: `  口の許し（tcp/<口>）には ${cage} が要る。bun run build:core で焼かれよ。` };
   }
-  const w = wrapLaunch(r.cfg, cmd, cage, { ...(cli ? { cli } : {}) });
+  const w = wrapLaunch(r.cfg, cmd, cage, { ...(cli ? { cli } : {}), ...(codexHome ? { codexHome } : {}), home });
   return w.ok ? { code: EXIT_OK, out: w.cmd } : { code: EXIT_INVALID, err: `  ${w.message}` };
 }
 
@@ -3292,7 +3341,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
   }
 
   if (rest[0] === 'isolate') {
-    if (rest[1] === 'wrap') { const c = flags['cmd']; const cl = flags['cli']; delete flags['cmd']; delete flags['cli']; return emit(runIsolateWrap(dbPath, c, cl)); }
+    if (rest[1] === 'wrap') { const c = flags['cmd']; const cl = flags['cli']; const ag = flags['agent']; delete flags['cmd']; delete flags['cli']; delete flags['agent']; return emit(runIsolateWrap(dbPath, c, cl, ag)); }
     if (rest[1] === 'check') return emit(await runIsolateCheck(dbPath));
     return emit(runIsolateShow(dbPath));
   }

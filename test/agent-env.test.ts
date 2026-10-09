@@ -4,7 +4,7 @@
  * 本物の ~/.codex・config/settings.yaml・本陣の .codex/.claude/.cursor・正本には触れぬ。
  * HOME も CODEX_HOME も正本も、使い捨ての tmpdir に作る。
  */
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,16 +14,12 @@ import { agentEnv, envPrefix, shellQuote, AGENT_ENV_ALLOWED, SETTINGS_PATH_KEY }
 import { rideAlongSuppressed } from '../src/inbox';
 import { runConfigEnv, runGuardSelftest } from '../src/main';
 
-// 直す前の版は homedir() で ~/.codex を読んでおった。その版で撃っても本物を読まぬよう、
-// HOME を使い捨ての道へ向けておく（Bun の homedir は HOME に従う）。
+// 家の道は runGuardSelftest の口へ明示で渡す。走る中で process.env.HOME を差し替えても
+// Bun の os.homedir() は従わぬ（起動の時の値のまま）ゆえ、差し替えでは本物の家を守れぬ。
+// 口を使わぬ版（直す前の版）を撃つ時は、bun を起こす時に HOME を使い捨ての道にして起こすこと。
 const BASE = mkdtempSync(join(tmpdir(), 'honden-agent-env-'));
-const HOME0 = process.env.HOME;
 const HOME = join(BASE, 'home');
 mkdirSync(HOME, { recursive: true });
-process.env.HOME = HOME;
-afterAll(() => {
-  process.env.HOME = HOME0;
-});
 
 const y = (text: string) => Bun.YAML.parse(text);
 
