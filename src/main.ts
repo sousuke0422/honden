@@ -2114,6 +2114,12 @@ export function runIsolateWrap(
   agent?: string,
   /** 試験の口。家の道（~ の在り処）。省けば os の homedir。 */
   home: string = homedir(),
+  /**
+   * 試験の口。道具の在り処を引く（無ければ null）。省けば Bun.which で、本番はこれを使う。
+   * 道具の関所を試験から注ぎ替えるための口で、関所そのもの（無ければ止まる）は変えぬ。
+   * 試験は bwrap の在る無しに依らず、同じ判じを確かめられる（CI の機には bwrap が無い）。
+   */
+  which: (tool: string) => string | null = (tool) => Bun.which(tool),
 ): RunResult {
   if (!cmd) return { code: EXIT_INVALID, err: '--cmd に起こす命を渡されよ。' };
   const db = openStore({ path: dbPath });
@@ -2155,7 +2161,7 @@ export function runIsolateWrap(
     }
   }
   for (const t of requiredTools(r.cfg)) {
-    if (!Bun.which(t)) {
+    if (!which(t)) {
       return { code: EXIT_INVALID, err: `  隔離に ${t} が要るが、道に無い。入れるか、isolation を外されよ。` };
     }
   }

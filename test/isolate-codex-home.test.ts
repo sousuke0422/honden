@@ -25,6 +25,12 @@ afterAll(() => {
   rmSync(BASE, { recursive: true, force: true });
 });
 
+// 道具の関所（bwrap が道に在るか）は口で注ぎ替える。CI の機には bwrap が無く、手元には在る。
+// 判じ（CODEX_HOME の bind と止める形）は道具の在る無しに依らず確かめる。関所そのものは下の
+// 「道具が無ければ止まる」で、在らぬと答える口を渡して確かめる。
+const HAS = (tool: string) => `/fake/bin/${tool}`;
+const NONE = () => null;
+
 const ISO = 'isolation:\n  level: bwrap\n  net:\n    default: deny\n  fs:\n    default: deny\n    write: []\n';
 
 /** 設定を書き、使い捨ての正本に在り処を覚えさせる。 */
@@ -99,7 +105,7 @@ describe('honden isolate wrap --agent（settings から実効の CODEX_HOME を�
     const h = mk(join(HOME, '.codex-ashigaru3'));
     mk(join(HOME, '.codex'));
     const db = store(settingsOf(agentWith('ashigaru3', 'codex', h)));
-    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', HOME);
+    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', HOME, HAS);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain(`--bind ${h} ${h}`);
     expect(r.out).toContain(`--ro-bind ${h}/packages ${h}/packages`);
@@ -109,7 +115,7 @@ describe('honden isolate wrap --agent（settings から実効の CODEX_HOME を�
   test('(2) 陽性対照: env の無い codex の足軽は今どおり ~/.codex', () => {
     const d = mk(join(HOME, '.codex'));
     const db = store(settingsOf(agentWith('ashigaru1', 'codex')));
-    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru1', HOME);
+    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru1', HOME, HAS);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain(`--bind ${d} ${d}`);
     expect(r.out).toContain(`--ro-bind ${d}/packages ${d}/packages`);
@@ -124,7 +130,7 @@ describe('honden isolate wrap --agent（settings から実効の CODEX_HOME を�
       [join(HOME, '.codex-not-made'), '在らぬ'],
     ] as const) {
       const db = store(settingsOf(agentWith('ashigaru3', 'codex', p)));
-      const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', HOME);
+      const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', HOME, HAS);
       expect(r.code, p).not.toBe(0);
       expect(r.err, p).toContain(said);
       expect(r.out ?? '', p).toBe(''); // 包んだ命を返さぬ（裸でも起こさぬ）
@@ -135,7 +141,7 @@ describe('honden isolate wrap --agent（settings から実効の CODEX_HOME を�
   test('陽性対照: 隔離が無い（level が bwrap でない）時は、/tmp の下でも止めぬ', () => {
     const sp = `cli:\n  agents:\n${agentWith('ashigaru3', 'codex', '/tmp/codex-ashigaru3')}`;
     const db = store(sp);
-    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', HOME);
+    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', HOME, HAS);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toBe('codex --search');
   });
@@ -144,10 +150,45 @@ describe('honden isolate wrap --agent（settings から実効の CODEX_HOME を�
     mkdirSync(join(HOME, '.claude'), { recursive: true });
     for (const cli of ['claude', 'cursor']) {
       const db = store(settingsOf(agentWith('ashigaru2', cli, '/tmp/codex-x')));
-      const r = runIsolateWrap(db, `${cli} --x`, cli, 'ashigaru2', HOME);
+      const r = runIsolateWrap(db, `${cli} --x`, cli, 'ashigaru2', HOME, HAS);
       expect(r.code, `${cli}: ${r.err}`).toBe(0);
       expect(r.out, cli).not.toContain('codex-x');
     }
+  });
+});
+
+describe('道具が無ければ止まる（本番の関所。口で注ぎ替えても関所そのものは残る）', () => {
+  test('bwrap が道に無ければ、包んだ命を返さず非ゼロで止まる（裸で起こさぬ）', () => {
+    mkdirSync(join(HOME, '.codex/packages'), { recursive: true });
+    const db = store(settingsOf(agentWith('ashigaru1', 'codex')));
+    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru1', HOME, NONE);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('隔離に bwrap が要るが、道に無い');
+    expect(r.out ?? '').toBe('');
+  });
+
+  test('outbound を許す構えでは pasta も問い、無ければ止まる', () => {
+    const db = store(
+      `cli:\n  agents:\n${agentWith('ashigaru1', 'codex')}isolation:\n  level: bwrap\n  net:\n    default: deny\n    allow: [outbound]\n`,
+    );
+    const asked: string[] = [];
+    const onlyBwrap = (t: string) => {
+      asked.push(t);
+      return t === 'bwrap' ? '/fake/bin/bwrap' : null;
+    };
+    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru1', HOME, onlyBwrap);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('隔離に pasta が要るが、道に無い');
+    expect(asked).toContain('pasta');
+  });
+
+  test('陽性対照: 口を省けば Bun.which を使う（本番の既定）', () => {
+    // 口を省いた時と、Bun.which を明示で渡した時が同じ答えになる。どちらの機でも成り立つ
+    const db = store(settingsOf(agentWith('ashigaru1', 'codex')));
+    const byDefault = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru1', HOME);
+    const byBun = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru1', HOME, (t) => Bun.which(t));
+    expect(byDefault).toEqual(byBun);
+    expect(byDefault.code === 0).toBe(Bun.which('bwrap') !== null);
   });
 });
 
@@ -163,7 +204,7 @@ describe('(5) selftest が見る道と、檻の中で codex が書く道は同�
     const st = runGuardSelftest(root, db, HOME);
     const line = (st.out ?? '').split('\n').find((l) => l.includes('ashigaru5'))!;
     const seen = /CODEX_HOME=([^）]+)）/.exec(line)?.[1];
-    const w = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru5', HOME);
+    const w = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru5', HOME, HAS);
     const bound = /--bind (\S+) \1 --ro-bind \1\/packages/.exec(w.out ?? '')?.[1];
     expect(seen).toBe(h);
     expect(bound).toBe(h);
