@@ -15,7 +15,7 @@ import { resolve as resolveIdentity, mayActAs, type Identity } from './identity'
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn, panes, type Pane, type TmuxRunner } from './pane';
 import { applyBorders } from './border';
-import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, isolatedCodexHomeProblem, realOrNearest, type IsolationCfg } from './isolate';
+import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, isolatedCodexHomeProblem, realOrNearest, cageWrites, codexHomeSwappable, codexPackagesProblem, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
@@ -2155,6 +2155,38 @@ export function runIsolateWrap(
               `  ${agent} の CODEX_HOME（${ch.path}）が在らぬ。fs の縛りの下では在らぬ道は bind されず、codex が書けぬまま起きる。\n` +
               `  先に mkdir -p で作り、その CODEX_HOME で codex を対話で起こして /hooks で信頼を与えられよ。`,
           };
+        }
+        // 判じてから檻が起こるまでの差し替え（TOCTOU）。陣の全ての檻の rw の道と重なれば止める。
+        // 己の檻は、己の CODEX_HOME の項を除いて数える（mount 点ゆえ差し替えられぬ）。
+        // fs の縛りの無い（網だけの）隔離では、檻は / ごと rw ゆえ、この判じは意味を持たぬ。
+        if (r.cfg.fs) {
+          const fsCfg = r.cfg.fs;
+          const cages: { who: string; rw: string[] }[] = [];
+          const list = configDig(loaded.doc, 'cli.agents');
+          for (const id of list.kind === 'branch' ? list.keys : []) {
+            const t = configDig(loaded.doc, `cli.agents.${id}.type`);
+            const cliOf = t.kind === 'scalar' ? t.value : undefined;
+            if (id === agent) {
+              cages.push({ who: `${id}（己）`, rw: cageWrites(fsCfg, undefined, home).rw });
+              continue;
+            }
+            let other: string | undefined;
+            if (cliOf === 'codex') {
+              const oc = configCodexHomeOf(loaded.doc, id, home);
+              if (oc.ok && oc.custom) other = oc.path;
+            }
+            cages.push({ who: id, rw: cageWrites(fsCfg, cliOf, home, other).rw });
+          }
+          const swap = codexHomeSwappable(ch.path, cages) ?? codexPackagesProblem(realOrNearest(ch.path) ?? ch.path);
+          if (swap) {
+            return {
+              code: EXIT_INVALID,
+              err:
+                `  ${agent} の CODEX_HOME（${ch.path}）は隔離の下で使えぬ——${swap}。\n` +
+                `  どの足軽の檻も書かぬ dir（例: ${home}/.codex-${agent}。fs.write・各 CLI の書き道・他の足軽の CODEX_HOME の外）へ置き直されよ。` +
+                ' packages が symlink なら、消して dir として作り直されよ。',
+            };
+          }
         }
         // bind するのは、判じた実体の道そのもの（symlink を解いた道）。判じた値と bwrap へ
         // 渡す値を字面で一つに揃える（cmd_222 で . の区画を拒んだのと同じ向き）。別名の

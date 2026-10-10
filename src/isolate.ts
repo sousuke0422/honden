@@ -299,14 +299,17 @@ export function realOrNearest(path: string): string | null {
  *   rw の道に .git が在れば hooks と config を ro で重ねる（檻の中から
  *     pre-commit を仕込ませぬ・実測 罠1。commit そのものはできる）
  */
-export function fsArgs(
+/**
+ * 一つの檻が rw で持つ道と、ro で重ねる道（~ は展開済み。在る無しは問わぬ）。
+ * fsArgs（bwrap の引数）と、檻どうしの重なりの判じ（codexHomeSwappable）の両方がここから組む。
+ */
+export function cageWrites(
   fs: { write: string[] },
   cli: string | undefined,
-  exists: (p: string) => boolean,
   home: string,
   /** codex の足軽の実効の CODEX_HOME。在れば `~/.codex` に代えて rw、その packages を ro で重ねる */
   codexHome?: string,
-): string[] {
+): { rw: string[]; ro: string[] } {
   const expand = (p: string) => (p.startsWith('~/') ? home + p.slice(1) : p);
   const rw: string[] = fs.write.map(expand);
   const ro: string[] = [];
@@ -317,6 +320,60 @@ export function fsArgs(
     rw.push(...need.rw.map(expand));
     ro.push(...need.ro.map(expand));
   }
+  return { rw, ro };
+}
+
+/**
+ * 判じてから檻が起こるまでの間に、CODEX_HOME（の実体）を差し替えうる檻が在るか。在れば訳を返す。
+ *
+ * **差し替えを打てるのは、檻の中の足軽が rw で持つ道だけと定める。** 足軽と本陣は同じ uid ゆえ、
+ * 檻の外の手（人・将軍）は数えぬ（檻の外では何でも書ける）。陣の全ての檻の rw の道と、
+ * CODEX_HOME の実体が重なれば——その道の内に在る（祖先ごと rename・symlink に差し替えられる）、
+ * その道と同じ（他の檻が中身を書き、packages を差し替えられる）、その道を内に持つ——止める。
+ *
+ * 己の檻の、己の CODEX_HOME の項だけは数えぬ。檻の中ではそこが bind の mount 点ゆえ、
+ * rename も rmdir も EBUSY で断られ、差し替えられぬ（実機の bwrap で確かめた・cmd_224）。
+ * 呼び手は、己の檻の rw をその項を除いて渡すこと。
+ */
+export function codexHomeSwappable(codexHome: string, cages: { who: string; rw: string[] }[]): string | null {
+  const real = realOrNearest(codexHome) ?? canon(codexHome);
+  for (const c of cages) {
+    for (const w of c.rw) {
+      const p = realOrNearest(w) ?? canon(w);
+      if (within(real, p) || within(p, real)) {
+        const how = real === p ? 'と同じ道である' : within(real, p) ? 'の内に在る' : 'を内に持つ';
+        return `${c.who} の檻が rw で持つ道（${p}）${how}。判じてから檻が起こるまでの間に、その檻の中から道を symlink 等に差し替えられる`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * `<CODEX_HOME>/packages` が symlink か。symlink なら訳を返す。packages が無い時は ro の bind が
+ * 飛ばされ、檻の中から packages を symlink として作れる（cmd_224 で確かめた）。次に起こす時の
+ * `--ro-bind` は symlink の先を ro で檻へ見せる——正本を読ませる形を塞ぐ。
+ */
+export function codexPackagesProblem(codexHome: string): string | null {
+  try {
+    if (lstatSync(`${canon(codexHome)}/packages`).isSymbolicLink()) {
+      return 'packages が symlink である。次の --ro-bind はその先（守る物かもしれぬ）を檻へ見せる';
+    }
+  } catch {
+    /* 無ければ問わぬ */
+  }
+  return null;
+}
+
+export function fsArgs(
+  fs: { write: string[] },
+  cli: string | undefined,
+  exists: (p: string) => boolean,
+  home: string,
+  /** codex の足軽の実効の CODEX_HOME。在れば `~/.codex` に代えて rw、その packages を ro で重ねる */
+  codexHome?: string,
+): string[] {
+  const { rw, ro } = cageWrites(fs, cli, home, codexHome);
   // tmpfs は ro の直後・rw の**前**。後に置くと /tmp 配下の rw 許しが
   // tmpfs の影に覆われて消える（実機 E2E が釣った・2026-09-03）
   const args = ['--ro-bind', '/', '/', '--tmpfs', '/tmp'];

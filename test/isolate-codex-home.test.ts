@@ -374,3 +374,106 @@ describe('symlink の別名を介しても、守る物に掛かる CODEX_HOME �
     expect(r.out).not.toContain(link);
   });
 });
+
+describe('判じてから檻が起こるまでの差し替え（TOCTOU）——どの檻からも書ける道の内の CODEX_HOME は止まる', () => {
+  // 差し替えを打てるのは、檻の中の足軽が rw で持つ道だけと定める（足軽と本陣は同じ uid ゆえ、
+  // 檻の外の手は数えぬ）。陣の全ての足軽の檻の rw の道（fs.write・各 CLI の書き道・各々の
+  // CODEX_HOME）と、CODEX_HOME の実体が重なれば止める。使い捨ての家の中だけで撃つ。
+  const fresh = () => {
+    const home = mkdtempSync(join(BASE, 't-'));
+    mkdirSync(join(home, '.honden/codex'), { recursive: true });
+    return home;
+  };
+  const isoWith = (write: string[]) =>
+    `isolation:\n  level: bwrap\n  net:\n    default: deny\n  fs:\n    default: deny\n    write: ${JSON.stringify(write)}\n`;
+  const codexAgent = (id: string, h?: string) =>
+    `    ${id}:\n      type: codex\n` + (h ? `      env:\n        CODEX_HOME: ${JSON.stringify(h)}\n` : '');
+  const plainAgent = (id: string, cli: string) => `    ${id}:\n      type: ${cli}\n`;
+  const dbOf = (agents: string[], write: string[]) => store(`cli:\n  agents:\n${agents.join('')}${isoWith(write)}`);
+  const wrap3 = (db: string, home: string) => runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', home, HAS);
+  const mkc = (p: string) => mkdirSync(join(p, 'packages'), { recursive: true });
+
+  test('(1) fs.write（足軽の workspace）の内に在る CODEX_HOME は止まる', () => {
+    const home = fresh();
+    const h = join(home, 'work/codex-a3');
+    mkc(h);
+    const r = wrap3(dbOf([codexAgent('ashigaru3', h), plainAgent('ashigaru1', 'claude')], [join(home, 'work')]), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('rw で持つ道');
+    expect(r.err).toContain(join(home, 'work'));
+    expect(r.out ?? '').toBe('');
+  });
+
+  test('(1) 他の足軽の CLI の書き道（claude の ~/.claude）の内に在る CODEX_HOME は止まる', () => {
+    const home = fresh();
+    const h = join(home, '.claude/codex-a3');
+    mkc(h);
+    const r = wrap3(dbOf([codexAgent('ashigaru3', h), plainAgent('ashigaru1', 'claude')], []), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('ashigaru1');
+    expect(r.err).toContain(join(home, '.claude'));
+  });
+
+  test('(1) 同じ CODEX_HOME を二人の codex の足軽が持つ形は止まる', () => {
+    const home = fresh();
+    const h = join(home, '.codex-shared');
+    mkc(h);
+    const r = wrap3(dbOf([codexAgent('ashigaru3', h), codexAgent('ashigaru4', h)], []), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('ashigaru4');
+  });
+
+  test('(2) 祖先が他の足軽の rw の道（その足軽の CODEX_HOME）の内に在る形は止まる', () => {
+    const home = fresh();
+    const b = join(home, '.codex-b');
+    const h = join(b, 'inner');
+    mkc(b);
+    mkc(h);
+    const r = wrap3(dbOf([codexAgent('ashigaru3', h), codexAgent('ashigaru4', b)], []), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('ashigaru4');
+    expect(r.err).toContain(b);
+  });
+
+  test('(2) 己の fs.write が CODEX_HOME の内に在る形（rw の道が CODEX_HOME を割る）も止まる', () => {
+    const home = fresh();
+    const h = join(home, '.codex-a3');
+    mkc(h);
+    mkdirSync(join(h, 'sub'));
+    const r = wrap3(dbOf([codexAgent('ashigaru3', h)], [join(h, 'sub')]), home);
+    expect(r.code).not.toBe(0);
+  });
+
+  test('(3) packages が守る物への symlink なら止まる（次の --ro-bind で正本を檻へ見せぬ）', () => {
+    const home = fresh();
+    const h = join(home, '.codex-a3');
+    mkdirSync(h, { recursive: true });
+    symlinkSync(join(home, '.honden'), join(h, 'packages'));
+    const r = wrap3(dbOf([codexAgent('ashigaru3', h)], []), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('packages');
+    expect(r.err).toContain('symlink');
+  });
+
+  test('(4) 陽性対照: どの檻からも書けぬ祖先を持つ普通の道（~/.codex-a3）は通る', () => {
+    const home = fresh();
+    const h = join(home, '.codex-a3');
+    mkc(h);
+    mkdirSync(join(home, 'work'), { recursive: true });
+    const r = wrap3(
+      dbOf([codexAgent('ashigaru3', h), codexAgent('ashigaru4'), plainAgent('ashigaru1', 'claude'), plainAgent('ashigaru2', 'cursor')], [join(home, 'work')]),
+      home,
+    );
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(`--bind ${h} ${h}`);
+  });
+
+  test('陽性対照: fs の縛りが無い（網だけの）隔離では、この判じは掛けぬ', () => {
+    const home = fresh();
+    const h = join(home, 'work/codex-a3');
+    mkc(h);
+    const db = store(`cli:\n  agents:\n${codexAgent('ashigaru3', h)}isolation:\n  level: bwrap\n  net:\n    default: deny\n`);
+    const r = wrap3(db, home);
+    expect(r.code, r.err).toBe(0);
+  });
+});
