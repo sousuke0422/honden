@@ -104,7 +104,7 @@ import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
-import { get as configGet, load as configLoad, dig as configDig, envOf as configEnvOf, codexHomeOf as configCodexHomeOf, SETTINGS_PATH_KEY } from './config';
+import { get as configGet, load as configLoad, dig as configDig, envPlanOf as configEnvPlanOf, codexHomeOf as configCodexHomeOf, hindsightConfigProblem, SETTINGS_PATH_KEY } from './config';
 import { settingsPath as settingsPathOf } from './config';
 import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import {
@@ -2482,8 +2482,18 @@ export function runConfig(dbPath: string | undefined, key: string | undefined): 
  */
 export function runConfigEnv(dbPath: string | undefined, agent: string): RunResult {
   const db = openStore({ path: dbPath });
-  const r = configEnvOf(db, agent);
-  return r.ok ? { code: EXIT_OK, out: r.value } : { code: EXIT_INVALID, err: r.message };
+  // 前置きと検めを同じ一度の読みから出す（envPlanOf）。二度読めば、間に設定が書き換わった時、
+  // 検めを通らぬ道が前置きに載りうる。
+  const r = configEnvPlanOf(db, agent);
+  if (!r.ok) return { code: EXIT_INVALID, err: r.message };
+  // 道の掟（設定の層・agentEnv）を通った後に、HINDSIGHT_CONFIG の file を開いて検める。
+  // 在る無しの検めを起こす前の口に置くのは、CODEX_HOME の在る無しを runIsolateWrap に
+  // 置いたのと同じ置き方である（agentEnv は設定の層の純粋な検めに留める）。
+  if (r.hindsightConfig !== undefined) {
+    const why = hindsightConfigProblem(r.hindsightConfig, r.type);
+    if (why) return { code: EXIT_INVALID, err: `${agent} の HINDSIGHT_CONFIG（${r.hindsightConfig}）——${why}` };
+  }
+  return { code: EXIT_OK, out: r.prefix };
 }
 
 /** `honden decisions` — いま殿の裁定を待っておるもの。**開いておるものだけ。** */

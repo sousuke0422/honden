@@ -30,6 +30,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
+import { type Cli, isCli } from './rosteredit';
 import { getSetting } from './settings';
 
 export const SETTINGS_PATH_KEY = 'settings_path';
@@ -96,8 +97,13 @@ export function dig(doc: unknown, dotted: string): { kind: 'scalar'; value: stri
  * 秘密は env の欄ではなく、別の置き場（鍵の file）で渡すのが筋である。
  * ここに載せるのは、CLI の設定の在り処を足軽ごとに分ける名だけとする。
  * 名を足す時は、秘密を運ばぬ名かを判じて、この名簿へ足す（試験も足す）。
+ *
+ * - `CODEX_HOME`: codex の設定の在り処（dir の道）。秘密は運ばぬ。
+ * - `HINDSIGHT_CONFIG`: hindsight の hook が読む設定の file の道。値は道であって秘密ではない。
+ *   token（apiToken）はその file の中に在り、hook が読む——命の字面には載らぬ。hook が env
+ *   から読む `HINDSIGHT_API_TOKEN` 等の秘密の名は、ここへ足さぬ。
  */
-export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME'];
+export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME', 'HINDSIGHT_CONFIG'];
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -119,10 +125,15 @@ const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
  * `/./` を挟むだけで外れる。畳んで判じる形（canon で均す）にはせぬ——env に載る値と、
  * 判じ・bind に使う値が二つの形になり、どちらが本当の道かを読む者が取り違えるため。
  * 受ける形を「`/` で始まり、`.` も `..` も区画に持たぬ道」一つに絞る。
+ *
+ * **HINDSIGHT_CONFIG も同じ道の掟を通す。** 値は単引用で載るゆえ `~` は展開されず、hook は
+ * 相対の道を起こした dir から読む。読めねば hook は設定を空と見て、既定の送り先（Cloud）へ
+ * 落ちる（hindsight-coding-agents@0.7.0 の resolveConfig）。見張る先と読む先を一つに絞るため、
+ * 掟を absolutePathRule 一つに括って両方に与える。
  */
-const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
-  CODEX_HOME: (v) => {
-    const fix = '$HOME を展開した絶対の道（例: /home/me/.codex-ashigaru3）で書かれよ';
+function absolutePathRule(example: string): (v: string) => string | null {
+  const fix = `$HOME を展開した絶対の道（例: ${example}）で書かれよ`;
+  return (v) => {
     if (!v.startsWith('/')) {
       return `絶対の道（/ で始まる）で書かれよ: ${JSON.stringify(v)}。値は単引用で載るゆえ ~ も $HOME も展開されず、相対の道は起こした dir で先が変わる。${fix}`;
     }
@@ -134,7 +145,12 @@ const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
       return `. の区画を含む: ${JSON.stringify(v)}。/./ を挟むと隔離の拒み（/tmp・$HOME・~/.honden・repo）が前方一致で外れるゆえ、畳まぬ形だけを受ける。${fix}`;
     }
     return null;
-  },
+  };
+}
+
+const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
+  CODEX_HOME: absolutePathRule('/home/me/.codex-ashigaru3'),
+  HINDSIGHT_CONFIG: absolutePathRule('/home/me/.hindsight-ashigaru3/coding-agent.json'),
 };
 
 /** shell の単引用で包む。単引用そのものは `'\''` で抜ける。空白・`$`・`!` も崩れぬ。 */
@@ -201,19 +217,209 @@ export function codexHomeOf(
   return v === undefined ? { ok: true, path: `${home}/.codex`, custom: false } : { ok: true, path: v, custom: true };
 }
 
+/**
+ * honden の CLI の名から、hindsight の hook が設定の harnesses の節を引く名へ（0.7.0 の hook の harness）。
+ *
+ * `Record<Cli, string>` ゆえ、LAUNCHABLE_CLIS に CLI を足して名を足し忘れれば tsc が落ちる。
+ * 名の出所（hindsight-coding-agents@0.7.0 の dist）: claude-code・codex・cursor-cli は各 hook が
+ * loadConfig へ渡す harness、opencode は dist/index.js の `createPluginEntry("opencode")`（opencode v1 が
+ * package.json の main から引く plugin）。`opencode2` は別の CLI（v2 の `opencode2`）が根の index.js から
+ * 引く plugin の名で、honden が起こす `opencode` には効かぬ。
+ */
+export const HINDSIGHT_HARNESS: Record<Cli, string> = {
+  claude: 'claude-code',
+  cursor: 'cursor-cli',
+  codex: 'codex',
+  opencode: 'opencode',
+};
+
+/** resolveConfig が Cloud へ向かわぬ serverMode（daemon は 127.0.0.1 の手元の server）。 */
+const HINDSIGHT_LOCAL_MODES = ['self-hosted', 'daemon'];
+
+/**
+ * codebase survey が順に試す harness（0.7.0・0.8.0 の startCodebaseSurvey の order）。足軽の harness が
+ * ここに無ければ（cursor-cli は resolveAgentBin が bin を引けぬ）、bin の在る最初の物の節で survey が走る。
+ */
+const HINDSIGHT_SURVEY_HARNESSES = ['claude-code', 'codex', 'antigravity-cli', 'opencode'];
+
+const isMap = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** 検めが外れた訳。呼ぶ側は kind で分岐し、said（外へ出る文の一片）の字面では分岐せぬ。 */
+type ModeProblem = { kind: 'missing' | 'cloud' | 'unknown'; said: string };
+type UrlProblem = { kind: 'missing' | 'unparsable' | 'cloud'; said: string };
+
+/** serverMode の値が Cloud へ向かうなら訳（向かわぬなら null）。 */
+function modeProblem(mode: unknown): ModeProblem | null {
+  if (typeof mode === 'string' && HINDSIGHT_LOCAL_MODES.includes(mode)) return null;
+  if (mode === undefined) return { kind: 'missing', said: 'serverMode が無い' };
+  if (mode === 'cloud') return { kind: 'cloud', said: 'serverMode が cloud である' };
+  return { kind: 'unknown', said: 'serverMode が self-hosted・daemon のどれでもない' };
+}
+
+/** apiUrl の値が自前の server を指さぬなら訳（指すなら null）。値そのものは訳に載せぬ。 */
+function urlProblem(url: unknown): UrlProblem | null {
+  if (typeof url !== 'string' || url.trim() === '') return { kind: 'missing', said: 'apiUrl が無い' };
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return { kind: 'unparsable', said: 'apiUrl が URL として読めぬ' };
+  }
+  return host === 'vectorize.io' || host.endsWith('.vectorize.io') ? { kind: 'cloud', said: 'apiUrl が Cloud（vectorize.io）を指す' } : null;
+}
+
+/**
+ * apiPort が port の数でなければ訳。daemon の送り先は `http://127.0.0.1:${apiPort}` と字で継がれ
+ * （resolveConfig）、file の apiPort は型を検められぬゆえ、`@` を含めば host が別の名に代わる。
+ */
+function portProblem(port: unknown): string | null {
+  const n = typeof port === 'number' ? port : typeof port === 'string' && /^\d+$/.test(port) ? Number(port) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? null : 'apiPort が 1〜65535 の整数でない（daemon の送り先の host が代わりうる）';
+}
+
+/**
+ * banks.<id> と paths.<dir> の写像の節を一つずつ検める。applyBankConfig は効く節を、serverMode・
+ * apiUrl・apiPort を除かずに上へ重ねる（BANK_OVERRIDE_EXCLUDED に無い）。0.8.0 は paths の節を
+ * pathSection で先に重ね、banks の節をその上に重ねる。どの節が効くかは作業の dir と bank で決まるゆえ、
+ * 全ての節を見る。節が書いた鍵だけが重なる（resolvePartial）ゆえ、書いた鍵だけを判じる。
+ * ただし self-hosted を書いて apiUrl を書かぬ節は止める: 0.8.0 の resolvePartial は、下の値が daemon の時
+ * apiUrl を引き継がず、既定の Cloud の URL に解く。
+ */
+function sectionsProblem(where: string, sections: unknown, fix: string): string | null {
+  if (sections === undefined) return null;
+  if (!isMap(sections)) return `${where} が写像（{…}）でなく、節を判じられぬ。Cloud へ向ける節を見落としうる。${fix}`;
+  for (const [id, sec] of Object.entries(sections)) {
+    if (!isMap(sec)) continue;
+    const name = `${where}.${id}`;
+    const why =
+      ('serverMode' in sec ? modeProblem(sec['serverMode'])?.said : undefined) ??
+      ('apiUrl' in sec ? urlProblem(sec['apiUrl'])?.said : undefined) ??
+      ('apiPort' in sec ? portProblem(sec['apiPort']) : null) ??
+      (sec['serverMode'] === 'self-hosted' && !('apiUrl' in sec) ? 'serverMode が self-hosted だが、同じ節に apiUrl が無い' : null);
+    const when = where.endsWith('paths') ? 'この dir の下で働く時' : 'この bank へ書く時';
+    if (why) return `${name} の節の ${why}。${when}、hook は Cloud へ送る。${fix}`;
+  }
+  return null;
+}
+
+/**
+ * 上の段に harnesses.<harness> の節を重ねた値（applyLayer）を検める。harness が undefined なら上の段だけ。
+ * 上の段の banks・paths は呼ぶ側で一度だけ見る。ここでは harness の節の banks・paths を見る。
+ */
+function layerProblem(top: Record<string, unknown>, harness: string | undefined, fix: string, note: string): string | null {
+  const sections = top['harnesses'];
+  const per = harness && isMap(sections) && isMap(sections[harness]) ? sections[harness] : undefined;
+  const pick = (key: string) => (per && key in per ? per[key] : top[key]);
+  const via = per ? `（harnesses.${harness} の節を重ねた値${note}）` : '';
+  const mode = pick('serverMode');
+  const bad = modeProblem(mode);
+  if (bad) return `${bad.said}${via}。hook は Cloud へ送る。${fix}`;
+  if (mode === 'self-hosted') {
+    const why = urlProblem(pick('apiUrl'));
+    if (why) {
+      switch (why.kind) {
+        case 'missing':
+          return `serverMode が self-hosted だが apiUrl が無い${via}。hook は既定の Cloud の URL へ送る。${fix}`;
+        case 'unparsable':
+          return `${why.said}${via}。Cloud へ落ちうる形は受けぬ。${fix}`;
+        case 'cloud':
+          return `${why.said}${via}。${fix}`;
+      }
+    }
+  }
+  const port = pick('apiPort');
+  if (port !== undefined) {
+    const why = portProblem(port);
+    if (why) return `${why}${via}。Cloud へ落ちうる形は受けぬ。${fix}`;
+  }
+  if (!per) return null;
+  return sectionsProblem(`harnesses.${harness}.banks`, per['banks'], fix) ?? sectionsProblem(`harnesses.${harness}.paths`, per['paths'], fix);
+}
+
+/**
+ * HINDSIGHT_CONFIG の file が、hindsight の hook を自前の server へ向けるかを検める。向けぬなら訳。
+ *
+ * hindsight-coding-agents（0.7.0・0.8.0）の hook は、設定の file を読めねば（在らぬ・壊れた JSON）空と見て、
+ * 既定の送り先（Cloud）へ会話を送る。読めても、効く serverMode が self-hosted・daemon でなければ
+ * cloud となり、self-hosted でも apiUrl が無ければ Cloud の URL になる（resolveConfig）。
+ * 効く値は、上の段に harnesses.<harness> の節を重ねた物（applyLayer）ゆえ、足軽の CLI の
+ * harness の節まで重ねて見る。CLI の harness の名が分からねば（type が無い・表に無い）、
+ * file に harnesses の鍵が在る限りどの節が効くか判じられぬゆえ止める。
+ * さらに banks.<id>・paths.<dir> の節（上の段と harness の節の下）も検める（sectionsProblem）。
+ * 足軽の harness が codebase survey の順に無ければ（cursor-cli）、survey が走りうる harness の節も検める。
+ *
+ * **見るのは serverMode・apiUrl・apiPort の名だけ。** apiToken（鍵）は読まず出さぬ。訳の文には
+ * file の中の値を載せぬ（壊れた JSON の例外の文は値の一部を含みうるゆえ使わず、文を自分で組む）。
+ * env の層（HINDSIGHT_SERVER_MODE 等）は file の下に敷かれる（loadConfig）ゆえ、file が serverMode と
+ * apiUrl を書いておれば env は上書きできぬ。file だけで判じる（file に書かれておらねば止める側へ倒す）。
+ */
+export function hindsightConfigProblem(path: string, cli: string | undefined): string | null {
+  const cloud = '読めねば hook は設定を空と見て既定の送り先（Cloud）へ送る';
+  const fix = '先に file を作り、serverMode（self-hosted か daemon）と apiUrl（自前の server）を書かれよ';
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    const code = (e as { code?: string } | null)?.code;
+    const what = code === 'ENOENT' ? '在らぬ' : `読めぬ（${code ?? '訳の分からぬ誤り'}）`;
+    return `${what}。${cloud}。${fix}`;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return `JSON として開けぬ。${cloud}。${fix}`;
+  }
+  if (!isMap(raw)) {
+    return `JSON の写像（{…}）でない。${cloud}。${fix}`;
+  }
+  const top = raw;
+  const harness = cli !== undefined && isCli(cli) ? HINDSIGHT_HARNESS[cli] : undefined;
+  if (harness === undefined && 'harnesses' in top) {
+    const what = cli === undefined ? 'type が無い' : `type（${cli}）が harness の名の表に無い`;
+    const how = cli === undefined ? 'type を書く' : 'type を表に在る CLI にする';
+    return `${what}ゆえ harness の名が分からぬ。HINDSIGHT_CONFIG の harnesses の節のどれが効くかを判じられず、Cloud へ向ける節を見落としうる。${how}か、file から harnesses の節を除かれよ`;
+  }
+  const own = layerProblem(top, harness, fix, '');
+  if (own) return own;
+  const top2 = sectionsProblem('banks', top['banks'], fix) ?? sectionsProblem('paths', top['paths'], fix);
+  if (top2) return top2;
+  // survey の順に足軽の harness が無ければ、survey は bin の在る最初の harness の節で走る
+  if (harness !== undefined && !HINDSIGHT_SURVEY_HARNESSES.includes(harness)) {
+    for (const h of HINDSIGHT_SURVEY_HARNESSES) {
+      const why = layerProblem(top, h, fix, `。${cli} の足軽でも、hook の codebase survey がこの節で走りうる`);
+      if (why) return why;
+    }
+  }
+  return null;
+}
+
 /** 起こす命の頭に置く代入の並び（`CODEX_HOME='…' `の形）。env が無ければ空。 */
 export function envPrefix(env: [string, string][]): string {
   return env.map(([n, v]) => `${n}=${shellQuote(v)}`).join(' ');
 }
 
-/** `honden config env <名>` の中身。設定を読み、検めて、前置きを返す。 */
-export function envOf(db: Database, agent: string): ConfigResult {
+/**
+ * `honden config env <名>` の中身。設定を一度読み、検めて、前置きと、起こす前の検めに要る物
+ * （HINDSIGHT_CONFIG の道と足軽の type）を、**同じ一度の読み**から返す。二度読めば、間に設定が
+ * 書き換わった時、検めた道と渡す道が割れうる。
+ */
+export function envPlanOf(
+  db: Database,
+  agent: string,
+): { ok: true; prefix: string; hindsightConfig: string | undefined; type: string | undefined } | { ok: false; message: string } {
   if (agent.trim() === '') return { ok: false, message: '誰の env か渡されよ。例: honden config env ashigaru3' };
   const doc = load(db);
   if (!doc.ok) return { ok: false, message: doc.message };
   const r = agentEnv(doc.doc, agent);
   if (!r.ok) return { ok: false, message: r.message };
-  return { ok: true, value: envPrefix(r.env) };
+  const t = dig(doc.doc, `cli.agents.${agent}.type`);
+  return {
+    ok: true,
+    prefix: envPrefix(r.env),
+    hindsightConfig: r.env.find(([n]) => n === 'HINDSIGHT_CONFIG')?.[1],
+    type: t.kind === 'scalar' ? t.value : undefined,
+  };
 }
 
 /**
