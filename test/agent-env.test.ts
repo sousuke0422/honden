@@ -53,11 +53,37 @@ describe('env の欄を読む（agentEnv）', () => {
   });
 
   test('許す名の名簿に無い名は止める（秘密を env の欄に書かせぬ）', () => {
-    expect(AGENT_ENV_ALLOWED).toEqual(['CODEX_HOME']);
-    for (const name of ['OPENAI_API_KEY', 'GH_TOKEN', 'PATH', 'HOME']) {
+    expect(AGENT_ENV_ALLOWED).toEqual(['CODEX_HOME', 'HINDSIGHT_CONFIG']);
+    // 陽性対照: 秘密を運ぶ名は、HINDSIGHT_CONFIG を許した後も今どおり止まる。
+    // HINDSIGHT_API_TOKEN は hindsight の hook が env から読む名だが、許さぬ
+    for (const name of ['OPENAI_API_KEY', 'GH_TOKEN', 'PATH', 'HOME', 'ANTHROPIC_API_KEY', 'HINDSIGHT_API_TOKEN', 'HINDSIGHT_API_URL']) {
       const r = agentEnv({ cli: { agents: { a: { env: { [name]: 'x' } } } } }, 'a');
       expect(r.ok, name).toBe(false);
       if (!r.ok) expect(r.message, name).toContain('許しておらぬ');
+    }
+  });
+
+  test('HINDSIGHT_CONFIG を受け、CODEX_HOME と同じ道の掟（絶対・. と .. の区画を拒む）を通す', () => {
+    const ok = '/home/me/.hindsight-a3/coding-agent.json';
+    expect(agentEnv({ cli: { agents: { a: { env: { HINDSIGHT_CONFIG: ok } } } } }, 'a')).toEqual({
+      ok: true,
+      env: [['HINDSIGHT_CONFIG', ok]],
+    });
+    for (const [v, said] of [
+      ['~/.hindsight/coding-agent.json', '絶対の道'],
+      ['.hindsight/coding-agent.json', '絶対の道'],
+      ['coding-agent.json', '絶対の道'],
+      ['', '絶対の道'],
+      ['/home/me/./.hindsight/coding-agent.json', '. の区画'],
+      ['/home/me/../me/.hindsight/coding-agent.json', '..'],
+    ] as const) {
+      const r = agentEnv({ cli: { agents: { a: { env: { HINDSIGHT_CONFIG: v } } } } }, 'a');
+      expect(r.ok, v).toBe(false);
+      if (!r.ok) {
+        expect(r.message, v).toContain('HINDSIGHT_CONFIG');
+        expect(r.message, v).toContain(said);
+        expect(r.message, v).toContain('$HOME を展開した絶対の道');
+      }
     }
   });
 
@@ -131,6 +157,27 @@ describe('honden config env <名>', () => {
     expect(runConfigEnv(db, 'a1')).toEqual({ code: 0, out: `CODEX_HOME='/tmp/a b$c'` });
     expect(runConfigEnv(db, 'a2')).toEqual({ code: 0, out: '' });
     const bad = runConfigEnv(db, 'a3');
+    expect(bad.code).not.toBe(0);
+    expect(bad.err).toContain('許しておらぬ');
+  });
+
+  test('HINDSIGHT_CONFIG を書いた足軽の起こす命に、単引用で載る（CODEX_HOME と並べても書いた順に）', () => {
+    const db = store(
+      'cli:\n  agents:\n' +
+        '    h1:\n      type: claude\n      env:\n        HINDSIGHT_CONFIG: "/home/me/.hindsight a1/coding-agent.json"\n' +
+        '    h2:\n      type: codex\n      env:\n        CODEX_HOME: /home/me/.codex-a2\n        HINDSIGHT_CONFIG: /home/me/.hindsight-a2/coding-agent.json\n' +
+        '    h3:\n      type: claude\n      env:\n        ANTHROPIC_API_KEY: sk-x\n',
+    );
+    expect(runConfigEnv(db, 'h1')).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='/home/me/.hindsight a1/coding-agent.json'` });
+    expect(runConfigEnv(db, 'h2')).toEqual({
+      code: 0,
+      out: `CODEX_HOME='/home/me/.codex-a2' HINDSIGHT_CONFIG='/home/me/.hindsight-a2/coding-agent.json'`,
+    });
+    // 載った前置きを shell に解かせると、元の道が一字違わず渡る
+    const p = Bun.spawnSync(['bash', '-c', `${runConfigEnv(db, 'h1').out} printenv HINDSIGHT_CONFIG`], { env: {} });
+    expect(p.stdout.toString()).toBe('/home/me/.hindsight a1/coding-agent.json\n');
+    // 陽性対照: 秘密を運ぶ名は今どおり止まる
+    const bad = runConfigEnv(db, 'h3');
     expect(bad.code).not.toBe(0);
     expect(bad.err).toContain('許しておらぬ');
   });

@@ -23,9 +23,13 @@ language: ja
 # `env` は、その者を起こす命の頭に置く環境の変数（名と値の組）。出陣（shutsujin.sh）と
 # 立て直し（switch_cli.sh）の両方で載り、隔離の包み（isolation）の内へも渡る。
 # 値は honden が shell の単引用で包むゆえ、空白や `$` を含んでもそのまま書いてよい。
-# 名は `[A-Z_][A-Z0-9_]*` で、**許す名は `CODEX_HOME` だけ**。外れれば出陣の前に止まる。
-# `CODEX_HOME` は **`/` で始まる絶対の道**で書く。値は単引用で載るゆえ `~` も `$HOME` も
-# 展開されぬ——`$HOME` を展開した道で書くこと。相対の道・空・`..` を含む道も止まる。
+# 名は `[A-Z_][A-Z0-9_]*` で、**許す名は `CODEX_HOME` と `HINDSIGHT_CONFIG` だけ**。
+# 外れれば出陣の前に止まる。
+# どちらも **`/` で始まる絶対の道**で書く。値は単引用で載るゆえ `~` も `$HOME` も
+# 展開されぬ——`$HOME` を展開した道で書くこと。相対の道・空・`.` や `..` の区画を含む道も止まる。
+# `HINDSIGHT_CONFIG` は hindsight の hook が読む設定の file（既定は `~/.hindsight/coding-agent.json`）の道。
+# 読めねば hook は既定の送り先（Cloud）へ落ちるゆえ、足軽ごとに分けるならここで渡す。
+# token はその file の中に置き、`HINDSIGHT_API_TOKEN` を env の欄に書かぬ（許しておらぬ）。
 #
 # **ここに秘密を書くな。** env の値は起こす命の字面に載り、pane・shell の履歴・`ps` に残る。
 # API の鍵や token は env の欄ではなく、鍵の file（CLI の設定・`.envrc` 等）で渡すこと。

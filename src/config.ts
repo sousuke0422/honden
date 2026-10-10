@@ -96,8 +96,13 @@ export function dig(doc: unknown, dotted: string): { kind: 'scalar'; value: stri
  * 秘密は env の欄ではなく、別の置き場（鍵の file）で渡すのが筋である。
  * ここに載せるのは、CLI の設定の在り処を足軽ごとに分ける名だけとする。
  * 名を足す時は、秘密を運ばぬ名かを判じて、この名簿へ足す（試験も足す）。
+ *
+ * - `CODEX_HOME`: codex の設定の在り処（dir の道）。秘密は運ばぬ。
+ * - `HINDSIGHT_CONFIG`: hindsight の hook が読む設定の file の道。値は道であって秘密ではない。
+ *   token（apiToken）はその file の中に在り、hook が読む——命の字面には載らぬ。hook が env
+ *   から読む `HINDSIGHT_API_TOKEN` 等の秘密の名は、ここへ足さぬ。
  */
-export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME'];
+export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME', 'HINDSIGHT_CONFIG'];
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -119,10 +124,15 @@ const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
  * `/./` を挟むだけで外れる。畳んで判じる形（canon で均す）にはせぬ——env に載る値と、
  * 判じ・bind に使う値が二つの形になり、どちらが本当の道かを読む者が取り違えるため。
  * 受ける形を「`/` で始まり、`.` も `..` も区画に持たぬ道」一つに絞る。
+ *
+ * **HINDSIGHT_CONFIG も同じ道の掟を通す。** 値は単引用で載るゆえ `~` は展開されず、hook は
+ * 相対の道を起こした dir から読む。読めねば hook は設定を空と見て、既定の送り先（Cloud）へ
+ * 落ちる（hindsight-coding-agents@0.7.0 の resolveConfig）。見張る先と読む先を一つに絞るため、
+ * 掟を absolutePathRule 一つに括って両方に与える。
  */
-const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
-  CODEX_HOME: (v) => {
-    const fix = '$HOME を展開した絶対の道（例: /home/me/.codex-ashigaru3）で書かれよ';
+function absolutePathRule(example: string): (v: string) => string | null {
+  const fix = `$HOME を展開した絶対の道（例: ${example}）で書かれよ`;
+  return (v) => {
     if (!v.startsWith('/')) {
       return `絶対の道（/ で始まる）で書かれよ: ${JSON.stringify(v)}。値は単引用で載るゆえ ~ も $HOME も展開されず、相対の道は起こした dir で先が変わる。${fix}`;
     }
@@ -134,7 +144,12 @@ const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
       return `. の区画を含む: ${JSON.stringify(v)}。/./ を挟むと隔離の拒み（/tmp・$HOME・~/.honden・repo）が前方一致で外れるゆえ、畳まぬ形だけを受ける。${fix}`;
     }
     return null;
-  },
+  };
+}
+
+const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
+  CODEX_HOME: absolutePathRule('/home/me/.codex-ashigaru3'),
+  HINDSIGHT_CONFIG: absolutePathRule('/home/me/.hindsight-ashigaru3/coding-agent.json'),
 };
 
 /** shell の単引用で包む。単引用そのものは `'\''` で抜ける。空白・`$`・`!` も崩れぬ。 */
