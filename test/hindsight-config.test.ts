@@ -302,3 +302,71 @@ describe('数え上げで足した経路', () => {
     expect(runConfigEnv(store(agent('ashigaru4', 'codex', other)), 'ashigaru4').code).toBe(0);
   });
 });
+
+describe('前置きと検めは同じ一度の読みから出る（cmd_230）', () => {
+  /**
+   * 設定の道を symlink にし、読むたびに違う中身を返させる（一度目 first、二度目より後は rest）。
+   * 先は FIFO の鎖で、書き手は読み手が今の FIFO を開いたのを待って（書く側の open が返る）から
+   * symlink を次の FIFO へ掛け替え、それから中身を書いて閉じる。読み手が EOF を見る前に次の読みが
+   * 同じ FIFO を開くことは無く、二つの中身が混ざらぬ。三度目より後は普通の file（rest）を指す。
+   * 二度読む形なら、前置きと検めが別の中身から出て、この試験が落ちる。
+   */
+  function racing(first: string, rest: string): { db: string; done: () => void } {
+    const dir = mkdtempSync(join(BASE, 'race-'));
+    const sp = join(dir, 'settings.yaml');
+    const a = join(dir, 'a.yaml');
+    const b = join(dir, 'b.yaml');
+    writeFileSync(a, `cli:\n  agents:\n${first}`);
+    writeFileSync(b, `cli:\n  agents:\n${rest}`);
+    for (const f of ['f1', 'f2']) expect(Bun.spawnSync(['mkfifo', join(dir, f)]).exitCode).toBe(0);
+    expect(Bun.spawnSync(['ln', '-s', join(dir, 'f1'), sp]).exitCode).toBe(0);
+    const path = join(dir, 'h.db');
+    const db = openStore({ path });
+    tx(db, () => setSetting(db, SETTINGS_PATH_KEY, sp, 'roster'));
+    db.close();
+    const script = [
+      'exec 3>"$D/f1"; ln -sfn "$D/f2" "$D/settings.yaml"; cat "$D/a.yaml" >&3; exec 3>&-',
+      'exec 3>"$D/f2"; ln -sfn "$D/b.yaml" "$D/settings.yaml"; cat "$D/b.yaml" >&3; exec 3>&-',
+    ].join('\n');
+    const writer = Bun.spawn(['sh', '-c', script], { env: { ...process.env, D: dir } });
+    return {
+      db: path,
+      // 書き手は sh の中で FIFO の open を待っておる（cat は走っておらぬ）ゆえ、kill だけで畳める
+      done: () => writer.kill(),
+    };
+  }
+  const cloud = () => cfgFile(JSON.stringify({ serverMode: 'cloud', apiToken: FAKE_TOKEN }));
+  const good = () => cfgFile(JSON.stringify({ serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888' }));
+
+  test('一度目が Cloud の file、二度目が自前の file を指せば、一度目で止まる（検めを通らぬ道が渡らぬ）', () => {
+    const bad = cloud();
+    const r0 = racing(agent('ashigaru3', 'claude', bad), agent('ashigaru3', 'claude', good()));
+    try {
+      const r = runConfigEnv(r0.db, 'ashigaru3');
+      expect(r.out ?? '', '検めを通らぬ道が前置きに載った').not.toContain(bad);
+      stopped(r, bad, 'race cloud→good');
+    } finally {
+      r0.done();
+    }
+  });
+
+  test('一度目が自前の file、二度目が Cloud の file を指せば、一度目の道で code=0', () => {
+    const ok = good();
+    const r0 = racing(agent('ashigaru3', 'claude', ok), agent('ashigaru3', 'claude', cloud()));
+    try {
+      expect(runConfigEnv(r0.db, 'ashigaru3')).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${ok}'` });
+    } finally {
+      r0.done();
+    }
+  });
+
+  test('type も同じ読みから引く（一度目 opencode・二度目 codex で、opencode の節で判じる）', () => {
+    const f = cfgFile(JSON.stringify({ serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888', harnesses: { opencode: { serverMode: 'cloud' } } }));
+    const r0 = racing(agent('ashigaru6', 'opencode', f), agent('ashigaru6', 'codex', f));
+    try {
+      stopped(runConfigEnv(r0.db, 'ashigaru6'), 'harnesses.opencode', 'race type');
+    } finally {
+      r0.done();
+    }
+  });
+});
