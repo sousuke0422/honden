@@ -223,3 +223,82 @@ describe('banks.<id> の節も同じ判じにかける（applyBankConfig は ser
     expect(r).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${p}'` });
   });
 });
+
+describe('paths.<dir> の節（0.8.0 の applyBankConfig が pathSection で重ねる）も同じ判じにかける', () => {
+  const top = { serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888', apiToken: FAKE_TOKEN };
+  const bad = [
+    ['serverMode が cloud', { serverMode: 'cloud' }, 'serverMode'],
+    ['apiUrl が Cloud', { apiUrl: 'https://api.hindsight.vectorize.io' }, 'apiUrl'],
+  ] as const;
+
+  test('(1) 上の段の paths の entry が Cloud へ向ければ、節の名を名指しして非ゼロ', () => {
+    for (const [label, sec, said] of bad) {
+      const p = cfgFile(JSON.stringify({ ...top, paths: { '/w/repo': { ...sec, apiToken: FAKE_TOKEN } } }));
+      const r = runConfigEnv(store(agent('ashigaru3', 'claude', p)), 'ashigaru3');
+      stopped(r, 'paths./w/repo', label);
+      expect(r.err, label).toContain(said);
+    }
+  });
+
+  test('(2) harnesses.<harness>.paths の entry も同じ', () => {
+    for (const [label, sec, said] of bad) {
+      const p = cfgFile(JSON.stringify({ ...top, harnesses: { codex: { paths: { '~/w': sec } } } }));
+      const r = runConfigEnv(store(agent('ashigaru4', 'codex', p)), 'ashigaru4');
+      stopped(r, 'harnesses.codex.paths.~/w', label);
+      expect(r.err, label).toContain(said);
+    }
+  });
+
+  test('(3) 陽性対照: paths の entry が自前の値だけを持てば code=0', () => {
+    const p = cfgFile(
+      JSON.stringify({
+        ...top,
+        paths: { '/w/a': { serverMode: 'self-hosted', apiUrl: 'http://hs.lan:8888', apiToken: FAKE_TOKEN }, '/w/b': { serverMode: 'daemon' }, '/w/c': { retainTags: ['a'] } },
+        harnesses: { 'claude-code': { paths: { '/w/a': { apiUrl: 'http://hs.lan:9999' } } } },
+      }),
+    );
+    expect(runConfigEnv(store(agent('ashigaru3', 'claude', p)), 'ashigaru3')).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${p}'` });
+  });
+});
+
+describe('数え上げで足した経路', () => {
+  const top = { serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888', apiToken: FAKE_TOKEN };
+
+  test('(4-a) 節が self-hosted を書いて apiUrl を書かねば止める（0.8.0 は上の段が daemon の時、Cloud の URL に解く）', () => {
+    for (const where of ['banks', 'paths'] as const) {
+      const p = cfgFile(JSON.stringify({ serverMode: 'daemon', [where]: { x: { serverMode: 'self-hosted', apiToken: FAKE_TOKEN } } }));
+      stopped(runConfigEnv(store(agent('ashigaru3', 'claude', p)), 'ashigaru3'), `${where}.x`, where);
+    }
+    // 陽性対照: 同じ節が apiUrl も書けば通る
+    const ok = cfgFile(JSON.stringify({ serverMode: 'daemon', banks: { x: { serverMode: 'self-hosted', apiUrl: 'http://hs.lan:8888' } } }));
+    expect(runConfigEnv(store(agent('ashigaru3', 'claude', ok)), 'ashigaru3').code).toBe(0);
+  });
+
+  test('(4-b) apiPort が整数でなければ止める（daemon の URL は http://127.0.0.1:<apiPort> と字で継ぐ）', () => {
+    const port = '9077@api.hindsight.vectorize.io';
+    const tp = cfgFile(JSON.stringify({ serverMode: 'daemon', apiPort: port }));
+    stopped(runConfigEnv(store(agent('ashigaru3', 'claude', tp)), 'ashigaru3'), 'apiPort', '上の段');
+    const bp = cfgFile(JSON.stringify({ ...top, banks: { x: { serverMode: 'daemon', apiPort: port } } }));
+    stopped(runConfigEnv(store(agent('ashigaru3', 'claude', bp)), 'ashigaru3'), 'banks.x', 'banks');
+    // 陽性対照: 数でも数字の文でも通る
+    for (const apiPort of [9078, '9078']) {
+      const ok = cfgFile(JSON.stringify({ serverMode: 'daemon', apiPort, banks: { x: { apiPort } } }));
+      expect(runConfigEnv(store(agent('ashigaru3', 'claude', ok)), 'ashigaru3').code, String(apiPort)).toBe(0);
+    }
+  });
+
+  test('(4-c) cursor の足軽は survey が他の harness の節で走りうるゆえ、その節も見る', () => {
+    // startCodebaseSurvey は cursor-cli の bin を引けず、claude-code・codex・antigravity-cli・opencode の順に試す
+    for (const h of ['claude-code', 'codex', 'antigravity-cli', 'opencode']) {
+      const p = cfgFile(JSON.stringify({ ...top, harnesses: { [h]: { serverMode: 'cloud' } } }));
+      stopped(runConfigEnv(store(agent('ashigaru7', 'cursor', p)), 'ashigaru7'), `harnesses.${h}`, `cursor ${h}`);
+    }
+    const b = cfgFile(JSON.stringify({ ...top, harnesses: { 'antigravity-cli': { banks: { x: { serverMode: 'cloud' } } } } }));
+    stopped(runConfigEnv(store(agent('ashigaru7', 'cursor', b)), 'ashigaru7'), 'harnesses.antigravity-cli.banks.x', 'cursor banks');
+    // 陽性対照: survey の節が自前なら通る。codex の足軽の survey は codex の節で走るゆえ、claude-code の節は見ぬ
+    const ok = cfgFile(JSON.stringify({ ...top, harnesses: { 'claude-code': { serverMode: 'self-hosted', apiUrl: 'http://hs.lan:8888' } } }));
+    expect(runConfigEnv(store(agent('ashigaru7', 'cursor', ok)), 'ashigaru7').code).toBe(0);
+    const other = cfgFile(JSON.stringify({ ...top, harnesses: { 'claude-code': { serverMode: 'cloud' } } }));
+    expect(runConfigEnv(store(agent('ashigaru4', 'codex', other)), 'ashigaru4').code).toBe(0);
+  });
+});
