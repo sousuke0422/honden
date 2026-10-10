@@ -102,8 +102,15 @@ export function dig(doc: unknown, dotted: string): { kind: 'scalar'; value: stri
  * - `HINDSIGHT_CONFIG`: hindsight の hook が読む設定の file の道。値は道であって秘密ではない。
  *   token（apiToken）はその file の中に在り、hook が読む——命の字面には載らぬ。hook が env
  *   から読む `HINDSIGHT_API_TOKEN` 等の秘密の名は、ここへ足さぬ。
+ * - `CLAUDE_CONFIG_DIR`: Claude Code の設定の在り処（dir の道）。user の settings と
+ *   `.claude.json` がこの下へ移る。値は道であって秘密ではない（鍵はその dir の中に在り、
+ *   命の字面には載らぬ）。`ANTHROPIC_API_KEY` 等の秘密の名は、ここへ足さぬ。
+ *
+ * **type と名が合わぬ足軽（codex の足軽の CLAUDE_CONFIG_DIR 等）も止めぬ。** 名は起こす命の
+ * 頭に載るだけで、その CLI が読まねば何も起こらぬ。selftest と隔離の包みが在り処を引くのは、
+ * その名を読む type の足軽だけである（codexHomeOf・claudeConfigDirOf を引く所）。
  */
-export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME', 'HINDSIGHT_CONFIG'];
+export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME', 'HINDSIGHT_CONFIG', 'CLAUDE_CONFIG_DIR'];
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -151,6 +158,7 @@ function absolutePathRule(example: string): (v: string) => string | null {
 const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
   CODEX_HOME: absolutePathRule('/home/me/.codex-ashigaru3'),
   HINDSIGHT_CONFIG: absolutePathRule('/home/me/.hindsight-ashigaru3/coding-agent.json'),
+  CLAUDE_CONFIG_DIR: absolutePathRule('/home/me/.claude-ashigaru3'),
 };
 
 /** shell の単引用で包む。単引用そのものは `'\''` で抜ける。空白・`$`・`!` も崩れぬ。 */
@@ -215,6 +223,22 @@ export function codexHomeOf(
   if (!r.ok) return { ok: false, message: r.message };
   const v = r.env.find(([n]) => n === 'CODEX_HOME')?.[1];
   return v === undefined ? { ok: true, path: `${home}/.codex`, custom: false } : { ok: true, path: v, custom: true };
+}
+
+/**
+ * その足軽の実効の CLAUDE_CONFIG_DIR。env に在ればそれ（agentEnv の判じを通った絶対の道）、
+ * 無ければ `<home>/.claude`。**selftest が user の settings を読む先と、隔離の包みが判じる先は、
+ * ここだけから引く**（codexHomeOf と同じ考え）。
+ */
+export function claudeConfigDirOf(
+  doc: unknown,
+  agent: string,
+  home: string,
+): { ok: true; path: string; custom: boolean } | { ok: false; message: string } {
+  const r = agentEnv(doc, agent);
+  if (!r.ok) return { ok: false, message: r.message };
+  const v = r.env.find(([n]) => n === 'CLAUDE_CONFIG_DIR')?.[1];
+  return v === undefined ? { ok: true, path: `${home}/.claude`, custom: false } : { ok: true, path: v, custom: true };
 }
 
 /**

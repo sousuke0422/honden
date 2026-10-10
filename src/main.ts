@@ -104,7 +104,7 @@ import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
-import { get as configGet, load as configLoad, dig as configDig, envPlanOf as configEnvPlanOf, codexHomeOf as configCodexHomeOf, hindsightConfigProblem, SETTINGS_PATH_KEY } from './config';
+import { get as configGet, load as configLoad, dig as configDig, envPlanOf as configEnvPlanOf, codexHomeOf as configCodexHomeOf, claudeConfigDirOf as configClaudeConfigDirOf, hindsightConfigProblem, SETTINGS_PATH_KEY } from './config';
 import { settingsPath as settingsPathOf } from './config';
 import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import {
@@ -1508,6 +1508,106 @@ function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home:
 }
 
 /**
+ * settings の file の `disableAllHooks`。file が無いか鍵が無ければ undefined、真偽なら其の値、
+ * 読めぬ・JSON の写像でない・真偽でない値なら 'unknown'（判じられぬ）。中の他の値は見ず出さぬ。
+ */
+function disableAllHooksIn(path: string): boolean | undefined | 'unknown' {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    return (e as { code?: string } | null)?.code === 'ENOENT' ? undefined : 'unknown';
+  }
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return 'unknown';
+  }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return 'unknown';
+  if (!('disableAllHooks' in doc)) return undefined;
+  const v = (doc as Record<string, unknown>)['disableAllHooks'];
+  return typeof v === 'boolean' ? v : 'unknown';
+}
+
+/**
+ * claude の門の行を、足軽ごとの CLAUDE_CONFIG_DIR で作り直す。
+ *
+ * 門の hook は根の `.claude/settings.json` に在るが、Claude Code は `disableAllHooks` を
+ * settings の重ね順（managed → 命の引数 → `.claude/settings.local.json` → `.claude/settings.json`
+ * → user の `settings.json`）で残った値で読む。user の層で `true` なら、上の層が `false` を
+ * 書かぬ限り根の hook も黙って止まる（公式の hooks の文書「Disable or remove hooks」: "Claude Code
+ * reads the value left after settings precedence applies, so a `"disableAllHooks": false` in a
+ * project's `.claude/settings.json` overrides a `true` in your user settings"）。user の層は
+ * `CLAUDE_CONFIG_DIR` の下へ移る（同じく「Explore the .claude directory」: "If you set
+ * CLAUDE_CONFIG_DIR, every `~/.claude` path on this page lives under that directory instead"）。
+ *
+ * ゆえに claude で起こす足軽ごとに在り処を決め（env の `CLAUDE_CONFIG_DIR`、無ければ `~/.claude`）、
+ * 同じ在り処の者をまとめて、local → project → user の順に最初に書かれた値で判じる。`true`、または
+ * どこかが読めず判じられねば「効いておらぬ」とする。出陣は `--settings` を渡さぬゆえ命の引数の層は無い。
+ * managed の層（機の全体の policy）は足軽ごとに分かれぬゆえ、ここでは見ぬ。
+ *
+ * 皮が据わっておらぬ・拒めぬ時は、見るまでもなく元の一行を返す。
+ * 名簿に claude の足軽が居らぬ（設定が読めぬを含む）時は、`~/.claude` を一行で見る。
+ */
+function claudeRows(c: GateCheck, base: string, dbPath: string | undefined, home: string): GateCheck[] {
+  if (!c.configured || !c.denies) return [c];
+  const fallback = join(home, '.claude');
+  const agents: { id: string; dir?: string; bad?: string }[] = [];
+  const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+  if (path === ':memory:' || existsSync(path)) {
+    try {
+      const doc = configLoad(openStore({ path }));
+      if (doc.ok) {
+        const list = configDig(doc.doc, 'cli.agents');
+        for (const id of list.kind === 'branch' ? list.keys : []) {
+          const t = configDig(doc.doc, `cli.agents.${id}.type`);
+          if (t.kind !== 'scalar' || t.value !== 'claude') continue;
+          const cd = configClaudeConfigDirOf(doc.doc, id, home);
+          if (!cd.ok) {
+            agents.push({ id, bad: cd.message.split('\n')[0] });
+            continue;
+          }
+          agents.push({ id, dir: cd.path });
+        }
+      }
+    } catch {
+      /* 設定が読めねば ~/.claude だけを見る */
+    }
+  }
+
+  const rows: GateCheck[] = [];
+  for (const a of agents.filter((x) => x.bad)) {
+    rows.push({ cli: 'claude', configured: true, denies: false, note: `${a.id}: env の欄が誤っておる——${a.bad}` });
+  }
+  const groups = new Map<string, string[]>();
+  const good = agents.filter((x) => !x.bad);
+  if (good.length === 0 && agents.length === 0) groups.set(fallback, []);
+  for (const a of good) {
+    const d = a.dir ?? fallback;
+    groups.set(d, [...(groups.get(d) ?? []), a.id]);
+  }
+  for (const [d, ids] of groups) {
+    const layers: [string, string][] = [
+      ['.claude/settings.local.json', join(base, '.claude/settings.local.json')],
+      ['.claude/settings.json', join(base, '.claude/settings.json')],
+      [`${d}/settings.json`, join(d, 'settings.json')],
+    ];
+    let why: string | undefined;
+    for (const [label, file] of layers) {
+      const v = disableAllHooksIn(file);
+      if (v === undefined) continue;
+      if (v === 'unknown') why = `${label} が読めぬ・disableAllHooks を判じられぬ——生きておるとは言わぬ`;
+      else if (v) why = `${label} の disableAllHooks が true。claude は根の hook ごと門を黙って止める`;
+      break;
+    }
+    const who = ids.length > 0 ? `${ids.join(', ')}（CLAUDE_CONFIG_DIR=${d}）` : `（名簿に claude の足軽が居らぬ。${d} を見た）`;
+    rows.push({ cli: 'claude', configured: true, denies: why === undefined, note: why === undefined ? who : `${who} — **${why}**` });
+  }
+  return rows;
+}
+
+/**
  * `honden guard selftest` — 門が生きておるかを、実際に叩いて確かめる。
  *
  * 据えた後に静かに消えるのが門の常である（信頼切れ・設定の書き換え・
@@ -1520,7 +1620,7 @@ export function runGuardSelftest(
   home: string = homedir(),
 ): RunResult {
   const base = resolvePath(root ?? process.cwd());
-  // codex の信頼は門（src/guard.ts）の外で、足軽ごとに見る（下の codexRows）。
+  // codex の信頼と claude の disableAllHooks は門（src/guard.ts）の外で、足軽ごとに見る（codexRows・claudeRows）。
   // 門の selftest へは信頼の口を渡さぬ——渡すと一つの ~/.codex だけで判じてしまう。
   const checks = guardSelftest({
     root: base,
@@ -1537,7 +1637,9 @@ export function runGuardSelftest(
       }
     },
   });
-  const rows = checks.flatMap((c) => (c.cli === 'codex' ? codexRows(c, base, dbPath, home) : [c]));
+  const rows = checks.flatMap((c) =>
+    c.cli === 'codex' ? codexRows(c, base, dbPath, home) : c.cli === 'claude' ? claudeRows(c, base, dbPath, home) : [c],
+  );
   const lines = rows.map((c) => {
     const mark = c.denies ? '生きておる' : c.configured ? '**効いておらぬ**' : '据わっておらぬ';
     return `  ${c.cli.padEnd(7)} ${mark}${c.note ? `  — ${c.note}` : ''}`;
@@ -2125,6 +2227,26 @@ export function runIsolateWrap(
   const db = openStore({ path: dbPath });
   const r = isolationOf(db);
   if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  // 足軽ごとの CLAUDE_CONFIG_DIR は、fs の縛りの下ではまだ bind を組まぬ。CLI の書き道は
+  // `~/.claude`・`~/.claude.json` に決め打ち（src/isolate.ts の CLI_WRITES）ゆえ、包めば claude は
+  // 己の設定の dir に書けぬまま起きる。CODEX_HOME の守り（実体で判じる・差し替えの競合・拒む道）を
+  // 揃えるまでは、黙って包まずに止める。網だけの隔離では / は rw のままゆえ止めぬ。
+  if (r.cfg.level === 'bwrap' && r.cfg.fs && cli === 'claude' && agent) {
+    const loaded = configLoad(db);
+    if (loaded.ok) {
+      const cd = configClaudeConfigDirOf(loaded.doc, agent, home);
+      if (!cd.ok) return { code: EXIT_INVALID, err: `  ${cd.message}` };
+      if (cd.custom) {
+        return {
+          code: EXIT_INVALID,
+          err:
+            `  ${agent} の CLAUDE_CONFIG_DIR（${cd.path}）は、fs の縛りの下ではまだ扱わぬ——檻が書けるのは ~/.claude と ~/.claude.json だけで、` +
+            'claude が己の設定の dir に書けぬまま起きる。\n' +
+            '  fs の縛りを外すか、この足軽の env から CLAUDE_CONFIG_DIR を外されよ。',
+        };
+      }
+    }
+  }
   let codexHome: string | undefined;
   if (r.cfg.level === 'bwrap' && cli === 'codex' && agent) {
     const loaded = configLoad(db);

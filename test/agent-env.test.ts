@@ -53,10 +53,21 @@ describe('env の欄を読む（agentEnv）', () => {
   });
 
   test('許す名の名簿に無い名は止める（秘密を env の欄に書かせぬ）', () => {
-    expect(AGENT_ENV_ALLOWED).toEqual(['CODEX_HOME', 'HINDSIGHT_CONFIG']);
-    // 陽性対照: 秘密を運ぶ名は、HINDSIGHT_CONFIG を許した後も今どおり止まる。
-    // HINDSIGHT_API_TOKEN は hindsight の hook が env から読む名だが、許さぬ
-    for (const name of ['OPENAI_API_KEY', 'GH_TOKEN', 'PATH', 'HOME', 'ANTHROPIC_API_KEY', 'HINDSIGHT_API_TOKEN', 'HINDSIGHT_API_URL']) {
+    expect(AGENT_ENV_ALLOWED).toEqual(['CODEX_HOME', 'HINDSIGHT_CONFIG', 'CLAUDE_CONFIG_DIR']);
+    // 陽性対照: 秘密を運ぶ名は、HINDSIGHT_CONFIG・CLAUDE_CONFIG_DIR を許した後も今どおり止まる。
+    // HINDSIGHT_API_TOKEN は hindsight の hook が、ANTHROPIC_AUTH_TOKEN・CLAUDE_CODE_OAUTH_TOKEN は
+    // Claude Code が env から読む名だが、許さぬ
+    for (const name of [
+      'OPENAI_API_KEY',
+      'GH_TOKEN',
+      'PATH',
+      'HOME',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'HINDSIGHT_API_TOKEN',
+      'HINDSIGHT_API_URL',
+    ]) {
       const r = agentEnv({ cli: { agents: { a: { env: { [name]: 'x' } } } } }, 'a');
       expect(r.ok, name).toBe(false);
       if (!r.ok) expect(r.message, name).toContain('許しておらぬ');
