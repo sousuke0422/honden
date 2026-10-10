@@ -89,6 +89,134 @@ export function dig(doc: unknown, dotted: string): { kind: 'scalar'; value: stri
 }
 
 /**
+ * 足軽ごとの env で許す名。
+ *
+ * **名簿で許す。すべては許さぬ。** env の値は起こす命の字面に載り、tmux の pane・
+ * shell の履歴・`ps` に残る。何でも許せば、API の鍵や token をここへ書く道が開く。
+ * 秘密は env の欄ではなく、別の置き場（鍵の file）で渡すのが筋である。
+ * ここに載せるのは、CLI の設定の在り処を足軽ごとに分ける名だけとする。
+ * 名を足す時は、秘密を運ばぬ名かを判じて、この名簿へ足す（試験も足す）。
+ */
+export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME'];
+
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+
+/**
+ * 名ごとの値の掟。名の判じと同じ所で、値も判ずる。外れれば理由と直し方を返す。
+ *
+ * **CODEX_HOME は `/` で始まる絶対の道に限る。** 値は単引用で命に載るゆえ、`~` も
+ * `$HOME` も展開されぬ。`~/.codex-x` は codex の側では「今の dir の下の `~` という dir」
+ * になり、selftest が `~` を展開して読めば、見張る先と codex が使う先が食い違う。
+ * 相対の道も同じく、起こした dir 次第で先が変わる。
+ *
+ * **`..` は畳まずに止める。** 字面で畳むと、symlink を越える道で実の在り処とずれうる
+ * （`/a/link/../b` の `..` は、shell では字面で、kernel では link の先で解かれる）。
+ * 畳まずに受ける形を一つに絞れば、selftest が読む先と codex が開く先は必ず同じになる。
+ *
+ * **`.` の区画も畳まずに止める。** `.` は kernel でも shell でも同じく解かれ、在り処は
+ * ずれぬ。だが畳まずに通すと、隔離の下の拒み（src/isolate.ts の isolatedCodexHomeProblem。
+ * `/tmp`・`$HOME`・`~/.honden`・repo を前方一致で見る）が `/home/me/./.honden` のように
+ * `/./` を挟むだけで外れる。畳んで判じる形（canon で均す）にはせぬ——env に載る値と、
+ * 判じ・bind に使う値が二つの形になり、どちらが本当の道かを読む者が取り違えるため。
+ * 受ける形を「`/` で始まり、`.` も `..` も区画に持たぬ道」一つに絞る。
+ */
+const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
+  CODEX_HOME: (v) => {
+    const fix = '$HOME を展開した絶対の道（例: /home/me/.codex-ashigaru3）で書かれよ';
+    if (!v.startsWith('/')) {
+      return `絶対の道（/ で始まる）で書かれよ: ${JSON.stringify(v)}。値は単引用で載るゆえ ~ も $HOME も展開されず、相対の道は起こした dir で先が変わる。${fix}`;
+    }
+    const parts = v.split('/');
+    if (parts.includes('..')) {
+      return `.. を含む: ${JSON.stringify(v)}。畳むと symlink を越えて実の在り処とずれうるゆえ受けぬ。${fix}`;
+    }
+    if (parts.includes('.')) {
+      return `. の区画を含む: ${JSON.stringify(v)}。/./ を挟むと隔離の拒み（/tmp・$HOME・~/.honden・repo）が前方一致で外れるゆえ、畳まぬ形だけを受ける。${fix}`;
+    }
+    return null;
+  },
+};
+
+/** shell の単引用で包む。単引用そのものは `'\''` で抜ける。空白・`$`・`!` も崩れぬ。 */
+export function shellQuote(v: string): string {
+  return `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * `cli.agents.<名>.env` を読む。無ければ空。名と値の組の写像であること。
+ * 名は `[A-Z_][A-Z0-9_]*` で、AGENT_ENV_ALLOWED に載ること。値は文か数で、
+ * 改行などの制御の字を含まぬこと（起こす命が一行で打たれるため）。
+ */
+export function agentEnv(doc: unknown, agent: string): { ok: true; env: [string, string][] } | { ok: false; message: string } {
+  const found = dig(doc, `cli.agents.${agent}.env`);
+  if (found.kind === 'none') return { ok: true, env: [] };
+  if (found.kind === 'scalar') {
+    if (found.value === '') return { ok: true, env: [] };
+    return { ok: false, message: `cli.agents.${agent}.env は名と値の組（写像）で書かれよ。値が一つだけ在る。` };
+  }
+  const raw = (doc as Record<string, any>).cli.agents[agent].env;
+  if (Array.isArray(raw)) {
+    return { ok: false, message: `cli.agents.${agent}.env は名と値の組（写像）で書かれよ。一覧ではない。` };
+  }
+  const env: [string, string][] = [];
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!ENV_NAME.test(name)) {
+      return { ok: false, message: `cli.agents.${agent}.env の名 ${JSON.stringify(name)} は [A-Z_][A-Z0-9_]* の形でない。` };
+    }
+    if (!AGENT_ENV_ALLOWED.includes(name)) {
+      return {
+        ok: false,
+        message:
+          `cli.agents.${agent}.env の名 ${name} は許しておらぬ（許す名: ${AGENT_ENV_ALLOWED.join(', ')}）。\n` +
+          '  env の値は起こす命の字面に載り、pane や履歴に残る。秘密は鍵の file で渡されよ。',
+      };
+    }
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return { ok: false, message: `cli.agents.${agent}.env.${name} の値は文で書かれよ。` };
+    }
+    const v = String(value);
+    if (/[\u0000-\u001f\u007f]/.test(v)) {
+      return { ok: false, message: `cli.agents.${agent}.env.${name} の値に改行などの制御の字が在る。` };
+    }
+    const bad = ENV_VALUE_RULES[name]?.(v);
+    if (bad) return { ok: false, message: `cli.agents.${agent}.env.${name} の値の誤り——${bad}` };
+    env.push([name, v]);
+  }
+  return { ok: true, env };
+}
+
+/**
+ * その足軽の実効の CODEX_HOME。env に在ればそれ（agentEnv の判じを通った絶対の道）、
+ * 無ければ `<home>/.codex`。**selftest が信頼を読む先と、隔離の包みが rw で bind する先は、
+ * ここだけから引く**——二か所で決めると、見張る先と codex が書く先が分かれうる。
+ */
+export function codexHomeOf(
+  doc: unknown,
+  agent: string,
+  home: string,
+): { ok: true; path: string; custom: boolean } | { ok: false; message: string } {
+  const r = agentEnv(doc, agent);
+  if (!r.ok) return { ok: false, message: r.message };
+  const v = r.env.find(([n]) => n === 'CODEX_HOME')?.[1];
+  return v === undefined ? { ok: true, path: `${home}/.codex`, custom: false } : { ok: true, path: v, custom: true };
+}
+
+/** 起こす命の頭に置く代入の並び（`CODEX_HOME='…' `の形）。env が無ければ空。 */
+export function envPrefix(env: [string, string][]): string {
+  return env.map(([n, v]) => `${n}=${shellQuote(v)}`).join(' ');
+}
+
+/** `honden config env <名>` の中身。設定を読み、検めて、前置きを返す。 */
+export function envOf(db: Database, agent: string): ConfigResult {
+  if (agent.trim() === '') return { ok: false, message: '誰の env か渡されよ。例: honden config env ashigaru3' };
+  const doc = load(db);
+  if (!doc.ok) return { ok: false, message: doc.message };
+  const r = agentEnv(doc.doc, agent);
+  if (!r.ok) return { ok: false, message: r.message };
+  return { ok: true, value: envPrefix(r.env) };
+}
+
+/**
  * 一つ引く。
  *
  * 値は**そのまま**返す。shell が `$(...)` で受けるゆえ、飾りを付けない。

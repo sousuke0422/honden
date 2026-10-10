@@ -34,6 +34,9 @@
  * ntfy や review gate と同じ流儀——繋いだ時だけ効く。
  */
 
+import { lstatSync, realpathSync } from 'node:fs';
+import { shellQuote } from './config';
+
 export const LEVELS = ['none', 'bwrap', 'systemd-run', 'lxc'] as const;
 export type Level = (typeof LEVELS)[number];
 
@@ -184,8 +187,9 @@ export function requiredTools(cfg: IsolationCfg): string[] {
 /**
  * 一体を起こす命を包む。
  *
- * 中の命は `bash -lc` に**単引用で**渡す。tmux send-keys を経るゆえ、
- * 中身に単引用があれば包めぬ——その時は拒む（黙って裸で起こさぬ）。
+ * 中の命は `bash -lc` に**単引用で**渡す。tmux send-keys を経るゆえ、二重引用では
+ * `!` が履歴の展開に食われる。中身の単引用は `'\''` で抜けて包む（足軽ごとの env の
+ * 値が単引用で来る）。前は拒んでおったが、抜けば包めぬ形は残らぬ。
  *
  * file は縛らぬ（`--dev-bind / /`）。v1 の床は網だけである。
  * `--die-with-parent` で、pane が消えれば中身も残らぬ。
@@ -197,6 +201,107 @@ export interface WrapOpts {
   exists?: (p: string) => boolean;
   /** ~ の展開先。試験で注ぎ替える。 */
   home?: string;
+  /**
+   * codex の足軽の実効の CODEX_HOME（settings の env。src/config.ts の codexHomeOf）。
+   * 在れば codex の書き道の `~/.codex` を置き換える。無ければ従来どおり `~/.codex`。
+   */
+  codexHome?: string;
+}
+
+/** 判じに入る道のうち、絶対でない物の訳。全て絶対なら null。undefined の項は問わぬ。 */
+function relativeOf(paths: Record<string, string | undefined>): string | null {
+  for (const [name, p] of Object.entries(paths)) {
+    if (p !== undefined && !p.startsWith('/')) {
+      return `判じに相対の道が入った（${name}: ${JSON.stringify(p)}）。/ から解けば実の在り処とずれ、拒みが外れうるゆえ判ぜぬ`;
+    }
+  }
+  return null;
+}
+
+/** 道を比べる形に均す。判じを通った絶対の道（.. を含まぬ）ゆえ、// と尻の / を畳むだけでよい。 */
+function canon(p: string): string {
+  const q = p.replace(/\/+/g, '/');
+  return q.length > 1 ? q.replace(/\/$/, '') : q;
+}
+const within = (p: string, dir: string) => p === dir || p.startsWith(dir === '/' ? '/' : `${dir}/`);
+
+/**
+ * 隔離の下で、CODEX_HOME として rw で bind してはならぬ道か。ならぬなら訳を返す。
+ *
+ * - `/tmp` の下: 檻は /tmp を tmpfs で専有する。bind しても tmpfs の影に隠れ、
+ *   codex が書く先は檻の中だけの空の道になる（母屋の道と食い違い、信頼も auth も消える）
+ * - `$HOME` そのものと、その祖先（`/` を含む）: 家ごと rw になり、fs.default: deny が飾りになる
+ * - `~/.honden` の下と、正本の在る dir: 本陣の正本を檻の中から書き換えられる
+ * - honden の repo の内・その祖先: repo の `.codex/hooks.json` と皮は門の繋ぎである。
+ *   rw になれば、檻の中から門を外せる
+ *
+ * **字面だけでなく実体（symlink を解いた道）でも判じる。** `~/.codex-a3 → ~/.honden` の
+ * ような別名を字面で見ると、どの拒みにも掛からぬまま、bwrap は別名の先（実体）を rw に
+ * bind する。ゆえに CODEX_HOME は実体に解き、守る側も字面と実体の両方を並べて比べる
+ * （`/tmp` や `$HOME` そのものが symlink の機もある）。道の要素に symlink が在ること
+ * そのものは拒まぬ——`/home → /var/home` のように家の祖先が symlink の機を巻き添えに
+ * するゆえ。bwrap が rw にするのは実体ゆえ、実体で比べれば足りる。解けぬ symlink
+ * （壊れた・輪になった）は実体が判ぜぬゆえ拒む。
+ */
+export function isolatedCodexHomeProblem(
+  path: string,
+  where: { home: string; dbDir?: string; repoRoot?: string },
+): string | null {
+  // 相対の道は判じられぬ。黙って / から解けば、守る物の実の在り処とずれて拒みが外れる。
+  // 呼ぶ側が絶対にし忘れた時に、黙って通さず拒む（cmd_225）。
+  const rel = relativeOf({ CODEX_HOME: path, home: where.home, dbDir: where.dbDir, repoRoot: where.repoRoot });
+  if (rel) return rel;
+  const real = realOrNearest(path);
+  if (real === null) return '解けぬ symlink（壊れておるか、輪になっておる）を道に持つ。実体が判ぜぬゆえ受けぬ';
+  const ps = [...new Set([canon(path), real])];
+  const forms = (x: string) => [...new Set([canon(x), realOrNearest(x) ?? canon(x)])];
+  const via = (p: string) => (p === canon(path) ? '' : `（実体: ${p}）`);
+  for (const p of ps) {
+    for (const t of forms('/tmp')) {
+      if (within(p, t)) return `/tmp の下である${via(p)}。檻は /tmp を tmpfs で専有するゆえ、bind しても隠れ、codex は母屋と違う空の道へ書く`;
+    }
+    for (const home of forms(where.home)) {
+      if (within(home, p)) {
+        return p === home
+          ? `$HOME そのものである${via(p)}。家ごと rw になり、fs の縛りが飾りになる`
+          : `$HOME（${home}）の祖先である${via(p)}。家ごと rw になり、fs の縛りが飾りになる`;
+      }
+    }
+    for (const d of [`${canon(where.home)}/.honden`, ...(where.dbDir ? [where.dbDir] : [])].flatMap(forms)) {
+      if (within(p, d) || within(d, p)) return `本陣の正本の在り処（${d}）に掛かる${via(p)}。檻の中から正本を書き換えられる`;
+    }
+    for (const r of where.repoRoot ? forms(where.repoRoot) : []) {
+      if (within(p, r) || within(r, p)) return `honden の repo（${r}）に掛かる${via(p)}。門の繋ぎ（.codex/hooks.json と皮）が檻の中から書ける`;
+    }
+  }
+  return null;
+}
+
+/**
+ * 道の実体（symlink を解いた道）。在らぬ区画は、いちばん近い在る祖先の実体に、残りの区画を
+ * 継いで返す（まだ作られておらぬ CODEX_HOME も、在る祖先の実体で判じられる）。在るのに
+ * 解けぬ区画（壊れた symlink・輪）が在れば null。隔離の判じと bind の両方がこの値を使い、
+ * 判じた道と bwrap へ渡す道を字面で一つに揃える。
+ */
+export function realOrNearest(path: string): string | null {
+  if (!path.startsWith('/')) return null; // 相対の道を / から解かぬ（判ぜぬ値として返す）
+  const parts = canon(path).split('/').filter((x) => x !== '');
+  for (let i = parts.length; i >= 0; i -= 1) {
+    const head = `/${parts.slice(0, i).join('/')}`;
+    let real: string;
+    try {
+      real = realpathSync(head);
+    } catch {
+      try {
+        lstatSync(head);
+        return null; // 在るのに解けぬ（壊れた symlink・輪）
+      } catch {
+        continue; // 在らぬ区画。祖先へ上る
+      }
+    }
+    return canon([real, ...parts.slice(i)].join('/'));
+  }
+  return null;
 }
 
 /**
@@ -209,20 +314,83 @@ export interface WrapOpts {
  *   rw の道に .git が在れば hooks と config を ro で重ねる（檻の中から
  *     pre-commit を仕込ませぬ・実測 罠1。commit そのものはできる）
  */
+/**
+ * 一つの檻が rw で持つ道と、ro で重ねる道（~ は展開済み。在る無しは問わぬ）。
+ * fsArgs（bwrap の引数）と、檻どうしの重なりの判じ（codexHomeSwappable）の両方がここから組む。
+ */
+export function cageWrites(
+  fs: { write: string[] },
+  cli: string | undefined,
+  home: string,
+  /** codex の足軽の実効の CODEX_HOME。在れば `~/.codex` に代えて rw、その packages を ro で重ねる */
+  codexHome?: string,
+): { rw: string[]; ro: string[] } {
+  const expand = (p: string) => (p.startsWith('~/') ? home + p.slice(1) : p);
+  const rw: string[] = fs.write.map(expand);
+  const ro: string[] = [];
+  // 足軽ごとの CODEX_HOME も、~/.codex と同じ守り（rw の上に packages を ro・#13 の封じ）で載せる
+  const need =
+    cli === 'codex' && codexHome ? { rw: [codexHome], ro: [`${codexHome}/packages`] } : cli ? CLI_WRITES[cli] : undefined;
+  if (need) {
+    rw.push(...need.rw.map(expand));
+    ro.push(...need.ro.map(expand));
+  }
+  return { rw, ro };
+}
+
+/**
+ * 判じてから檻が起こるまでの間に、CODEX_HOME（の実体）を差し替えうる檻が在るか。在れば訳を返す。
+ *
+ * **差し替えを打てるのは、檻の中の足軽が rw で持つ道だけと定める。** 足軽と本陣は同じ uid ゆえ、
+ * 檻の外の手（人・将軍）は数えぬ（檻の外では何でも書ける）。陣の全ての檻の rw の道と、
+ * CODEX_HOME の実体が重なれば——その道の内に在る（祖先ごと rename・symlink に差し替えられる）、
+ * その道と同じ（他の檻が中身を書き、packages を差し替えられる）、その道を内に持つ——止める。
+ *
+ * 己の檻の、己の CODEX_HOME の項だけは数えぬ。檻の中ではそこが bind の mount 点ゆえ、
+ * rename も rmdir も EBUSY で断られ、差し替えられぬ（実機の bwrap で確かめた・cmd_224）。
+ * 呼び手は、己の檻の rw をその項を除いて渡すこと。
+ */
+export function codexHomeSwappable(codexHome: string, cages: { who: string; rw: string[] }[]): string | null {
+  const rel = relativeOf({ CODEX_HOME: codexHome, ...Object.fromEntries(cages.flatMap((c) => c.rw.map((w, i) => [`${c.who} の rw[${i}]`, w]))) });
+  if (rel) return rel;
+  const real = realOrNearest(codexHome) ?? canon(codexHome);
+  for (const c of cages) {
+    for (const w of c.rw) {
+      const p = realOrNearest(w) ?? canon(w);
+      if (within(real, p) || within(p, real)) {
+        const how = real === p ? 'と同じ道である' : within(real, p) ? 'の内に在る' : 'を内に持つ';
+        return `${c.who} の檻が rw で持つ道（${p}）${how}。判じてから檻が起こるまでの間に、その檻の中から道を symlink 等に差し替えられる`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * `<CODEX_HOME>/packages` が symlink か。symlink なら訳を返す。packages が無い時は ro の bind が
+ * 飛ばされ、檻の中から packages を symlink として作れる（cmd_224 で確かめた）。次に起こす時の
+ * `--ro-bind` は symlink の先を ro で檻へ見せる——正本を読ませる形を塞ぐ。
+ */
+export function codexPackagesProblem(codexHome: string): string | null {
+  try {
+    if (lstatSync(`${canon(codexHome)}/packages`).isSymbolicLink()) {
+      return 'packages が symlink である。次の --ro-bind はその先（守る物かもしれぬ）を檻へ見せる';
+    }
+  } catch {
+    /* 無ければ問わぬ */
+  }
+  return null;
+}
+
 export function fsArgs(
   fs: { write: string[] },
   cli: string | undefined,
   exists: (p: string) => boolean,
   home: string,
+  /** codex の足軽の実効の CODEX_HOME。在れば `~/.codex` に代えて rw、その packages を ro で重ねる */
+  codexHome?: string,
 ): string[] {
-  const expand = (p: string) => (p.startsWith('~/') ? home + p.slice(1) : p);
-  const rw: string[] = fs.write.map(expand);
-  const ro: string[] = [];
-  const need = cli ? CLI_WRITES[cli] : undefined;
-  if (need) {
-    rw.push(...need.rw.map(expand));
-    ro.push(...need.ro.map(expand));
-  }
+  const { rw, ro } = cageWrites(fs, cli, home, codexHome);
   // tmpfs は ro の直後・rw の**前**。後に置くと /tmp 配下の rw 許しが
   // tmpfs の影に覆われて消える（実機 E2E が釣った・2026-09-03）
   const args = ['--ro-bind', '/', '/', '--tmpfs', '/tmp'];
@@ -249,25 +417,40 @@ export function wrapLaunch(
   opts: WrapOpts = {},
 ): { ok: true; cmd: string } | { ok: false; message: string } {
   if (cfg.level === 'none') return { ok: true, cmd: inner };
-  if (inner.includes("'")) {
-    return { ok: false, message: `起こす命に単引用が含まれ、包めぬ: ${inner}` };
-  }
+  // **命は argv の配列で組み、最後に一つの口（shellArg）で引用して連ねる。**
+  // 文を継ぎ足すと、bind の道（足軽ごとの CODEX_HOME・fs.write）に $(…)・backtick・; が
+  // 在れば、檻に入る前にホストの shell が解いて走らせる（#43 の再レビュー）。
+  // 内の命（`bash -lc '…'`）も同じ口を通る——命に単引用が在れば `'\''` で抜けて包み、
+  // 外の shell が解けば、元の命が一字違わず戻る。
   const exists = opts.exists ?? ((p: string) => require('node:fs').existsSync(p));
   const home = opts.home ?? require('node:os').homedir();
-  const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home).join(' ') : '--dev-bind / /';
+  const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home, opts.codexHome) : ['--dev-bind', '/', '/'];
+  const shellCmd = ['bash', '-lc', inner];
+  // 内の命（argv の最後）は、一語でも前どおり単引用で包む（pane に出る見た目を変えぬ）
+  const line = (argv: string[]) => ({
+    ok: true as const,
+    cmd: argv.map((a, i) => (i === argv.length - 1 ? shellQuote(a) : shellArg(a))).join(' '),
+  });
   if (!cfg.outbound && cfg.tcpPorts.length === 0) {
     // 外も要らぬなら pasta ごと要らぬ。bwrap が網を切る（空の loopback だけ残る）
-    return { ok: true, cmd: `bwrap ${binds} --die-with-parent --unshare-net -- bash -lc '${inner}'` };
+    return line(['bwrap', ...binds, '--die-with-parent', '--unshare-net', '--', ...shellCmd]);
   }
-  let core = `bash -lc '${inner}'`;
+  let core = shellCmd;
   if (cfg.tcpPorts.length > 0) {
     if (!cageBin) return { ok: false, message: '口の許し（tcp/<口>）には honden-cage が要るが、在り処が渡されておらぬ。' };
     // 檻が最も内側。pasta（母屋の隔て）→ bwrap（束ね）→ 檻（口の枷）→ CLI
-    const flags = cfg.tcpPorts.map((p) => `--tcp ${p}`).join(' ');
-    core = `${cageBin} ${flags} -- ${core}`;
+    core = [cageBin, ...cfg.tcpPorts.flatMap((p) => ['--tcp', String(p)]), '--', ...core];
   }
-  const bw = `bwrap ${binds} --die-with-parent -- ${core}`;
-  return { ok: true, cmd: `pasta --config-net -T none -U none --quiet -- ${bw}` };
+  return line(['pasta', '--config-net', '-T', 'none', '-U', 'none', '--quiet', '--', 'bwrap', ...binds, '--die-with-parent', '--', ...core]);
+}
+
+/**
+ * 包む命の引数を一つ、shell の引数として引用する。**引用の口はここ一つ**（中身は
+ * src/config.ts の shellQuote——env の前置きと同じ単引用の作法）。引用の要らぬ字
+ * （英数と `/ . _ - : = , @ % +`）だけの引数は素のまま返し、普段の命の見た目を変えぬ。
+ */
+export function shellArg(a: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 }
 
 /**

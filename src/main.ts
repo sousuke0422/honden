@@ -15,7 +15,7 @@ import { resolve as resolveIdentity, mayActAs, type Identity } from './identity'
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn, panes, type Pane, type TmuxRunner } from './pane';
 import { applyBorders } from './border';
-import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, type IsolationCfg } from './isolate';
+import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, isolatedCodexHomeProblem, realOrNearest, cageWrites, codexHomeSwappable, codexPackagesProblem, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
@@ -99,12 +99,12 @@ import { exportAll } from './export';
 import { serve as serveHttp, LOOPBACK, DASHBOARD_PORT } from './serve';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
-import { judge as guardJudge, judgeStructured as guardJudgeStructured, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS } from './guard';
+import { judge as guardJudge, judgeStructured as guardJudgeStructured, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS, type GateCheck } from './guard';
 import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
-import { get as configGet, load as configLoad, dig as configDig, SETTINGS_PATH_KEY } from './config';
+import { get as configGet, load as configLoad, dig as configDig, envOf as configEnvOf, codexHomeOf as configCodexHomeOf, SETTINGS_PATH_KEY } from './config';
 import { settingsPath as settingsPathOf } from './config';
 import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import {
@@ -694,6 +694,7 @@ const USAGE = `honden — 多エージェント運用の差配層
   honden roster                                        いまの顔ぶれ
   honden config                                        設定の在り処と上の段
   honden config get <鍵>                               設定を一つ引く（値だけ返す）
+  honden config env <名>                               その者を起こす命の頭に置く env（CODEX_HOME='…'）
   honden import [--root PATH] [--sub queue,saytask]   shogun の YAML を取り込む
   honden cmd new <<'EOF'                               司令を書く（将軍だけ）
     north_star: …
@@ -1433,13 +1434,94 @@ export function runGuardFacts(
 export const runGuardHookClaude = runGuardHookCodex;
 
 /**
+ * codex の門の行を、足軽ごとの信頼で作り直す。
+ *
+ * codex は未信頼の hook を**黙って飛ばす**。信頼の記録は各足軽の `CODEX_HOME` の
+ * `config.toml` に在り、足軽ごとに env で `CODEX_HOME` を分けておれば在り処も分かれる。
+ * 一つの `~/.codex` だけを見ると、別の在り処の足軽の門が死んでおっても「生きておる」と
+ * 言いうる。ゆえに codex で起こす足軽ごとに在り処を決め（env の `CODEX_HOME`、無ければ
+ * `~/.codex`）、同じ在り処の者をまとめて一行ずつ見る。どれか一つでも信頼を欠けば
+ * 「効いておらぬ」とする。
+ *
+ * 皮が据わっておらぬ・拒めぬ時は、信頼を見るまでもなく元の一行を返す。
+ * 名簿に codex の足軽が居らぬ（設定が読めぬを含む）時は、従来どおり `~/.codex` を見る。
+ */
+function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home: string): GateCheck[] {
+  if (!c.configured || !c.denies) return [c];
+  const cfg = `${base}/.codex/hooks.json`;
+  const fallback = join(home, '.codex');
+
+  // 名簿の設定から codex の足軽を引く。正本が無ければ作ってまで見ぬ。
+  // 在り処は codexHomeOf だけから引く——隔離の包みが rw で bind する先と同じ所である。
+  const agents: { id: string; codexHome?: string; bad?: string }[] = [];
+  const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+  if (path === ':memory:' || existsSync(path)) {
+    try {
+      const doc = configLoad(openStore({ path }));
+      if (doc.ok) {
+        const list = configDig(doc.doc, 'cli.agents');
+        for (const id of list.kind === 'branch' ? list.keys : []) {
+          const t = configDig(doc.doc, `cli.agents.${id}.type`);
+          if (t.kind !== 'scalar' || t.value !== 'codex') continue;
+          const ch = configCodexHomeOf(doc.doc, id, home);
+          if (!ch.ok) {
+            agents.push({ id, bad: ch.message.split('\n')[0] });
+            continue;
+          }
+          agents.push({ id, codexHome: ch.path });
+        }
+      }
+    } catch {
+      /* 設定が読めねば従来どおり ~/.codex だけを見る */
+    }
+  }
+
+  const rows: GateCheck[] = [];
+  for (const a of agents.filter((x) => x.bad)) {
+    rows.push({ cli: 'codex', configured: true, denies: false, note: `${a.id}: env の欄が誤っておる——${a.bad}` });
+  }
+  const groups = new Map<string, string[]>();
+  const good = agents.filter((x) => !x.bad);
+  if (good.length === 0 && agents.length === 0) groups.set(fallback, []);
+  for (const a of good) {
+    const h = a.codexHome ?? fallback;
+    groups.set(h, [...(groups.get(h) ?? []), a.id]);
+  }
+  for (const [h, ids] of groups) {
+    let trusted = false;
+    try {
+      trusted = readFileSync(join(h, 'config.toml'), 'utf8').includes(cfg);
+    } catch {
+      trusted = false;
+    }
+    const who = ids.length > 0 ? `${ids.join(', ')}（CODEX_HOME=${h}）` : `（名簿に codex の足軽が居らぬ。${h} を見た）`;
+    rows.push({
+      cli: 'codex',
+      configured: true,
+      denies: trusted,
+      note: trusted
+        ? who
+        : `${who} — **信頼の記録が無い。codex は未信頼の hook を黙って飛ばす**——その CODEX_HOME で対話で起こし、/hooks で信頼を与えよ`,
+    });
+  }
+  return rows;
+}
+
+/**
  * `honden guard selftest` — 門が生きておるかを、実際に叩いて確かめる。
  *
  * 据えた後に静かに消えるのが門の常である（信頼切れ・設定の書き換え・
  * 名簿の読み込み時期）。定期的に叩くほかない。
  */
-export function runGuardSelftest(root: string | undefined): RunResult {
+export function runGuardSelftest(
+  root: string | undefined,
+  dbPath?: string,
+  /** 試験の口。家の道（~ の在り処）。省けば os の homedir。 */
+  home: string = homedir(),
+): RunResult {
   const base = resolvePath(root ?? process.cwd());
+  // codex の信頼は門（src/guard.ts）の外で、足軽ごとに見る（下の codexRows）。
+  // 門の selftest へは信頼の口を渡さぬ——渡すと一つの ~/.codex だけで判じてしまう。
   const checks = guardSelftest({
     root: base,
     exists: (p) => existsSync(p),
@@ -1454,20 +1536,13 @@ export function runGuardSelftest(root: string | undefined): RunResult {
         return null;
       }
     },
-    codexTrusted: (cfg) => {
-      try {
-        const toml = readFileSync(join(homedir(), '.codex/config.toml'), 'utf8');
-        return toml.includes(cfg);
-      } catch {
-        return false;
-      }
-    },
   });
-  const lines = checks.map((c) => {
+  const rows = checks.flatMap((c) => (c.cli === 'codex' ? codexRows(c, base, dbPath, home) : [c]));
+  const lines = rows.map((c) => {
     const mark = c.denies ? '生きておる' : c.configured ? '**効いておらぬ**' : '据わっておらぬ';
     return `  ${c.cli.padEnd(7)} ${mark}${c.note ? `  — ${c.note}` : ''}`;
   });
-  const dead = checks.filter((c) => c.configured && !c.denies);
+  const dead = rows.filter((c) => c.configured && !c.denies);
   // 据わっておるのに効かぬのが最も危うい。据わっておらぬのは見れば分かるが、
   // 「据えたつもりで効いておらぬ」は静かである。
   return {
@@ -2021,18 +2096,112 @@ export function runIsolateShow(dbPath: string | undefined): RunResult {
 }
 
 /**
- * `honden isolate wrap --cmd '<命>'` — 一体を起こす命を、構えどおりに包んで返す。
+ * `honden isolate wrap --cmd '<命>' [--cli <CLI>] [--agent <名>]` — 一体を起こす命を、構えどおりに包んで返す。
  *
  * 出陣（scripts/shutsujin.sh）がここを通る。**設定が壊れておる・道具が無い・
  * 包めぬ、のいずれも非 0 で止まる**——裸のまま起こして「隔離したつもり」を作らぬ。
+ *
+ * `--agent` を渡されれば、codex の足軽の実効の CODEX_HOME を settings から引く
+ * （src/config.ts の codexHomeOf。selftest が信頼を読む先と同じ一つの所）。隔離の下では
+ * その道を rw・packages を ro で bind し、許せぬ道（isolatedCodexHomeProblem）なら止まる。
+ * 道を shell から運ばせず settings から引くのは、判じの所を一つに保ち、引用の崩れの口を
+ * 増やさぬためである。
  */
-export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefined, cli?: string): RunResult {
+export function runIsolateWrap(
+  dbPath: string | undefined,
+  cmd: string | undefined,
+  cli?: string,
+  agent?: string,
+  /** 試験の口。家の道（~ の在り処）。省けば os の homedir。 */
+  home: string = homedir(),
+  /**
+   * 試験の口。道具の在り処を引く（無ければ null）。省けば Bun.which で、本番はこれを使う。
+   * 道具の関所を試験から注ぎ替えるための口で、関所そのもの（無ければ止まる）は変えぬ。
+   * 試験は bwrap の在る無しに依らず、同じ判じを確かめられる（CI の機には bwrap が無い）。
+   */
+  which: (tool: string) => string | null = (tool) => Bun.which(tool),
+): RunResult {
   if (!cmd) return { code: EXIT_INVALID, err: '--cmd に起こす命を渡されよ。' };
   const db = openStore({ path: dbPath });
   const r = isolationOf(db);
   if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
+  let codexHome: string | undefined;
+  if (r.cfg.level === 'bwrap' && cli === 'codex' && agent) {
+    const loaded = configLoad(db);
+    if (loaded.ok) {
+      const ch = configCodexHomeOf(loaded.doc, agent, home);
+      if (!ch.ok) return { code: EXIT_INVALID, err: `  ${ch.message}` };
+      if (ch.custom) {
+        const dbFile = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+        const why = isolatedCodexHomeProblem(ch.path, {
+          home,
+          // 相対の道（--db・HONDEN_DB）は、正本を開く所（openStore。sqlite も 9p の検めも
+          // process の作業 dir を基に解く）と同じ基で絶対にしてから渡す。判じの側は相対を拒む。
+          ...(dbFile === ':memory:' ? {} : { dbDir: dirname(resolvePath(dbFile)) }),
+          // HONDEN_ROOT の環境で相対に置かれうるゆえ、同じく作業 dir を基に絶対にする
+          repoRoot: resolvePath(REPO_ROOT),
+        });
+        if (why) {
+          return {
+            code: EXIT_INVALID,
+            err:
+              `  ${agent} の CODEX_HOME（${ch.path}）は隔離の下で使えぬ——${why}。\n` +
+              `  $HOME の下の、本陣の正本にも honden の repo にも掛からぬ dir（例: ${home}/.codex-${agent}）へ置き直されよ。`,
+          };
+        }
+        // fs の縛りの下では、在らぬ道は bind されず黙って飛ばされる（src/isolate.ts の fsArgs）。
+        // codex が檻の中で auth も帳も書けぬまま起きるゆえ、起こす前に止める
+        if (r.cfg.fs && !existsSync(ch.path)) {
+          return {
+            code: EXIT_INVALID,
+            err:
+              `  ${agent} の CODEX_HOME（${ch.path}）が在らぬ。fs の縛りの下では在らぬ道は bind されず、codex が書けぬまま起きる。\n` +
+              `  先に mkdir -p で作り、その CODEX_HOME で codex を対話で起こして /hooks で信頼を与えられよ。`,
+          };
+        }
+        // 判じてから檻が起こるまでの差し替え（TOCTOU）。陣の全ての檻の rw の道と重なれば止める。
+        // 己の檻は、己の CODEX_HOME の項を除いて数える（mount 点ゆえ差し替えられぬ）。
+        // fs の縛りの無い（網だけの）隔離では、檻は / ごと rw ゆえ、この判じは意味を持たぬ。
+        if (r.cfg.fs) {
+          const fsCfg = r.cfg.fs;
+          const cages: { who: string; rw: string[] }[] = [];
+          const list = configDig(loaded.doc, 'cli.agents');
+          for (const id of list.kind === 'branch' ? list.keys : []) {
+            const t = configDig(loaded.doc, `cli.agents.${id}.type`);
+            const cliOf = t.kind === 'scalar' ? t.value : undefined;
+            if (id === agent) {
+              cages.push({ who: `${id}（己）`, rw: cageWrites(fsCfg, undefined, home).rw });
+              continue;
+            }
+            let other: string | undefined;
+            if (cliOf === 'codex') {
+              const oc = configCodexHomeOf(loaded.doc, id, home);
+              if (oc.ok && oc.custom) other = oc.path;
+            }
+            cages.push({ who: id, rw: cageWrites(fsCfg, cliOf, home, other).rw });
+          }
+          const swap = codexHomeSwappable(ch.path, cages) ?? codexPackagesProblem(realOrNearest(ch.path) ?? ch.path);
+          if (swap) {
+            return {
+              code: EXIT_INVALID,
+              err:
+                `  ${agent} の CODEX_HOME（${ch.path}）は隔離の下で使えぬ——${swap}。\n` +
+                `  どの足軽の檻も書かぬ dir（例: ${home}/.codex-${agent}。fs.write・各 CLI の書き道・他の足軽の CODEX_HOME の外）へ置き直されよ。` +
+                ' packages が symlink なら、消して dir として作り直されよ。',
+            };
+          }
+        }
+        // bind するのは、判じた実体の道そのもの（symlink を解いた道）。判じた値と bwrap へ
+        // 渡す値を字面で一つに揃える（cmd_222 で . の区画を拒んだのと同じ向き）。別名の
+        // symlink を後で差し替えられても、bind の先は判じた実体から動かぬ。
+        // 檻の中の codex は env の CODEX_HOME（別名）で開くが、ro の / に在る別名は、
+        // rw に bind した実体を指すゆえ、同じ dir に書く。
+        codexHome = realOrNearest(ch.path) ?? ch.path;
+      }
+    }
+  }
   for (const t of requiredTools(r.cfg)) {
-    if (!Bun.which(t)) {
+    if (!which(t)) {
       return { code: EXIT_INVALID, err: `  隔離に ${t} が要るが、道に無い。入れるか、isolation を外されよ。` };
     }
   }
@@ -2040,7 +2209,7 @@ export function runIsolateWrap(dbPath: string | undefined, cmd: string | undefin
   if (r.cfg.tcpPorts.length > 0 && !existsSync(cage)) {
     return { code: EXIT_INVALID, err: `  口の許し（tcp/<口>）には ${cage} が要る。bun run build:core で焼かれよ。` };
   }
-  const w = wrapLaunch(r.cfg, cmd, cage, { ...(cli ? { cli } : {}) });
+  const w = wrapLaunch(r.cfg, cmd, cage, { ...(cli ? { cli } : {}), ...(codexHome ? { codexHome } : {}), home });
   return w.ok ? { code: EXIT_OK, out: w.cmd } : { code: EXIT_INVALID, err: `  ${w.message}` };
 }
 
@@ -2303,6 +2472,17 @@ export function runConfig(dbPath: string | undefined, key: string | undefined): 
     };
   }
   const r = configGet(db, key);
+  return r.ok ? { code: EXIT_OK, out: r.value } : { code: EXIT_INVALID, err: r.message };
+}
+
+/**
+ * `honden config env <名>` — その足軽を起こす命の頭に置く env の前置き（`CODEX_HOME='…'`）。
+ * 無ければ空を返す。名が外れておれば非ゼロで止まる——出陣と立て直しは、起こす前に
+ * これを引いて止まる。値は shell の単引用で包んである（src/config.ts の shellQuote）。
+ */
+export function runConfigEnv(dbPath: string | undefined, agent: string): RunResult {
+  const db = openStore({ path: dbPath });
+  const r = configEnvOf(db, agent);
   return r.ok ? { code: EXIT_OK, out: r.value } : { code: EXIT_INVALID, err: r.message };
 }
 
@@ -3013,7 +3193,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
       });
       return emit(r.ok ? { code: EXIT_OK, out: r.value } : r.result);
     }
-    if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root']));
+    if (rest[1] === 'selftest') return emit(runGuardSelftest(flags['root'], dbPath));
     return emit({ code: EXIT_INVALID, err: 'guard check --cmd / guard hook cursor|codex|claude / guard grant / guard charter[s] / guard charter-revoke / guard appeal / guard facts / guard denials / guard selftest のいずれかである' });
   }
 
@@ -3155,6 +3335,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
 
   if (rest[0] === 'config') {
     if (rest[1] === 'get') return emit(runConfig(dbPath, rest[2] ?? ''));
+    if (rest[1] === 'env') return emit(runConfigEnv(dbPath, rest[2] ?? ''));
     return emit(runConfig(dbPath, undefined));
   }
 
@@ -3206,7 +3387,7 @@ function notifyAfterNudge(dbPath: string | undefined): void {
   }
 
   if (rest[0] === 'isolate') {
-    if (rest[1] === 'wrap') { const c = flags['cmd']; const cl = flags['cli']; delete flags['cmd']; delete flags['cli']; return emit(runIsolateWrap(dbPath, c, cl)); }
+    if (rest[1] === 'wrap') { const c = flags['cmd']; const cl = flags['cli']; const ag = flags['agent']; delete flags['cmd']; delete flags['cli']; delete flags['agent']; return emit(runIsolateWrap(dbPath, c, cl, ag)); }
     if (rest[1] === 'check') return emit(await runIsolateCheck(dbPath));
     return emit(runIsolateShow(dbPath));
   }

@@ -67,12 +67,16 @@ MODEL="${NEW_MODEL:-$CUR_MODEL}"
 
 info "$AGENT ($PANE): ${CUR_TYPE}/${CUR_MODEL} → ${TYPE}/${MODEL}"
 
+# 足軽ごとの env の前置き（`CODEX_HOME='…'`）。出陣の launch_cmd と同じ口から引く。
+# 名が外れておれば、抜けさせる前に止まる（立て直しの途中で止まると pane が空く）。
+ENVS=$(HONDEN_DB="$DB" "$HONDEN" config env "$AGENT") || die "$AGENT の env の欄が誤っておる。settings.yaml を直されよ（何も替えておらぬ）"
+
 launch_cmd() {
   case "$TYPE" in
-    claude)   echo "claude${MODEL:+ --model $MODEL} --dangerously-skip-permissions" ;;
-    cursor)   echo "cursor-agent --yolo${MODEL:+ --model $MODEL}" ;;
-    codex)    echo "codex${MODEL:+ --model $MODEL} --search --dangerously-bypass-approvals-and-sandbox --no-alt-screen" ;;
-    opencode) echo "opencode${MODEL:+ --model $MODEL}" ;;
+    claude)   echo "${ENVS:+$ENVS }claude${MODEL:+ --model $MODEL} --dangerously-skip-permissions" ;;
+    cursor)   echo "${ENVS:+$ENVS }cursor-agent --yolo${MODEL:+ --model $MODEL}" ;;
+    codex)    echo "${ENVS:+$ENVS }codex${MODEL:+ --model $MODEL} --search --dangerously-bypass-approvals-and-sandbox --no-alt-screen" ;;
+    opencode) echo "${ENVS:+$ENVS }opencode${MODEL:+ --model $MODEL}" ;;
     *)        echo "" ;;
   esac
 }

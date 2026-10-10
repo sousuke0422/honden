@@ -148,18 +148,45 @@ roster_of() {
 
 cli_of()   { HONDEN_DB="$DB" "$HONDEN_BIN" config get "cli.agents.$1.type"  2>/dev/null; }
 model_of() { HONDEN_DB="$DB" "$HONDEN_BIN" config get "cli.agents.$1.model" 2>/dev/null; }
+# 足軽ごとの env の前置き（`CODEX_HOME='…'`）。値は honden が単引用で包んで返す。
+# 名が外れておれば非ゼロ——陣を立てる前に env_check で止まる（launch_cmd は $( ) で
+# 受けられるゆえ、中で止まっても親は進む。検めは外で先に済ませる）。
+env_of()   { HONDEN_DB="$DB" "$HONDEN_BIN" config env "$1"; }
 
 # 一体を起こす命。旧 lib/cli_adapter.sh の build_cli_command を移した。
 launch_cmd() {
-  local agent="$1" cli model
+  local agent="$1" cli model envs
   cli=$(cli_of "$agent"); model=$(model_of "$agent")
+  envs=$(env_of "$agent" 2>/dev/null)
   case "$cli" in
-    claude)   echo "claude${model:+ --model $model} --dangerously-skip-permissions" ;;
-    cursor)   echo "cursor-agent --yolo${model:+ --model $model}" ;;
-    codex)    echo "codex${model:+ --model $model} --search --dangerously-bypass-approvals-and-sandbox --no-alt-screen" ;;
-    opencode) echo "opencode${model:+ --model $model}" ;;
+    claude)   echo "${envs:+$envs }claude${model:+ --model $model} --dangerously-skip-permissions" ;;
+    cursor)   echo "${envs:+$envs }cursor-agent --yolo${model:+ --model $model}" ;;
+    codex)    echo "${envs:+$envs }codex${model:+ --model $model} --search --dangerously-bypass-approvals-and-sandbox --no-alt-screen" ;;
+    opencode) echo "${envs:+$envs }opencode${model:+ --model $model}" ;;
     *)        echo "" ;;
   esac
+}
+
+# 召喚する全員の env を先に検める。一人でも外れておれば、誰も起こさずに止まる
+# （半分だけ起こした陣は、どれが新しい env で起きたかが分からぬ）。
+#
+# 隔離の包みも、ここで全員ぶんを先に試す。包みは足軽ごとの CODEX_HOME を見て、隔離の下で
+# 許せぬ道なら断る（src/main.ts の runIsolateWrap）。召喚の途中で断られると、先に起こした
+# 者だけが立った陣になる。
+env_check() {
+  local a msg bad=0
+  for a in "$@"; do
+    if ! msg=$(env_of "$a" 2>&1 >/dev/null); then
+      warn "$a: env の欄が誤っておる——${msg:-理由が返らぬ}"
+      bad=1
+      continue
+    fi
+    if ! msg=$(HONDEN_DB="$DB" "$HONDEN_BIN" isolate wrap --cmd true --cli "$(cli_of "$a")" --agent "$a" 2>&1 >/dev/null); then
+      warn "$a: 隔離の包みに失敗した——${msg:-理由が返らぬ}"
+      bad=1
+    fi
+  done
+  return "$bad"
 }
 
 # 起こす命を隔離の構えで包む。既定（isolation 無し）は素通し。
@@ -169,7 +196,7 @@ launch_cmd() {
 # 続いた（bats が釣った・2026-09-02）。失敗は戻り値で返し、呼び手が die する。
 wrap_launch() {
   local wrapped rc
-  wrapped=$(HONDEN_DB="$DB" "$HONDEN_BIN" isolate wrap --cmd "$1" ${2:+--cli "$2"}); rc=$?
+  wrapped=$(HONDEN_DB="$DB" "$HONDEN_BIN" isolate wrap --cmd "$1" ${2:+--cli "$2"} ${3:+--agent "$3"}); rc=$?
   [ "$rc" -ne 0 ] && return 1
   # 贋の honden（試験）が空を返す時は包まず素通し。実物は none でも命を返す
   [ -n "$wrapped" ] && echo "$wrapped" || echo "$1"
@@ -212,6 +239,8 @@ up() {
   order+=("${rest[@]}")
   for a in "${agents[@]}"; do [ "$a" = gunshi ] && order+=("$a"); done
   ok "顔ぶれ ${#order[@]} 体（+ 将軍）"
+  # 足軽ごとの env を、陣を立てる前に検める。外れておれば陣も立てず、誰も起こさぬ。
+  env_check shogun "${order[@]}" || die "env の欄か隔離の包みに落ちた者が居る。settings.yaml を直してから出陣されよ（陣は立てておらぬ。裸では起こさぬ）"
 
   # ── 本陣（将軍）──
   #
@@ -291,7 +320,7 @@ up() {
   fi
   cmd=$(launch_cmd shogun)
   if [ -n "$cmd" ]; then
-    cmd=$(wrap_launch "$cmd" "$(cli_of shogun)") || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
+    cmd=$(wrap_launch "$cmd" "$(cli_of shogun)" shogun) || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
   fi
   if [ "$made_shogun" = 1 ] && [ -n "$cmd" ]; then
     tmux send-keys -t "$SESSION_SHOGUN:main" "$cmd"; sleep 0.3
@@ -306,7 +335,7 @@ up() {
   for ((i = 0; made_agents == 1 && i < ${#order[@]} && i < ${#ids[@]}; i++)); do
     cmd=$(launch_cmd "${order[$i]}")
     [ -n "$cmd" ] || { warn "${order[$i]}: 知らぬ CLI ゆえ起こさぬ"; continue; }
-    cmd=$(wrap_launch "$cmd" "$(cli_of "${order[$i]}")") || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
+    cmd=$(wrap_launch "$cmd" "$(cli_of "${order[$i]}")" "${order[$i]}") || die "隔離の包みに失敗した。裸では起こさぬ（理由は上の報せ）"
     tmux send-keys -t "${ids[$i]}" "$cmd"; sleep 0.3
     tmux send-keys -t "${ids[$i]}" Enter
     info "$(label_of "${order[$i]}") … $(cli_of "${order[$i]}") / $(model_of "${order[$i]}")"
