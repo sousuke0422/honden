@@ -30,6 +30,7 @@
 
 import type { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
+import { type Cli, isCli } from './rosteredit';
 import { getSetting } from './settings';
 
 export const SETTINGS_PATH_KEY = 'settings_path';
@@ -216,11 +217,61 @@ export function codexHomeOf(
   return v === undefined ? { ok: true, path: `${home}/.codex`, custom: false } : { ok: true, path: v, custom: true };
 }
 
-/** honden の CLI の名から、hindsight の hook が設定の harnesses の節を引く名へ（0.7.0 の hook の harness）。 */
-const HINDSIGHT_HARNESS: Record<string, string> = { claude: 'claude-code', codex: 'codex', cursor: 'cursor-cli' };
+/**
+ * honden の CLI の名から、hindsight の hook が設定の harnesses の節を引く名へ（0.7.0 の hook の harness）。
+ *
+ * `Record<Cli, string>` ゆえ、LAUNCHABLE_CLIS に CLI を足して名を足し忘れれば tsc が落ちる。
+ * 名の出所（hindsight-coding-agents@0.7.0 の dist）: claude-code・codex・cursor-cli は各 hook が
+ * loadConfig へ渡す harness、opencode は dist/index.js の `createPluginEntry("opencode")`（opencode v1 が
+ * package.json の main から引く plugin）。`opencode2` は別の CLI（v2 の `opencode2`）が根の index.js から
+ * 引く plugin の名で、honden が起こす `opencode` には効かぬ。
+ */
+export const HINDSIGHT_HARNESS: Record<Cli, string> = {
+  claude: 'claude-code',
+  cursor: 'cursor-cli',
+  codex: 'codex',
+  opencode: 'opencode',
+};
 
 /** 0.7.0 の resolveConfig が Cloud へ向かわぬ serverMode（daemon は 127.0.0.1 の手元の server）。 */
 const HINDSIGHT_LOCAL_MODES = ['self-hosted', 'daemon'];
+
+const isMap = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** serverMode の値が Cloud へ向かうなら訳（向かわぬなら null）。 */
+function modeProblem(mode: unknown): string | null {
+  if (typeof mode === 'string' && HINDSIGHT_LOCAL_MODES.includes(mode)) return null;
+  return mode === undefined ? 'serverMode が無い' : mode === 'cloud' ? 'serverMode が cloud である' : 'serverMode が self-hosted・daemon のどれでもない';
+}
+
+/** apiUrl の値が自前の server を指さぬなら訳（指すなら null）。値そのものは訳に載せぬ。 */
+function urlProblem(url: unknown): string | null {
+  if (typeof url !== 'string' || url.trim() === '') return 'apiUrl が無い';
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return 'apiUrl が URL として読めぬ';
+  }
+  return host === 'vectorize.io' || host.endsWith('.vectorize.io') ? 'apiUrl が Cloud（vectorize.io）を指す' : null;
+}
+
+/**
+ * banks の写像の節を一つずつ検める。applyBankConfig は効く bank の節を、serverMode・apiUrl を
+ * 除かずに上へ重ねる（BANK_OVERRIDE_EXCLUDED に無い）。どの bank が効くかは作業の dir で決まるゆえ、
+ * 全ての節を見る。節が書いた鍵だけが重なる（resolvePartial）ゆえ、書いた鍵だけを判じる。
+ */
+function banksProblem(where: string, banks: unknown, fix: string): string | null {
+  if (banks === undefined) return null;
+  if (!isMap(banks)) return `${where} が写像（{…}）でなく、節を判じられぬ。Cloud へ向ける節を見落としうる。${fix}`;
+  for (const [id, sec] of Object.entries(banks)) {
+    if (!isMap(sec)) continue;
+    const name = `${where}.${id}`;
+    const why = ('serverMode' in sec ? modeProblem(sec['serverMode']) : null) ?? ('apiUrl' in sec ? urlProblem(sec['apiUrl']) : null);
+    if (why) return `${name} の節の ${why}。この bank へ書く時、hook は Cloud へ送る。${fix}`;
+  }
+  return null;
+}
 
 /**
  * HINDSIGHT_CONFIG の file が、hindsight の hook を自前の server へ向けるかを検める。向けぬなら訳。
@@ -229,7 +280,9 @@ const HINDSIGHT_LOCAL_MODES = ['self-hosted', 'daemon'];
  * 既定の送り先（Cloud）へ会話を送る。読めても、効く serverMode が self-hosted・daemon でなければ
  * cloud となり、self-hosted でも apiUrl が無ければ Cloud の URL になる（resolveConfig）。
  * 効く値は、上の段に harnesses.<harness> の節を重ねた物（applyLayer）ゆえ、足軽の CLI の
- * harness の節まで重ねて見る。
+ * harness の節まで重ねて見る。CLI の harness の名が分からねば（type が無い・表に無い）、
+ * file に harnesses の鍵が在る限りどの節が効くか判じられぬゆえ止める。
+ * さらに banks.<id> と harnesses.<harness>.banks.<id> の節も、同じ判じにかける（banksProblem）。
  *
  * **見るのは serverMode と apiUrl の二つの名だけ。** apiToken（鍵）は読まず出さぬ。訳の文には
  * file の中の値を載せぬ（壊れた JSON の例外の文は値の一部を含みうるゆえ使わず、文を自分で組む）。
@@ -253,43 +306,31 @@ export function hindsightConfigProblem(path: string, cli: string | undefined): s
   } catch {
     return `JSON として開けぬ。${cloud}。${fix}`;
   }
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+  if (!isMap(raw)) {
     return `JSON の写像（{…}）でない。${cloud}。${fix}`;
   }
+  const top = raw;
+  const harness = cli !== undefined && isCli(cli) ? HINDSIGHT_HARNESS[cli] : undefined;
+  if (harness === undefined && 'harnesses' in top) {
+    const what = cli === undefined ? 'type が無い' : `type（${cli}）が harness の名の表に無い`;
+    const how = cli === undefined ? 'type を書く' : 'type を表に在る CLI にする';
+    return `${what}ゆえ harness の名が分からぬ。HINDSIGHT_CONFIG の harnesses の節のどれが効くかを判じられず、Cloud へ向ける節を見落としうる。${how}か、file から harnesses の節を除かれよ`;
+  }
   // 上の段に、足軽の CLI の harness の節を重ねる（mergeRaw と同じく、節の鍵が勝つ）
-  const top = raw as Record<string, unknown>;
-  const harness = cli ? HINDSIGHT_HARNESS[cli] : undefined;
   const sections = top['harnesses'];
-  const per =
-    harness && sections && typeof sections === 'object' && !Array.isArray(sections)
-      ? (sections as Record<string, unknown>)[harness]
-      : undefined;
-  const pick = (key: string) =>
-    per && typeof per === 'object' && !Array.isArray(per) && key in (per as Record<string, unknown>)
-      ? (per as Record<string, unknown>)[key]
-      : top[key];
+  const per = harness && isMap(sections) && isMap(sections[harness]) ? sections[harness] : undefined;
+  const pick = (key: string) => (per && key in per ? per[key] : top[key]);
   const mode = pick('serverMode');
-  const via = harness && per ? `（harnesses.${harness} の節を重ねた値）` : '';
-  if (typeof mode !== 'string' || !HINDSIGHT_LOCAL_MODES.includes(mode)) {
-    const said = mode === undefined ? 'serverMode が無い' : mode === 'cloud' ? 'serverMode が cloud である' : 'serverMode が self-hosted・daemon のどれでもない';
-    return `${said}${via}。hook は Cloud へ送る。${fix}`;
-  }
+  const via = per ? `（harnesses.${harness} の節を重ねた値）` : '';
+  const bad = modeProblem(mode);
+  if (bad) return `${bad}${via}。hook は Cloud へ送る。${fix}`;
   if (mode === 'self-hosted') {
-    const url = pick('apiUrl');
-    if (typeof url !== 'string' || url.trim() === '') {
-      return `serverMode が self-hosted だが apiUrl が無い${via}。hook は既定の Cloud の URL へ送る。${fix}`;
-    }
-    let host = '';
-    try {
-      host = new URL(url).hostname;
-    } catch {
-      return `apiUrl が URL として読めぬ${via}。Cloud へ落ちうる形は受けぬ。${fix}`;
-    }
-    if (host === 'vectorize.io' || host.endsWith('.vectorize.io')) {
-      return `apiUrl が Cloud（vectorize.io）を指す${via}。${fix}`;
-    }
+    const why = urlProblem(pick('apiUrl'));
+    if (why === 'apiUrl が無い') return `serverMode が self-hosted だが apiUrl が無い${via}。hook は既定の Cloud の URL へ送る。${fix}`;
+    if (why === 'apiUrl が URL として読めぬ') return `${why}${via}。Cloud へ落ちうる形は受けぬ。${fix}`;
+    if (why) return `${why}${via}。${fix}`;
   }
-  return null;
+  return banksProblem('banks', top['banks'], fix) ?? (per ? banksProblem(`harnesses.${harness}.banks`, per['banks'], fix) : null);
 }
 
 /** 起こす命の頭に置く代入の並び（`CODEX_HOME='…' `の形）。env が無ければ空。 */

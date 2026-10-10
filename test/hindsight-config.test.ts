@@ -13,7 +13,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, tx } from '../src/store';
 import { setSetting } from '../src/settings';
-import { SETTINGS_PATH_KEY } from '../src/config';
+import { HINDSIGHT_HARNESS, SETTINGS_PATH_KEY } from '../src/config';
+import { LAUNCHABLE_CLIS } from '../src/rosteredit';
 import { runConfigEnv } from '../src/main';
 
 const BASE = mkdtempSync(join(tmpdir(), 'honden-hindsight-config-'));
@@ -110,5 +111,115 @@ describe('陽性対照', () => {
     const db = store(agent('ashigaru1', 'claude') + `    ashigaru2:\n      type: codex\n      env:\n        CODEX_HOME: /home/me/.codex-a2\n`);
     expect(runConfigEnv(db, 'ashigaru1')).toEqual({ code: 0, out: '' });
     expect(runConfigEnv(db, 'ashigaru2')).toEqual({ code: 0, out: `CODEX_HOME='/home/me/.codex-a2'` });
+  });
+});
+
+describe('opencode の足軽にも harness の節（opencode）を重ねる', () => {
+  // 上の段は self-hosted、harnesses.opencode だけが Cloud へ向ける
+  const body = JSON.stringify({
+    serverMode: 'self-hosted',
+    apiUrl: 'http://127.0.0.1:8888',
+    apiToken: FAKE_TOKEN,
+    harnesses: { opencode: { serverMode: 'cloud' } },
+  });
+
+  test('(1) harnesses.opencode が cloud なら opencode の足軽は非ゼロ', () => {
+    stopped(runConfigEnv(store(agent('ashigaru6', 'opencode', cfgFile(body))), 'ashigaru6'), 'harnesses.opencode', 'opencode cloud');
+  });
+
+  test('(2) 陽性対照: harnesses.opencode が self-hosted なら code=0', () => {
+    const ok = cfgFile(
+      JSON.stringify({
+        serverMode: 'self-hosted',
+        apiUrl: 'http://127.0.0.1:8888',
+        apiToken: FAKE_TOKEN,
+        harnesses: { opencode: { serverMode: 'self-hosted', apiUrl: 'http://hs.lan:8888' } },
+      }),
+    );
+    const r = runConfigEnv(store(agent('ashigaru6', 'opencode', ok)), 'ashigaru6');
+    expect(r).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${ok}'` });
+  });
+
+  test('(3) 同じ file でも codex の足軽には opencode の節は効かぬ（code=0）', () => {
+    const r = runConfigEnv(store(agent('ashigaru4', 'codex', cfgFile(body))), 'ashigaru4');
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test('(4) 対応表が LAUNCHABLE_CLIS を覆い、名が 0.7.0 の源に在る harness の名である', () => {
+    // hindsight-coding-agents@0.7.0 の dist で harness として渡る名（claude-hook.js 等と
+    // dist/index.js の createPluginEntry("opencode")）。opencode2 は別の CLI（v2）の名ゆえ載せぬ。
+    const known = ['claude-code', 'codex', 'cursor-cli', 'opencode'];
+    for (const cli of LAUNCHABLE_CLIS) {
+      expect(HINDSIGHT_HARNESS[cli], cli).toBeString();
+      expect(known, cli).toContain(HINDSIGHT_HARNESS[cli]);
+    }
+    expect(Object.keys(HINDSIGHT_HARNESS).sort()).toEqual([...LAUNCHABLE_CLIS].sort());
+  });
+});
+
+describe('harness の名が分からぬ足軽', () => {
+  const noType = (id: string, cfg: string) => `    ${id}:\n      env:\n        HINDSIGHT_CONFIG: ${JSON.stringify(cfg)}\n`;
+
+  test('(5) type が無く、file に harnesses の鍵が在れば非ゼロ', () => {
+    const p = cfgFile(
+      JSON.stringify({
+        serverMode: 'self-hosted',
+        apiUrl: 'http://127.0.0.1:8888',
+        apiToken: FAKE_TOKEN,
+        harnesses: { 'claude-code': { serverMode: 'cloud' } },
+      }),
+    );
+    stopped(runConfigEnv(store(noType('ashigaru7', p)), 'ashigaru7'), 'harness の名が分からぬ', 'type 無し');
+    // 表に無い CLI（設定は type: kimi を受ける）も同じ。harnesses が空の写像でも鍵が在れば止める
+    stopped(runConfigEnv(store(agent('ashigaru8', 'kimi', p)), 'ashigaru8'), 'harness の名が分からぬ', 'kimi');
+    const empty = cfgFile(JSON.stringify({ serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888', harnesses: {} }));
+    stopped(runConfigEnv(store(agent('ashigaru8', 'kimi', empty)), 'ashigaru8'), 'harness の名が分からぬ', 'kimi 空の harnesses');
+  });
+
+  test('(5) type が無くても、harnesses の鍵が無ければ今どおり（code=0）', () => {
+    const p = cfgFile(JSON.stringify({ serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888', apiToken: FAKE_TOKEN }));
+    expect(runConfigEnv(store(noType('ashigaru7', p)), 'ashigaru7')).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${p}'` });
+    expect(runConfigEnv(store(agent('ashigaru8', 'kimi', p)), 'ashigaru8')).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${p}'` });
+  });
+});
+
+describe('banks.<id> の節も同じ判じにかける（applyBankConfig は serverMode・apiUrl を除かず重ねる）', () => {
+  const top = { serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888', apiToken: FAKE_TOKEN };
+  const bad = [
+    ['serverMode が cloud', { serverMode: 'cloud' }, 'serverMode'],
+    ['serverMode が知らぬ値', { serverMode: 'bogus' }, 'serverMode'],
+    ['serverMode が null', { serverMode: null }, 'serverMode'],
+    ['apiUrl が Cloud', { apiUrl: 'https://api.hindsight.vectorize.io' }, 'apiUrl'],
+    ['apiUrl が URL でない', { apiUrl: 'not a url' }, 'apiUrl'],
+    ['apiUrl が null', { apiUrl: null }, 'apiUrl'],
+  ] as const;
+
+  test('(6) 上の段の banks.x が Cloud へ向ければ、節の名を名指しして非ゼロ', () => {
+    for (const [label, sec, said] of bad) {
+      const p = cfgFile(JSON.stringify({ ...top, banks: { x: { ...sec, apiToken: FAKE_TOKEN } } }));
+      const r = runConfigEnv(store(agent('ashigaru3', 'claude', p)), 'ashigaru3');
+      stopped(r, 'banks.x', label);
+      expect(r.err, label).toContain(said);
+    }
+  });
+
+  test('(6) harnesses.<harness>.banks.x も同じ（claude は claude-code、opencode は opencode）', () => {
+    for (const [cli, harness] of [['claude', 'claude-code'], ['opencode', 'opencode']] as const) {
+      for (const [label, sec, said] of bad) {
+        const p = cfgFile(JSON.stringify({ ...top, harnesses: { [harness]: { banks: { x: sec } } } }));
+        const r = runConfigEnv(store(agent('ashigaru3', cli, p)), 'ashigaru3');
+        stopped(r, `harnesses.${harness}.banks.x`, `${cli} ${label}`);
+        expect(r.err, label).toContain(said);
+      }
+    }
+  });
+
+  test('(7) 陽性対照: banks.x が自前の値だけを持てば code=0（上の段も harness の節も）', () => {
+    const sec = { serverMode: 'self-hosted', apiUrl: 'http://hs.lan:8888', apiToken: FAKE_TOKEN, bankIdTemplate: '{repo}' };
+    const p = cfgFile(
+      JSON.stringify({ ...top, banks: { x: sec, y: { serverMode: 'daemon' }, z: { retainTags: ['a'] } }, harnesses: { 'claude-code': { banks: { x: sec } } } }),
+    );
+    const r = runConfigEnv(store(agent('ashigaru3', 'claude', p)), 'ashigaru3');
+    expect(r).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${p}'` });
   });
 });
