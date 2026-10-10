@@ -87,6 +87,21 @@ describe('env の欄を読む（agentEnv）', () => {
     }
   });
 
+  test('CODEX_HOME の . の区画も止める（/./ を挟んで隔離の拒みの前方一致を外させぬ）', () => {
+    for (const v of ['/home/me/./.honden', '/srv/./honden/.codex', '/./tmp/x', '/home/./me', '/home/me/.codex-x/.']) {
+      const r = agentEnv({ cli: { agents: { a: { env: { CODEX_HOME: v } } } } }, 'a');
+      expect(r.ok, v).toBe(false);
+      if (!r.ok) {
+        expect(r.message, v).toContain('. の区画');
+        expect(r.message, v).toContain('$HOME を展開した絶対の道');
+      }
+    }
+    // 陽性対照: . で始まる名の dir（.codex-a3・.codexfoo・.codex）は区画ではないゆえ通る
+    for (const v of ['/home/me/.codex-a3', '/home/me/.codexfoo', '/home/me/x/.codex']) {
+      expect(agentEnv({ cli: { agents: { a: { env: { CODEX_HOME: v } } } } }, 'a'), v).toEqual({ ok: true, env: [['CODEX_HOME', v]] });
+    }
+  });
+
   test('写像でない形・文でない値・制御の字は止める', () => {
     expect(agentEnv(y('cli:\n  agents:\n    a:\n      env: [CODEX_HOME]\n'), 'a').ok).toBe(false);
     expect(agentEnv(y('cli:\n  agents:\n    a:\n      env: CODEX_HOME=/x\n'), 'a').ok).toBe(false);

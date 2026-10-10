@@ -112,6 +112,13 @@ const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
  * **`..` は畳まずに止める。** 字面で畳むと、symlink を越える道で実の在り処とずれうる
  * （`/a/link/../b` の `..` は、shell では字面で、kernel では link の先で解かれる）。
  * 畳まずに受ける形を一つに絞れば、selftest が読む先と codex が開く先は必ず同じになる。
+ *
+ * **`.` の区画も畳まずに止める。** `.` は kernel でも shell でも同じく解かれ、在り処は
+ * ずれぬ。だが畳まずに通すと、隔離の下の拒み（src/isolate.ts の isolatedCodexHomeProblem。
+ * `/tmp`・`$HOME`・`~/.honden`・repo を前方一致で見る）が `/home/me/./.honden` のように
+ * `/./` を挟むだけで外れる。畳んで判じる形（canon で均す）にはせぬ——env に載る値と、
+ * 判じ・bind に使う値が二つの形になり、どちらが本当の道かを読む者が取り違えるため。
+ * 受ける形を「`/` で始まり、`.` も `..` も区画に持たぬ道」一つに絞る。
  */
 const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
   CODEX_HOME: (v) => {
@@ -119,8 +126,12 @@ const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
     if (!v.startsWith('/')) {
       return `絶対の道（/ で始まる）で書かれよ: ${JSON.stringify(v)}。値は単引用で載るゆえ ~ も $HOME も展開されず、相対の道は起こした dir で先が変わる。${fix}`;
     }
-    if (v.split('/').includes('..')) {
+    const parts = v.split('/');
+    if (parts.includes('..')) {
       return `.. を含む: ${JSON.stringify(v)}。畳むと symlink を越えて実の在り処とずれうるゆえ受けぬ。${fix}`;
+    }
+    if (parts.includes('.')) {
+      return `. の区画を含む: ${JSON.stringify(v)}。/./ を挟むと隔離の拒み（/tmp・$HOME・~/.honden・repo）が前方一致で外れるゆえ、畳まぬ形だけを受ける。${fix}`;
     }
     return null;
   },

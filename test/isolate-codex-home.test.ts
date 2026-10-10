@@ -6,7 +6,7 @@
  * 止まり、通る形を撃てぬ。
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { openStore, tx } from '../src/store';
 import { setSetting } from '../src/settings';
@@ -209,5 +209,61 @@ describe('(5) selftest が見る道と、檻の中で codex が書く道は同�
     expect(seen).toBe(h);
     expect(bound).toBe(h);
     expect(line).toContain('生きておる');
+  });
+});
+
+describe('(A) 包んだ命の引数は、どんな字面でもホストの shell に解かれず元のまま bwrap に渡る', () => {
+  // 実在の dir を、置換・backtick・; ・単引用・空白・$ を含む名で使い捨ての家の下に作る。
+  // 包んだ命を bash に解かせ、argv を書き出すだけの贋の bwrap で受ける。印の file は
+  // 使い捨ての dir（cwd）の中にだけ出来うる形にしてある（; の後ろは在らぬ命の名）。
+  const WEIRD = "cx a$b 'q' $(touch mark1) ;zzhonden_nocmd `touch mark2`";
+
+  /** 包んだ命を bash に解かせ、贋の bwrap が受けた argv と、cwd に出来た file を返す。 */
+  function runWrapped(cmd: string): { argv: string[]; made: string[] } {
+    const box = mkdtempSync(join(BASE, 'box-'));
+    const bin = join(box, 'bin');
+    mkdirSync(bin);
+    const out = join(box, 'argv.bin');
+    writeFileSync(join(bin, 'bwrap'), `#!/bin/bash\nfor a in "$@"; do printf '%s\\0' "$a"; done > "$ARGV_OUT"\n`);
+    chmodSync(join(bin, 'bwrap'), 0o755);
+    const cwd = join(box, 'cwd');
+    mkdirSync(cwd);
+    Bun.spawnSync(['bash', '-c', cmd], { cwd, env: { PATH: `${bin}:/usr/bin:/bin`, ARGV_OUT: out, HOME } });
+    const argv = existsSync(out) ? readFileSync(out, 'utf8').split('\0').slice(0, -1) : [];
+    return { argv, made: readdirSync(cwd) };
+  }
+  const seq = (argv: string[], ...want: string[]) =>
+    argv.some((_, i) => want.every((w, k) => argv[i + k] === w));
+
+  test('CODEX_HOME: 置換も ; も走らず、--bind と --ro-bind の道が一字違わず渡る', () => {
+    const h = join(HOME, WEIRD);
+    mkdirSync(join(h, 'packages'), { recursive: true });
+    const db = store(`cli:\n  agents:\n    ashigaru3:\n      type: codex\n      env:\n        CODEX_HOME: ${JSON.stringify(h)}\n${ISO}`);
+    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', HOME, HAS);
+    expect(r.code, r.err).toBe(0);
+    const { argv, made } = runWrapped(r.out!);
+    expect(made).toEqual([]); // 印が出来ぬ（$(…) も backtick も ; の後ろも走らぬ）
+    expect(seq(argv, '--bind', h, h)).toBe(true);
+    expect(seq(argv, '--ro-bind', `${h}/packages`, `${h}/packages`)).toBe(true);
+    expect(argv.slice(-3)).toEqual(['bash', '-lc', 'codex --search']);
+  });
+
+  test('fs.write の道も同じ口を通る（設定に書いた道が素で命に入らぬ）', () => {
+    const w = join(HOME, `work ${WEIRD}`);
+    mkdirSync(w, { recursive: true });
+    mkdirSync(join(HOME, '.codex/packages'), { recursive: true });
+    const iso = `isolation:\n  level: bwrap\n  net:\n    default: deny\n  fs:\n    default: deny\n    write: [${JSON.stringify(w)}]\n`;
+    const db = store(`cli:\n  agents:\n    ashigaru1: { type: codex }\n${iso}`);
+    const r = runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru1', HOME, HAS);
+    expect(r.code, r.err).toBe(0);
+    const { argv, made } = runWrapped(r.out!);
+    expect(made).toEqual([]);
+    expect(seq(argv, '--bind', w, w)).toBe(true);
+  });
+
+  test('陽性対照: 引用の要らぬ道の命は、今の見た目のまま（素の引数）', () => {
+    const r = runIsolateWrap(store(settingsOf(agentWith('ashigaru1', 'codex'))), 'codex --search', 'codex', 'ashigaru1', HOME, HAS);
+    expect(r.out).toStartWith('bwrap --ro-bind / / --tmpfs /tmp');
+    expect(r.out).toEndWith(`--die-with-parent --unshare-net -- bash -lc 'codex --search'`);
   });
 });

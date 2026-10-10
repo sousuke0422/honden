@@ -34,6 +34,8 @@
  * ntfy や review gate と同じ流儀——繋いだ時だけ効く。
  */
 
+import { shellQuote } from './config';
+
 export const LEVELS = ['none', 'bwrap', 'systemd-run', 'lxc'] as const;
 export type Level = (typeof LEVELS)[number];
 
@@ -298,26 +300,40 @@ export function wrapLaunch(
   opts: WrapOpts = {},
 ): { ok: true; cmd: string } | { ok: false; message: string } {
   if (cfg.level === 'none') return { ok: true, cmd: inner };
-  // 起こす命は `bash -lc '…'` の単引用の中へ包む。命に単引用が在れば `'\''` で抜ける
-  // （閉じ・逃がした単引用・開き）。足軽ごとの env の値（`CODEX_HOME='…'`）が単引用で
-  // 包まれて来るゆえ、断らずに正しく包む。外の shell が解けば、元の命が一字違わず戻る。
-  const quoted = inner.replace(/'/g, `'\\''`);
+  // **命は argv の配列で組み、最後に一つの口（shellArg）で引用して連ねる。**
+  // 文を継ぎ足すと、bind の道（足軽ごとの CODEX_HOME・fs.write）に $(…)・backtick・; が
+  // 在れば、檻に入る前にホストの shell が解いて走らせる（#43 の再レビュー）。
+  // 内の命（`bash -lc '…'`）も同じ口を通る——命に単引用が在れば `'\''` で抜けて包み、
+  // 外の shell が解けば、元の命が一字違わず戻る。
   const exists = opts.exists ?? ((p: string) => require('node:fs').existsSync(p));
   const home = opts.home ?? require('node:os').homedir();
-  const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home, opts.codexHome).join(' ') : '--dev-bind / /';
+  const binds = cfg.fs ? fsArgs(cfg.fs, opts.cli, exists, home, opts.codexHome) : ['--dev-bind', '/', '/'];
+  const shellCmd = ['bash', '-lc', inner];
+  // 内の命（argv の最後）は、一語でも前どおり単引用で包む（pane に出る見た目を変えぬ）
+  const line = (argv: string[]) => ({
+    ok: true as const,
+    cmd: argv.map((a, i) => (i === argv.length - 1 ? shellQuote(a) : shellArg(a))).join(' '),
+  });
   if (!cfg.outbound && cfg.tcpPorts.length === 0) {
     // 外も要らぬなら pasta ごと要らぬ。bwrap が網を切る（空の loopback だけ残る）
-    return { ok: true, cmd: `bwrap ${binds} --die-with-parent --unshare-net -- bash -lc '${quoted}'` };
+    return line(['bwrap', ...binds, '--die-with-parent', '--unshare-net', '--', ...shellCmd]);
   }
-  let core = `bash -lc '${quoted}'`;
+  let core = shellCmd;
   if (cfg.tcpPorts.length > 0) {
     if (!cageBin) return { ok: false, message: '口の許し（tcp/<口>）には honden-cage が要るが、在り処が渡されておらぬ。' };
     // 檻が最も内側。pasta（母屋の隔て）→ bwrap（束ね）→ 檻（口の枷）→ CLI
-    const flags = cfg.tcpPorts.map((p) => `--tcp ${p}`).join(' ');
-    core = `${cageBin} ${flags} -- ${core}`;
+    core = [cageBin, ...cfg.tcpPorts.flatMap((p) => ['--tcp', String(p)]), '--', ...core];
   }
-  const bw = `bwrap ${binds} --die-with-parent -- ${core}`;
-  return { ok: true, cmd: `pasta --config-net -T none -U none --quiet -- ${bw}` };
+  return line(['pasta', '--config-net', '-T', 'none', '-U', 'none', '--quiet', '--', 'bwrap', ...binds, '--die-with-parent', '--', ...core]);
+}
+
+/**
+ * 包む命の引数を一つ、shell の引数として引用する。**引用の口はここ一つ**（中身は
+ * src/config.ts の shellQuote——env の前置きと同じ単引用の作法）。引用の要らぬ字
+ * （英数と `/ . _ - : = , @ % +`）だけの引数は素のまま返し、普段の命の見た目を変えぬ。
+ */
+export function shellArg(a: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : shellQuote(a);
 }
 
 /**
