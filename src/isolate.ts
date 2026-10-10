@@ -208,6 +208,16 @@ export interface WrapOpts {
   codexHome?: string;
 }
 
+/** 判じに入る道のうち、絶対でない物の訳。全て絶対なら null。undefined の項は問わぬ。 */
+function relativeOf(paths: Record<string, string | undefined>): string | null {
+  for (const [name, p] of Object.entries(paths)) {
+    if (p !== undefined && !p.startsWith('/')) {
+      return `判じに相対の道が入った（${name}: ${JSON.stringify(p)}）。/ から解けば実の在り処とずれ、拒みが外れうるゆえ判ぜぬ`;
+    }
+  }
+  return null;
+}
+
 /** 道を比べる形に均す。判じを通った絶対の道（.. を含まぬ）ゆえ、// と尻の / を畳むだけでよい。 */
 function canon(p: string): string {
   const q = p.replace(/\/+/g, '/');
@@ -237,6 +247,10 @@ export function isolatedCodexHomeProblem(
   path: string,
   where: { home: string; dbDir?: string; repoRoot?: string },
 ): string | null {
+  // 相対の道は判じられぬ。黙って / から解けば、守る物の実の在り処とずれて拒みが外れる。
+  // 呼ぶ側が絶対にし忘れた時に、黙って通さず拒む（cmd_225）。
+  const rel = relativeOf({ CODEX_HOME: path, home: where.home, dbDir: where.dbDir, repoRoot: where.repoRoot });
+  if (rel) return rel;
   const real = realOrNearest(path);
   if (real === null) return '解けぬ symlink（壊れておるか、輪になっておる）を道に持つ。実体が判ぜぬゆえ受けぬ';
   const ps = [...new Set([canon(path), real])];
@@ -270,6 +284,7 @@ export function isolatedCodexHomeProblem(
  * 判じた道と bwrap へ渡す道を字面で一つに揃える。
  */
 export function realOrNearest(path: string): string | null {
+  if (!path.startsWith('/')) return null; // 相対の道を / から解かぬ（判ぜぬ値として返す）
   const parts = canon(path).split('/').filter((x) => x !== '');
   for (let i = parts.length; i >= 0; i -= 1) {
     const head = `/${parts.slice(0, i).join('/')}`;
@@ -336,6 +351,8 @@ export function cageWrites(
  * 呼び手は、己の檻の rw をその項を除いて渡すこと。
  */
 export function codexHomeSwappable(codexHome: string, cages: { who: string; rw: string[] }[]): string | null {
+  const rel = relativeOf({ CODEX_HOME: codexHome, ...Object.fromEntries(cages.flatMap((c) => c.rw.map((w, i) => [`${c.who} の rw[${i}]`, w]))) });
+  if (rel) return rel;
   const real = realOrNearest(codexHome) ?? canon(codexHome);
   for (const c of cages) {
     for (const w of c.rw) {

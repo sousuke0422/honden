@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { openStore, tx } from '../src/store';
 import { setSetting } from '../src/settings';
 import { SETTINGS_PATH_KEY } from '../src/config';
-import { fsArgs, isolatedCodexHomeProblem } from '../src/isolate';
+import { fsArgs, isolatedCodexHomeProblem, realOrNearest, codexHomeSwappable } from '../src/isolate';
 import { runIsolateWrap, runGuardSelftest } from '../src/main';
 
 // 家の道は runIsolateWrap・runGuardSelftest・fsArgs の口へ明示で渡す。走る中で
@@ -153,7 +153,7 @@ describe('honden isolate wrap --agent（settings から実効の CODEX_HOME を�
       const db = store(settingsOf(agentWith('ashigaru2', cli, '/tmp/codex-x')));
       const r = runIsolateWrap(db, `${cli} --x`, cli, 'ashigaru2', HOME, HAS);
       expect(r.code, `${cli}: ${r.err}`).toBe(0);
-      expect(r.out, cli).not.toContain('codex-x');
+      expect(r.out, cli).not.toContain('/tmp/codex-x'); // dir の名の偶然の一致を避け、settings の道そのものを見る
     }
   });
 });
@@ -475,5 +475,85 @@ describe('判じてから檻が起こるまでの差し替え（TOCTOU）——�
     const db = store(`cli:\n  agents:\n${codexAgent('ashigaru3', h)}isolation:\n  level: bwrap\n  net:\n    default: deny\n`);
     const r = wrap3(db, home);
     expect(r.code, r.err).toBe(0);
+  });
+});
+
+describe('正本 DB を相対の道で指しても、その dir を CODEX_HOME にすれば止まる（守る側の道は絶対で比べる）', () => {
+  // 正本は使い捨ての作業 dir の下（repo の外・~/.honden の外）に作る。相対の道の試験は、
+  // その作業 dir を cwd にして撃ち、終われば cwd と HONDEN_DB を元へ戻す。本物の正本は指さぬ。
+  const ISO_FS = 'isolation:\n  level: bwrap\n  net:\n    default: deny\n  fs:\n    default: deny\n    write: []\n';
+  /** 作業 dir の下の state/ に正本を作り、ashigaru3 の CODEX_HOME を codexHome にする。 */
+  function setup(codexHomeOf: (work: string) => string) {
+    const work = mkdtempSync(join(BASE, 'cwd-'));
+    const home = mkdtempSync(join(BASE, 'dh-'));
+    mkdirSync(join(work, 'state/packages'), { recursive: true });
+    const h = codexHomeOf(work);
+    mkdirSync(join(h, 'packages'), { recursive: true });
+    const sp = join(work, 'state/settings.yaml');
+    writeFileSync(sp, `cli:\n  agents:\n    ashigaru3:\n      type: codex\n      env:\n        CODEX_HOME: ${JSON.stringify(h)}\n${ISO_FS}`);
+    const db = openStore({ path: join(work, 'state/h.db') });
+    tx(db, () => setSetting(db, SETTINGS_PATH_KEY, sp, 'roster'));
+    db.close();
+    return { work, home };
+  }
+  /** cwd を作業 dir に移して撃ち、必ず戻す。 */
+  function inCwd<T>(dir: string, fn: () => T): T {
+    const before = process.cwd();
+    process.chdir(dir);
+    try {
+      return fn();
+    } finally {
+      process.chdir(before);
+    }
+  }
+
+  test('(1) --db の相対の道（state/h.db）で、正本の dir を CODEX_HOME にすれば止まる', () => {
+    const { work, home } = setup((w) => join(w, 'state'));
+    const r = inCwd(work, () => runIsolateWrap('state/h.db', 'codex --search', 'codex', 'ashigaru3', home, HAS));
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('本陣の正本');
+    expect(r.err).toContain(join(work, 'state'));
+    expect(r.out ?? '').toBe('');
+  });
+
+  test('(1) HONDEN_DB の相対の道でも同じく止まる', () => {
+    const { work, home } = setup((w) => join(w, 'state'));
+    const prev = process.env.HONDEN_DB;
+    process.env.HONDEN_DB = 'state/h.db';
+    try {
+      const r = inCwd(work, () => runIsolateWrap(undefined, 'codex --search', 'codex', 'ashigaru3', home, HAS));
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('本陣の正本');
+    } finally {
+      if (prev === undefined) delete process.env.HONDEN_DB;
+      else process.env.HONDEN_DB = prev;
+    }
+  });
+
+  test('(3) 陽性対照: 絶対の道の DB と、DB と別の dir の CODEX_HOME は今どおり通る', () => {
+    const { work, home } = setup((w) => join(w, 'codex-a3'));
+    const r = runIsolateWrap(join(work, 'state/h.db'), 'codex --search', 'codex', 'ashigaru3', home, HAS);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(`--bind ${join(work, 'codex-a3')} `);
+    // 相対の道の DB でも、別の dir の CODEX_HOME は通る
+    const r2 = inCwd(work, () => runIsolateWrap('state/h.db', 'codex --search', 'codex', 'ashigaru3', home, HAS));
+    expect(r2.code, r2.err).toBe(0);
+  });
+
+  test('(2) 判じの関数に相対の道が入れば、黙って / から解かずに拒む', () => {
+    const home = mkdtempSync(join(BASE, 'rh-'));
+    expect(realOrNearest('state/h')).toBeNull();
+    for (const [p, where] of [
+      ['rel/codex', { home }],
+      ['/abs/codex', { home: 'rel-home' }],
+      ['/abs/codex', { home, dbDir: 'state' }],
+      ['/abs/codex', { home, repoRoot: 'repo' }],
+    ] as const) {
+      const why = isolatedCodexHomeProblem(p, where);
+      expect(why, JSON.stringify([p, where])).not.toBeNull();
+      expect(why!, JSON.stringify([p, where])).toContain('相対の道');
+    }
+    expect(codexHomeSwappable('rel/codex', [])).toContain('相対の道');
+    expect(codexHomeSwappable(join(home, 'c'), [{ who: 'ashigaru1', rw: ['work'] }])).toContain('相対の道');
   });
 });

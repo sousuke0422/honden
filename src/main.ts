@@ -2135,8 +2135,11 @@ export function runIsolateWrap(
         const dbFile = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
         const why = isolatedCodexHomeProblem(ch.path, {
           home,
-          ...(dbFile === ':memory:' ? {} : { dbDir: dirname(dbFile) }),
-          repoRoot: REPO_ROOT,
+          // 相対の道（--db・HONDEN_DB）は、正本を開く所（openStore。sqlite も 9p の検めも
+          // process の作業 dir を基に解く）と同じ基で絶対にしてから渡す。判じの側は相対を拒む。
+          ...(dbFile === ':memory:' ? {} : { dbDir: dirname(resolvePath(dbFile)) }),
+          // HONDEN_ROOT の環境で相対に置かれうるゆえ、同じく作業 dir を基に絶対にする
+          repoRoot: resolvePath(REPO_ROOT),
         });
         if (why) {
           return {
