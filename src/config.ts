@@ -216,6 +216,82 @@ export function codexHomeOf(
   return v === undefined ? { ok: true, path: `${home}/.codex`, custom: false } : { ok: true, path: v, custom: true };
 }
 
+/** honden の CLI の名から、hindsight の hook が設定の harnesses の節を引く名へ（0.7.0 の hook の harness）。 */
+const HINDSIGHT_HARNESS: Record<string, string> = { claude: 'claude-code', codex: 'codex', cursor: 'cursor-cli' };
+
+/** 0.7.0 の resolveConfig が Cloud へ向かわぬ serverMode（daemon は 127.0.0.1 の手元の server）。 */
+const HINDSIGHT_LOCAL_MODES = ['self-hosted', 'daemon'];
+
+/**
+ * HINDSIGHT_CONFIG の file が、hindsight の hook を自前の server へ向けるかを検める。向けぬなら訳。
+ *
+ * hindsight-coding-agents@0.7.0 の hook は、設定の file を読めねば（在らぬ・壊れた JSON）空と見て、
+ * 既定の送り先（Cloud）へ会話を送る。読めても、効く serverMode が self-hosted・daemon でなければ
+ * cloud となり、self-hosted でも apiUrl が無ければ Cloud の URL になる（resolveConfig）。
+ * 効く値は、上の段に harnesses.<harness> の節を重ねた物（applyLayer）ゆえ、足軽の CLI の
+ * harness の節まで重ねて見る。
+ *
+ * **見るのは serverMode と apiUrl の二つの名だけ。** apiToken（鍵）は読まず出さぬ。訳の文には
+ * file の中の値を載せぬ（壊れた JSON の例外の文は値の一部を含みうるゆえ使わず、文を自分で組む）。
+ * env の層（HINDSIGHT_SERVER_MODE 等）は file の下に敷かれるが、足軽の起こす命には載らぬゆえ数えず、
+ * file だけで判じる（file に書かれておらねば止める側へ倒す）。
+ */
+export function hindsightConfigProblem(path: string, cli: string | undefined): string | null {
+  const cloud = '読めねば hook は設定を空と見て既定の送り先（Cloud）へ送る';
+  const fix = '先に file を作り、serverMode（self-hosted か daemon）と apiUrl（自前の server）を書かれよ';
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (e) {
+    const code = (e as { code?: string } | null)?.code;
+    const what = code === 'ENOENT' ? '在らぬ' : `読めぬ（${code ?? '訳の分からぬ誤り'}）`;
+    return `${what}。${cloud}。${fix}`;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return `JSON として開けぬ。${cloud}。${fix}`;
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return `JSON の写像（{…}）でない。${cloud}。${fix}`;
+  }
+  // 上の段に、足軽の CLI の harness の節を重ねる（mergeRaw と同じく、節の鍵が勝つ）
+  const top = raw as Record<string, unknown>;
+  const harness = cli ? HINDSIGHT_HARNESS[cli] : undefined;
+  const sections = top['harnesses'];
+  const per =
+    harness && sections && typeof sections === 'object' && !Array.isArray(sections)
+      ? (sections as Record<string, unknown>)[harness]
+      : undefined;
+  const pick = (key: string) =>
+    per && typeof per === 'object' && !Array.isArray(per) && key in (per as Record<string, unknown>)
+      ? (per as Record<string, unknown>)[key]
+      : top[key];
+  const mode = pick('serverMode');
+  const via = harness && per ? `（harnesses.${harness} の節を重ねた値）` : '';
+  if (typeof mode !== 'string' || !HINDSIGHT_LOCAL_MODES.includes(mode)) {
+    const said = mode === undefined ? 'serverMode が無い' : mode === 'cloud' ? 'serverMode が cloud である' : 'serverMode が self-hosted・daemon のどれでもない';
+    return `${said}${via}。hook は Cloud へ送る。${fix}`;
+  }
+  if (mode === 'self-hosted') {
+    const url = pick('apiUrl');
+    if (typeof url !== 'string' || url.trim() === '') {
+      return `serverMode が self-hosted だが apiUrl が無い${via}。hook は既定の Cloud の URL へ送る。${fix}`;
+    }
+    let host = '';
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      return `apiUrl が URL として読めぬ${via}。Cloud へ落ちうる形は受けぬ。${fix}`;
+    }
+    if (host === 'vectorize.io' || host.endsWith('.vectorize.io')) {
+      return `apiUrl が Cloud（vectorize.io）を指す${via}。${fix}`;
+    }
+  }
+  return null;
+}
+
 /** 起こす命の頭に置く代入の並び（`CODEX_HOME='…' `の形）。env が無ければ空。 */
 export function envPrefix(env: [string, string][]): string {
   return env.map(([n, v]) => `${n}=${shellQuote(v)}`).join(' ');

@@ -162,20 +162,28 @@ describe('honden config env <名>', () => {
   });
 
   test('HINDSIGHT_CONFIG を書いた足軽の起こす命に、単引用で載る（CODEX_HOME と並べても書いた順に）', () => {
+    // 設定の file は起こす前に検められる（在らぬ・自前の server を指さぬなら止まる。
+    // test/hindsight-config.test.ts）。ここでは使い捨ての dir に、偽の値の正しい file を作る
+    const good = JSON.stringify({ serverMode: 'self-hosted', apiUrl: 'http://127.0.0.1:8888', apiToken: 'FAKE' });
+    const dir = mkdtempSync(join(BASE, 'hs a1-'));
+    const h1 = join(dir, 'coding-agent.json');
+    const h2 = join(dir, 'a2.json');
+    writeFileSync(h1, good);
+    writeFileSync(h2, good);
     const db = store(
       'cli:\n  agents:\n' +
-        '    h1:\n      type: claude\n      env:\n        HINDSIGHT_CONFIG: "/home/me/.hindsight a1/coding-agent.json"\n' +
-        '    h2:\n      type: codex\n      env:\n        CODEX_HOME: /home/me/.codex-a2\n        HINDSIGHT_CONFIG: /home/me/.hindsight-a2/coding-agent.json\n' +
+        `    h1:\n      type: claude\n      env:\n        HINDSIGHT_CONFIG: ${JSON.stringify(h1)}\n` +
+        `    h2:\n      type: codex\n      env:\n        CODEX_HOME: /home/me/.codex-a2\n        HINDSIGHT_CONFIG: ${JSON.stringify(h2)}\n` +
         '    h3:\n      type: claude\n      env:\n        ANTHROPIC_API_KEY: sk-x\n',
     );
-    expect(runConfigEnv(db, 'h1')).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='/home/me/.hindsight a1/coding-agent.json'` });
+    expect(runConfigEnv(db, 'h1')).toEqual({ code: 0, out: `HINDSIGHT_CONFIG='${h1}'` });
     expect(runConfigEnv(db, 'h2')).toEqual({
       code: 0,
-      out: `CODEX_HOME='/home/me/.codex-a2' HINDSIGHT_CONFIG='/home/me/.hindsight-a2/coding-agent.json'`,
+      out: `CODEX_HOME='/home/me/.codex-a2' HINDSIGHT_CONFIG='${h2}'`,
     });
-    // 載った前置きを shell に解かせると、元の道が一字違わず渡る
+    // 載った前置きを shell に解かせると、元の道（空白を含む）が一字違わず渡る
     const p = Bun.spawnSync(['bash', '-c', `${runConfigEnv(db, 'h1').out} printenv HINDSIGHT_CONFIG`], { env: {} });
-    expect(p.stdout.toString()).toBe('/home/me/.hindsight a1/coding-agent.json\n');
+    expect(p.stdout.toString()).toBe(`${h1}\n`);
     // 陽性対照: 秘密を運ぶ名は今どおり止まる
     const bad = runConfigEnv(db, 'h3');
     expect(bad.code).not.toBe(0);
