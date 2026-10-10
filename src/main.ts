@@ -15,7 +15,7 @@ import { resolve as resolveIdentity, mayActAs, type Identity } from './identity'
 import { anchorFrom, realProbe } from './anchor';
 import { paneInOwn, panes, type Pane, type TmuxRunner } from './pane';
 import { applyBorders } from './border';
-import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, isolatedCodexHomeProblem, type IsolationCfg } from './isolate';
+import { parseIsolation, wrapLaunch, requiredTools, dnsWarning, isolatedCodexHomeProblem, realOrNearest, type IsolationCfg } from './isolate';
 import { realRunner as parseRunner } from './parse';
 import { pending as notifyPending, streakNotice, dispatch as notifyDispatch, type Sink } from './notify';
 import { desktopSink } from './notify/desktop';
@@ -2156,7 +2156,12 @@ export function runIsolateWrap(
               `  先に mkdir -p で作り、その CODEX_HOME で codex を対話で起こして /hooks で信頼を与えられよ。`,
           };
         }
-        codexHome = ch.path;
+        // bind するのは、判じた実体の道そのもの（symlink を解いた道）。判じた値と bwrap へ
+        // 渡す値を字面で一つに揃える（cmd_222 で . の区画を拒んだのと同じ向き）。別名の
+        // symlink を後で差し替えられても、bind の先は判じた実体から動かぬ。
+        // 檻の中の codex は env の CODEX_HOME（別名）で開くが、ro の / に在る別名は、
+        // rw に bind した実体を指すゆえ、同じ dir に書く。
+        codexHome = realOrNearest(ch.path) ?? ch.path;
       }
     }
   }

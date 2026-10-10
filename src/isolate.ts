@@ -34,6 +34,7 @@
  * ntfy や review gate と同じ流儀——繋いだ時だけ効く。
  */
 
+import { lstatSync, realpathSync } from 'node:fs';
 import { shellQuote } from './config';
 
 export const LEVELS = ['none', 'bwrap', 'systemd-run', 'lxc'] as const;
@@ -223,25 +224,67 @@ const within = (p: string, dir: string) => p === dir || p.startsWith(dir === '/'
  * - `~/.honden` の下と、正本の在る dir: 本陣の正本を檻の中から書き換えられる
  * - honden の repo の内・その祖先: repo の `.codex/hooks.json` と皮は門の繋ぎである。
  *   rw になれば、檻の中から門を外せる
+ *
+ * **字面だけでなく実体（symlink を解いた道）でも判じる。** `~/.codex-a3 → ~/.honden` の
+ * ような別名を字面で見ると、どの拒みにも掛からぬまま、bwrap は別名の先（実体）を rw に
+ * bind する。ゆえに CODEX_HOME は実体に解き、守る側も字面と実体の両方を並べて比べる
+ * （`/tmp` や `$HOME` そのものが symlink の機もある）。道の要素に symlink が在ること
+ * そのものは拒まぬ——`/home → /var/home` のように家の祖先が symlink の機を巻き添えに
+ * するゆえ。bwrap が rw にするのは実体ゆえ、実体で比べれば足りる。解けぬ symlink
+ * （壊れた・輪になった）は実体が判ぜぬゆえ拒む。
  */
 export function isolatedCodexHomeProblem(
   path: string,
   where: { home: string; dbDir?: string; repoRoot?: string },
 ): string | null {
-  const p = canon(path);
-  const home = canon(where.home);
-  if (within(p, '/tmp')) {
-    return '/tmp の下である。檻は /tmp を tmpfs で専有するゆえ、bind しても隠れ、codex は母屋と違う空の道へ書く';
+  const real = realOrNearest(path);
+  if (real === null) return '解けぬ symlink（壊れておるか、輪になっておる）を道に持つ。実体が判ぜぬゆえ受けぬ';
+  const ps = [...new Set([canon(path), real])];
+  const forms = (x: string) => [...new Set([canon(x), realOrNearest(x) ?? canon(x)])];
+  const via = (p: string) => (p === canon(path) ? '' : `（実体: ${p}）`);
+  for (const p of ps) {
+    for (const t of forms('/tmp')) {
+      if (within(p, t)) return `/tmp の下である${via(p)}。檻は /tmp を tmpfs で専有するゆえ、bind しても隠れ、codex は母屋と違う空の道へ書く`;
+    }
+    for (const home of forms(where.home)) {
+      if (within(home, p)) {
+        return p === home
+          ? `$HOME そのものである${via(p)}。家ごと rw になり、fs の縛りが飾りになる`
+          : `$HOME（${home}）の祖先である${via(p)}。家ごと rw になり、fs の縛りが飾りになる`;
+      }
+    }
+    for (const d of [`${canon(where.home)}/.honden`, ...(where.dbDir ? [where.dbDir] : [])].flatMap(forms)) {
+      if (within(p, d) || within(d, p)) return `本陣の正本の在り処（${d}）に掛かる${via(p)}。檻の中から正本を書き換えられる`;
+    }
+    for (const r of where.repoRoot ? forms(where.repoRoot) : []) {
+      if (within(p, r) || within(r, p)) return `honden の repo（${r}）に掛かる${via(p)}。門の繋ぎ（.codex/hooks.json と皮）が檻の中から書ける`;
+    }
   }
-  if (within(home, p)) {
-    return p === home ? '$HOME そのものである。家ごと rw になり、fs の縛りが飾りになる' : `$HOME（${home}）の祖先である。家ごと rw になり、fs の縛りが飾りになる`;
-  }
-  for (const d of [`${home}/.honden`, ...(where.dbDir ? [canon(where.dbDir)] : [])]) {
-    if (within(p, d) || within(d, p)) return `本陣の正本の在り処（${d}）に掛かる。檻の中から正本を書き換えられる`;
-  }
-  if (where.repoRoot) {
-    const r = canon(where.repoRoot);
-    if (within(p, r) || within(r, p)) return `honden の repo（${r}）に掛かる。門の繋ぎ（.codex/hooks.json と皮）が檻の中から書ける`;
+  return null;
+}
+
+/**
+ * 道の実体（symlink を解いた道）。在らぬ区画は、いちばん近い在る祖先の実体に、残りの区画を
+ * 継いで返す（まだ作られておらぬ CODEX_HOME も、在る祖先の実体で判じられる）。在るのに
+ * 解けぬ区画（壊れた symlink・輪）が在れば null。隔離の判じと bind の両方がこの値を使い、
+ * 判じた道と bwrap へ渡す道を字面で一つに揃える。
+ */
+export function realOrNearest(path: string): string | null {
+  const parts = canon(path).split('/').filter((x) => x !== '');
+  for (let i = parts.length; i >= 0; i -= 1) {
+    const head = `/${parts.slice(0, i).join('/')}`;
+    let real: string;
+    try {
+      real = realpathSync(head);
+    } catch {
+      try {
+        lstatSync(head);
+        return null; // 在るのに解けぬ（壊れた symlink・輪）
+      } catch {
+        continue; // 在らぬ区画。祖先へ上る
+      }
+    }
+    return canon([real, ...parts.slice(i)].join('/'));
   }
   return null;
 }

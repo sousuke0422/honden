@@ -6,8 +6,9 @@
  * 止まり、通る形を撃てぬ。
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { openStore, tx } from '../src/store';
 import { setSetting } from '../src/settings';
 import { SETTINGS_PATH_KEY } from '../src/config';
@@ -265,5 +266,111 @@ describe('(A) 包んだ命の引数は、どんな字面でもホストの shell
     const r = runIsolateWrap(store(settingsOf(agentWith('ashigaru1', 'codex'))), 'codex --search', 'codex', 'ashigaru1', HOME, HAS);
     expect(r.out).toStartWith('bwrap --ro-bind / / --tmpfs /tmp');
     expect(r.out).toEndWith(`--die-with-parent --unshare-net -- bash -lc 'codex --search'`);
+  });
+});
+
+describe('symlink の別名を介しても、守る物に掛かる CODEX_HOME は止まる（実体で判じる）', () => {
+  // symlink も、その向け先も、すべて使い捨ての家（/var/tmp の下）と使い捨ての /tmp の dir の
+  // 中だけに作る。本物の ~/.honden・~/.codex・正本・repo を指す symlink は作らぬ。
+  // 門の repo は runIsolateWrap では本物の REPO_ROOT ゆえ、偽の repo を渡せる判じの関数で撃つ。
+  const codexDb = (h: string) =>
+    store(`cli:\n  agents:\n    ashigaru3:\n      type: codex\n      env:\n        CODEX_HOME: ${JSON.stringify(h)}\n${ISO}`);
+  const freshHome = () => {
+    const home = mkdtempSync(join(BASE, 'h-'));
+    mkdirSync(join(home, '.honden/codex/packages'), { recursive: true });
+    return home;
+  };
+  const wrapAs = (db: string, home: string) => runIsolateWrap(db, 'codex --search', 'codex', 'ashigaru3', home, HAS);
+
+  test('(1) 正本の在り処（~/.honden と正本の dir）を指す別名で止まる', () => {
+    const home = freshHome();
+    const a1 = join(home, '.codex-a1');
+    symlinkSync(join(home, '.honden/codex'), a1);
+    let r = wrapAs(codexDb(a1), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('本陣の正本');
+    expect(r.out ?? '').toBe('');
+    // 正本の dir（HONDEN_DB の dir）を指す別名。正本を作ってから、その dir へ向ける
+    const a2 = join(home, '.codex-a2');
+    const db = codexDb(a2);
+    mkdirSync(join(dirname(db), 'packages'), { recursive: true });
+    symlinkSync(dirname(db), a2);
+    r = wrapAs(db, home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('本陣の正本');
+  });
+
+  test('(2) 門の repo（とその .codex）を指す別名で止まる（偽の repo で判じの関数を撃つ）', () => {
+    const home = freshHome();
+    const repo = mkdtempSync(join(BASE, 'repo-'));
+    mkdirSync(join(repo, '.codex'), { recursive: true });
+    for (const [name, target] of [['.codex-r1', repo], ['.codex-r2', join(repo, '.codex')]] as const) {
+      const link = join(home, name);
+      symlinkSync(target, link);
+      const why = isolatedCodexHomeProblem(link, { home, repoRoot: repo });
+      expect(why, name).not.toBeNull();
+      expect(why!, name).toContain('honden の repo');
+    }
+  });
+
+  test('(3) /tmp の下を指す別名で止まる', () => {
+    const home = freshHome();
+    const t = mkdtempSync(join(tmpdir(), 'honden-c223-'));
+    expect(t.startsWith('/tmp/')).toBe(true);
+    mkdirSync(join(t, 'packages'));
+    const link = join(home, '.codex-t');
+    symlinkSync(t, link);
+    const r = wrapAs(codexDb(link), home);
+    rmSync(t, { recursive: true, force: true });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('/tmp の下');
+  });
+
+  test('(4) $HOME そのものを指す別名で止まる', () => {
+    const home = freshHome();
+    const link = join(home, '.codex-h');
+    symlinkSync(home, link);
+    const r = wrapAs(codexDb(link), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('$HOME そのもの');
+  });
+
+  test('道の途中の要素が symlink の形（$HOME/link/codex で link が ~/.honden を指す）でも止まる', () => {
+    const home = freshHome();
+    symlinkSync(join(home, '.honden'), join(home, 'link'));
+    const r = wrapAs(codexDb(join(home, 'link/codex')), home);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('本陣の正本');
+  });
+
+  test('壊れた symlink（指す先が在らぬ）は、解けぬゆえ止まる', () => {
+    const home = freshHome();
+    const link = join(home, '.codex-broken');
+    symlinkSync(join(home, 'no-such-dir'), link);
+    const r = wrapAs(codexDb(link), home);
+    expect(r.code).not.toBe(0);
+  });
+
+  test('陽性対照: symlink を介さぬ普通の CODEX_HOME は、その道のまま bind する', () => {
+    const home = freshHome();
+    const h = join(home, '.codex-plain');
+    mkdirSync(join(h, 'packages'), { recursive: true });
+    const r = wrapAs(codexDb(h), home);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(`--bind ${h} ${h}`);
+  });
+
+  test('陽性対照: 守る物を指さぬ symlink は通り、判じた実体の道を bind する', () => {
+    const home = freshHome();
+    const real = join(home, 'codex-real');
+    mkdirSync(join(real, 'packages'), { recursive: true });
+    const link = join(home, '.codex-ok');
+    symlinkSync(real, link);
+    const r = wrapAs(codexDb(link), home);
+    expect(r.code, r.err).toBe(0);
+    const rp = realpathSync(real);
+    expect(r.out).toContain(`--bind ${rp} ${rp}`);
+    expect(r.out).toContain(`--ro-bind ${rp}/packages ${rp}/packages`);
+    expect(r.out).not.toContain(link);
   });
 });
