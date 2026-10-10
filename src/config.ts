@@ -400,9 +400,9 @@ export function envPrefix(env: [string, string][]): string {
 }
 
 /**
- * `honden config env <名>` の一度の読み。前置きと、起こす前の検めに要る物（HINDSIGHT_CONFIG の道と
- * 足軽の type）を、**同じ一度の読み**から返す。二度読めば、間に設定が書き換わった時、検めた道と
- * 渡す道が割れうる。
+ * `honden config env <名>` の中身。設定を一度読み、検めて、前置きと、起こす前の検めに要る物
+ * （HINDSIGHT_CONFIG の道と足軽の type）を、**同じ一度の読み**から返す。二度読めば、間に設定が
+ * 書き換わった時、検めた道と渡す道が割れうる。
  */
 export function envPlanOf(
   db: Database,
@@ -420,12 +420,6 @@ export function envPlanOf(
     hindsightConfig: r.env.find(([n]) => n === 'HINDSIGHT_CONFIG')?.[1],
     type: t.kind === 'scalar' ? t.value : undefined,
   };
-}
-
-/** `honden config env <名>` の中身。設定を読み、検めて、前置きを返す。 */
-export function envOf(db: Database, agent: string): ConfigResult {
-  const p = envPlanOf(db, agent);
-  return p.ok ? { ok: true, value: p.prefix } : p;
 }
 
 /**
