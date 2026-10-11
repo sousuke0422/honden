@@ -162,6 +162,7 @@
 !scripts/setup_githooks.sh
 !scripts/check_githooks.sh
 !scripts/setup_global_githooks.sh
+!scripts/apply_guard_patch.sh
 !scripts/agent_status.sh
 !scripts/ratelimit_check.sh
 !scripts/switch_cli.sh
