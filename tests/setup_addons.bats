@@ -280,3 +280,22 @@ setup() {
   assert_failure
   assert_output --partial "Linux 向け"
 }
+
+@test "**CLAUDE_CONFIG_DIR の下の .claude.json を見る**——claude mcp add が書く先と検める先を揃える" {
+  # claude は CLAUDE_CONFIG_DIR が在れば、その下の .claude.json を己の設定とする
+  # （2.1.290 の源: join(process.env.CLAUDE_CONFIG_DIR || homedir, ".claude.json")）
+  unset ADDON_CLAUDE_CFG
+  export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/claude-a1"
+  mkdir -p "$CLAUDE_CONFIG_DIR"
+  printf '%s\n' '{"mcpServers":{"context7":{"type":"http","url":"https://mcp.context7.com/mcp"}}}' > "$CLAUDE_CONFIG_DIR/.claude.json"
+  run bash "$ROOT/scripts/setup_addons.sh" --check context7
+  assert_success
+  assert_output --partial "context7 / claude: 据わっておる"
+  # $HOME の側には何も無い（見る先が $HOME のままなら「据わっておらぬ」になる）
+  [ ! -e "$HOME/.claude.json" ]
+  # 陽性対照: CLAUDE_CONFIG_DIR が無ければ、今どおり $HOME/.claude.json を見る
+  unset CLAUDE_CONFIG_DIR
+  run bash "$ROOT/scripts/setup_addons.sh" --check context7
+  assert_success
+  assert_output --partial "context7 / claude: 据わっておらぬ"
+}

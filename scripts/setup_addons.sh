@@ -27,7 +27,9 @@
 #   設定を、仕度が黙って書き換えてはならぬ（setup_skills.sh と同じ倒し方）。
 set -uo pipefail
 
-CLAUDE_CFG="${ADDON_CLAUDE_CFG:-$HOME/.claude.json}"
+# claude は CLAUDE_CONFIG_DIR が在れば、その下の .claude.json を己の設定とする（claude mcp add
+# -s user が書く先もそこ）。見る先を claude と揃える——$HOME に決め打てば、据えても「据わっておらぬ」と言う
+CLAUDE_CFG="${ADDON_CLAUDE_CFG:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json}"
 CODEX_CFG="${ADDON_CODEX_CFG:-$HOME/.codex/config.toml}"
 CURSOR_CFG="${ADDON_CURSOR_CFG:-$HOME/.cursor/mcp.json}"
 # 試験が「codex CLI が無い」形を作れるよう、呼び名だけ差し替えられるようにする
