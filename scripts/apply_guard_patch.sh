@@ -122,12 +122,18 @@ g() { git -C "$WT" "$@"; }
 
 # 文から trailer を取り出し（git interpret-trailers --parse）、Assisted-by の一行と
 # 完全に一致するかを問う。一致せねば非ゼロで、余分な trailer の名だけを標準出力へ出す
-# （値は出さぬ。名が無ければ「Assisted-by が無い」）。部分一致・前方一致・行の重複は通さぬ。
+# （値は出さぬ）。部分一致・前方一致・行の重複は通さぬ。--parse の出が空なら、trailer の
+# 段として読めておらぬ（最後の段が空行で切れておらぬ、trailer 以外の行が混ざる等）ゆえ、
+# その旨を出す。空でなく Assisted-by が無い・値が違う時だけ、その旨を出す。
 # 文は標準入力から読む。
 trailer_extras() {
   local parsed line name matched=0
   parsed="$(g interpret-trailers --parse)"
   [[ "$parsed" != "$ASSISTED" ]] || return 0
+  if [[ -z "$parsed" ]]; then
+    echo "trailer の段として読めぬ（最後の段を空行で切り、trailer 以外の行を混ぜぬこと）"
+    return 1
+  fi
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     if ((matched == 0)) && [[ "$line" == "$ASSISTED" ]]; then
@@ -167,7 +173,7 @@ fi
 last="$(grep -v '^[[:space:]]*$' "$MSG" | tail -n 1)"
 [[ "$last" == "$ASSISTED" ]] || stop "commit 文の末尾が「$ASSISTED」ではない（末尾: ${last:-空}）"
 if ! extras="$(trailer_extras <"$MSG")"; then
-  stop "commit 文の trailer が「$ASSISTED」の一行だけでない（余分: $(tr '\n' ' ' <<<"$extras")）"
+  stop "commit 文の trailer が「$ASSISTED」の一行だけでない（訳: $(tr '\n' ' ' <<<"$extras")）"
 fi
 
 actual="$(sha256sum "$PATCH" | cut -d' ' -f1)"
@@ -223,7 +229,11 @@ else
     stop "bun test が落ちた"
   fi
 fi
-echo "  型と試験が通った"
+if [[ -n "${HONDEN_APPLY_GUARD_VERIFY:-}" ]]; then
+  echo "  代わりの検めが通った（HONDEN_APPLY_GUARD_VERIFY=$HONDEN_APPLY_GUARD_VERIFY。tsc と bun test は走っておらぬ）"
+else
+  echo "  型と試験が通った"
+fi
 
 # index に載せた物を降ろし、作業木も戻す（commit の前で止まる時）。
 unstage_restore() {
@@ -261,7 +271,7 @@ if grep -qiE '^(Claude-Session|Co-authored-by):' <<<"$body"; then
 fi
 if ! extras="$(trailer_extras <<<"$msg_after")"; then
   uncommit_restore
-  stop "commit の trailer が「$ASSISTED」の一行だけでない（余分: $(tr '\n' ' ' <<<"$extras")。hook が足した等）。commit を解いて戻した"
+  stop "commit の trailer が「$ASSISTED」の一行だけでない（訳: $(tr '\n' ' ' <<<"$extras")。hook が足した等）。commit を解いて戻した"
 fi
 echo "  commit: $new（trailer は $ASSISTED のみ）"
 

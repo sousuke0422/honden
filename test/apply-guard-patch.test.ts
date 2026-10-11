@@ -264,6 +264,59 @@ describe('apply_guard_patch.sh — trailer は Assisted-by の一行と完全に
     });
   }
 
+  // 読めぬ段: --parse の出が空。「無い、または値が違う」と誤って言わず、空行で切れと言う
+  const UNREADABLE = '空行で切り';
+  const WRONG = '無い、または値が違う';
+  const unreadable: [string, string][] = [
+    ['段に trailer でない行が混ざる', `fix\n\n本文の行\n別の行\nさらに\n${ASSISTED}\n`],
+    ['本文の直後に空行なしで Assisted-by', `fix\n\n本文。\n${ASSISTED}\n`],
+  ];
+  for (const [name, text] of unreadable) {
+    test(`事前: ${name}は止まり、空行で切れと言い、「${WRONG}」とは言わぬ`, () => {
+      const b = sandbox();
+      const head0 = b.git('rev-parse', 'HEAD');
+      const remote0 = b.remoteTip();
+      const r = apply(b, args(b, { 'message-file': message(b, text) }));
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain(UNREADABLE);
+      expect(r.stderr).not.toContain(WRONG);
+      unchanged(b, head0, remote0);
+    });
+  }
+
+  test('commit 後: hook が段を読めぬ形に書き換えれば、止まり、空行で切れと言い、「無い、または値が違う」とは言わぬ', () => {
+    for (const body of [
+      `printf 'fix\\n\\n本文の行\\n別の行\\nさらに\\n%s\\n' '${ASSISTED}' > "$1"`,
+      `printf 'fix\\n\\n本文。\\n%s\\n' '${ASSISTED}' > "$1"`,
+    ]) {
+      const b = sandbox();
+      const head0 = b.git('rev-parse', 'HEAD');
+      const remote0 = b.remoteTip();
+      const dir = join(b.repo, '.git/hooks');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'commit-msg'), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(dir, 'commit-msg'), 0o755);
+      const r = apply(b, args(b));
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain(UNREADABLE);
+      expect(r.stderr).not.toContain(WRONG);
+      expect(r.stderr).toContain('当てた物を戻した');
+      unchanged(b, head0, remote0);
+    }
+  });
+
+  test('値が違う時（hook が値を書き換える）は「無い、または値が違う」と言い、空行で切れとは言わぬ', () => {
+    const b = sandbox();
+    const dir = join(b.repo, '.git/hooks');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'commit-msg'), `#!/bin/sh\nsed -i 's/^Assisted-by: .*/Assisted-by: other/' "$1"\n`);
+    chmodSync(join(dir, 'commit-msg'), 0o755);
+    const r = apply(b, args(b));
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(WRONG);
+    expect(r.stderr).not.toContain(UNREADABLE);
+  });
+
   test('陽性対照: Assisted-by の一行だけなら今どおり進む（本文に Signed-off-by の語が在っても）', () => {
     const b = sandbox();
     const r = apply(
@@ -272,6 +325,35 @@ describe('apply_guard_patch.sh — trailer は Assisted-by の一行と完全に
     );
     expect(r.status, r.stderr).toBe(0);
     expect(b.remoteTip()).toBe(b.git('rev-parse', 'HEAD'));
+  });
+});
+
+describe('apply_guard_patch.sh — 検めの段の文は実情どおり', () => {
+  test('差し替えの検めの時は「代わりの検め」と言い、「型と試験が通った」とは言わぬ', () => {
+    const b = sandbox();
+    const r = apply(b, args(b));
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('代わりの検めが通った');
+    expect(r.stdout).toContain('HONDEN_APPLY_GUARD_VERIFY=');
+    expect(r.stdout).toContain('tsc と bun test は走っておらぬ');
+    expect(r.stdout).not.toContain('型と試験が通った');
+  });
+
+  test('差し替えぬ時は今どおり「型と試験が通った」と言う（bunx・bun を贋物にして撃つ）', () => {
+    const b = sandbox();
+    const stubs = join(b.base, 'stubs');
+    mkdirSync(stubs);
+    for (const n of ['bunx', 'bun']) {
+      writeFileSync(join(stubs, n), '#!/bin/sh\nexit 0\n');
+      chmodSync(join(stubs, n), 0o755);
+    }
+    const a = args(b);
+    const env: NodeJS.ProcessEnv = { ...b.env, PATH: `${stubs}:${process.env.PATH}` };
+    delete env.HONDEN_APPLY_GUARD_VERIFY;
+    const r = run('bash', [SCRIPT, ...a], b.base, env);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('型と試験が通った');
+    expect(r.stdout).not.toContain('代わりの検め');
   });
 });
 
