@@ -1434,6 +1434,28 @@ export function runGuardFacts(
 export const runGuardHookClaude = runGuardHookCodex;
 
 /**
+ * selftest が名簿を引く。引けねば、引けなんだ訳の種別だけを返す（設定の中身や例外の文は載せぬ）。
+ * 正本が無い・開けぬも、名簿を引けぬ形に数える——「名簿に足軽が居らぬ」と言えば事実でない。
+ */
+function selftestRoster(dbPath: string | undefined): { ok: true; doc: unknown } | { ok: false; why: string } {
+  const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+  if (path !== ':memory:' && !existsSync(path)) return { ok: false, why: '正本が無い' };
+  try {
+    const doc = configLoad(openStore({ path }));
+    if (doc.ok) return { ok: true, doc: doc.doc };
+    const why: Record<typeof doc.reason, string> = {
+      unset: '在り処を覚えておらぬ',
+      missing: 'settings.yaml が在らぬ',
+      unreadable: 'settings.yaml を開けぬ',
+      broken: 'settings.yaml が壊れておる',
+    };
+    return { ok: false, why: why[doc.reason] };
+  } catch {
+    return { ok: false, why: '正本を開けぬ' };
+  }
+}
+
+/**
  * codex の門の行を、足軽ごとの信頼で作り直す。
  *
  * codex は未信頼の hook を**黙って飛ばす**。信頼の記録は各足軽の `CODEX_HOME` の
@@ -1444,7 +1466,8 @@ export const runGuardHookClaude = runGuardHookCodex;
  * 「効いておらぬ」とする。
  *
  * 皮が据わっておらぬ・拒めぬ時は、信頼を見るまでもなく元の一行を返す。
- * 名簿に codex の足軽が居らぬ（設定が読めぬを含む）時は、従来どおり `~/.codex` を見る。
+ * 名簿に codex の足軽が居らぬ時は、従来どおり `~/.codex` を見る。設定が読めぬ時も `~/.codex` を
+ * 見るが、行には「読めぬゆえ名簿を引けぬ」と書く（居らぬとは言わぬ）。
  */
 function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home: string): GateCheck[] {
   if (!c.configured || !c.denies) return [c];
@@ -1454,25 +1477,19 @@ function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home:
   // 名簿の設定から codex の足軽を引く。正本が無ければ作ってまで見ぬ。
   // 在り処は codexHomeOf だけから引く——隔離の包みが rw で bind する先と同じ所である。
   const agents: { id: string; codexHome?: string; bad?: string }[] = [];
-  const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
-  if (path === ':memory:' || existsSync(path)) {
-    try {
-      const doc = configLoad(openStore({ path }));
-      if (doc.ok) {
-        const list = configDig(doc.doc, 'cli.agents');
-        for (const id of list.kind === 'branch' ? list.keys : []) {
-          const t = configDig(doc.doc, `cli.agents.${id}.type`);
-          if (t.kind !== 'scalar' || t.value !== 'codex') continue;
-          const ch = configCodexHomeOf(doc.doc, id, home);
-          if (!ch.ok) {
-            agents.push({ id, bad: ch.message.split('\n')[0] });
-            continue;
-          }
-          agents.push({ id, codexHome: ch.path });
-        }
+  // 設定が読めねば従来どおり ~/.codex だけを見る。ただし行には「読めぬ」と書く（居らぬとは言わぬ）
+  const roster = selftestRoster(dbPath);
+  if (roster.ok) {
+    const list = configDig(roster.doc, 'cli.agents');
+    for (const id of list.kind === 'branch' ? list.keys : []) {
+      const t = configDig(roster.doc, `cli.agents.${id}.type`);
+      if (t.kind !== 'scalar' || t.value !== 'codex') continue;
+      const ch = configCodexHomeOf(roster.doc, id, home);
+      if (!ch.ok) {
+        agents.push({ id, bad: ch.message.split('\n')[0] });
+        continue;
       }
-    } catch {
-      /* 設定が読めねば従来どおり ~/.codex だけを見る */
+      agents.push({ id, codexHome: ch.path });
     }
   }
 
@@ -1494,7 +1511,12 @@ function codexRows(c: GateCheck, base: string, dbPath: string | undefined, home:
     } catch {
       trusted = false;
     }
-    const who = ids.length > 0 ? `${ids.join(', ')}（CODEX_HOME=${h}）` : `（名簿に codex の足軽が居らぬ。${h} を見た）`;
+    const who =
+      ids.length > 0
+        ? `${ids.join(', ')}（CODEX_HOME=${h}）`
+        : roster.ok
+          ? `（名簿に codex の足軽が居らぬ。${h} を見た）`
+          : `（設定が読めぬ（${roster.why}）ゆえ名簿を引けぬ。${h} だけを見た）`;
     rows.push({
       cli: 'codex',
       configured: true,
@@ -1548,31 +1570,26 @@ function disableAllHooksIn(path: string): boolean | undefined | 'unknown' {
  * managed の層（機の全体の policy）は足軽ごとに分かれぬゆえ、ここでは見ぬ。
  *
  * 皮が据わっておらぬ・拒めぬ時は、見るまでもなく元の一行を返す。
- * 名簿に claude の足軽が居らぬ（設定が読めぬを含む）時は、`~/.claude` を一行で見る。
+ * 名簿に claude の足軽が居らぬ時は、`~/.claude` を一行で見る。設定が読めぬ時も `~/.claude` を
+ * 見るが、行には「読めぬゆえ名簿を引けぬ」と書く（居らぬとは言わぬ）。
  */
 function claudeRows(c: GateCheck, base: string, dbPath: string | undefined, home: string): GateCheck[] {
   if (!c.configured || !c.denies) return [c];
   const fallback = join(home, '.claude');
   const agents: { id: string; dir?: string; bad?: string }[] = [];
-  const path = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
-  if (path === ':memory:' || existsSync(path)) {
-    try {
-      const doc = configLoad(openStore({ path }));
-      if (doc.ok) {
-        const list = configDig(doc.doc, 'cli.agents');
-        for (const id of list.kind === 'branch' ? list.keys : []) {
-          const t = configDig(doc.doc, `cli.agents.${id}.type`);
-          if (t.kind !== 'scalar' || t.value !== 'claude') continue;
-          const cd = configClaudeConfigDirOf(doc.doc, id, home);
-          if (!cd.ok) {
-            agents.push({ id, bad: cd.message.split('\n')[0] });
-            continue;
-          }
-          agents.push({ id, dir: cd.path });
-        }
+  // 設定が読めねば ~/.claude だけを見る。ただし行には「読めぬ」と書く（居らぬとは言わぬ）
+  const roster = selftestRoster(dbPath);
+  if (roster.ok) {
+    const list = configDig(roster.doc, 'cli.agents');
+    for (const id of list.kind === 'branch' ? list.keys : []) {
+      const t = configDig(roster.doc, `cli.agents.${id}.type`);
+      if (t.kind !== 'scalar' || t.value !== 'claude') continue;
+      const cd = configClaudeConfigDirOf(roster.doc, id, home);
+      if (!cd.ok) {
+        agents.push({ id, bad: cd.message.split('\n')[0] });
+        continue;
       }
-    } catch {
-      /* 設定が読めねば ~/.claude だけを見る */
+      agents.push({ id, dir: cd.path });
     }
   }
 
@@ -1601,7 +1618,12 @@ function claudeRows(c: GateCheck, base: string, dbPath: string | undefined, home
       else if (v) why = `${label} の disableAllHooks が true。claude は根の hook ごと門を黙って止める`;
       break;
     }
-    const who = ids.length > 0 ? `${ids.join(', ')}（CLAUDE_CONFIG_DIR=${d}）` : `（名簿に claude の足軽が居らぬ。${d} を見た）`;
+    const who =
+      ids.length > 0
+        ? `${ids.join(', ')}（CLAUDE_CONFIG_DIR=${d}）`
+        : roster.ok
+          ? `（名簿に claude の足軽が居らぬ。${d} を見た）`
+          : `（設定が読めぬ（${roster.why}）ゆえ名簿を引けぬ。${d} だけを見た）`;
     rows.push({ cli: 'claude', configured: true, denies: why === undefined, note: why === undefined ? who : `${who} — **${why}**` });
   }
   return rows;

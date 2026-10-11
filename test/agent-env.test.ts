@@ -304,6 +304,23 @@ describe('guard selftest — codex の信頼を足軽ごとに見る', () => {
     expect(res.code).toBe(0);
     expect(codexLines(res.out ?? '')).toHaveLength(1);
     expect(codexLines(res.out ?? '')[0]).toContain('名簿に codex の足軽が居らぬ');
+    expect(codexLines(res.out ?? '')[0]).not.toContain('読めぬ');
+  });
+
+  test('(2) settings.yaml が壊れておれば、codex の行は『読めぬ』と言い『居らぬ』と言わぬ（中身は載せぬ）', () => {
+    const r = root();
+    codexHome(join(HOME, '.codex'), r, true);
+    const db = store('cli:\n  agents:\n    ashigaru4: { type: codex, note: FAKE-settings-value-do-not-print\n');
+    const res = runGuardSelftest(r, db, HOME);
+    const line = codexLines(res.out ?? '')[0];
+    expect(codexLines(res.out ?? '')).toHaveLength(1);
+    expect(line).toContain('設定が読めぬ');
+    expect(line).toContain('壊れておる');
+    expect(line).toContain(`${join(HOME, '.codex')} だけを見た`);
+    expect(line).not.toContain('居らぬ');
+    expect(res.out).not.toContain('FAKE-settings-value-do-not-print');
+    // 生き死にの判じは変えぬ（既定の dir に信頼が在る）
+    expect(line).toContain('生きておる');
   });
 
   test('CODEX_HOME が絶対の道でない足軽は、その者を「効いておらぬ」として非ゼロ（読む先を推し量らぬ）', () => {

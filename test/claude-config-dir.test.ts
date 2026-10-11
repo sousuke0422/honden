@@ -170,6 +170,45 @@ describe('guard selftest — claude の門を足軽ごとの CLAUDE_CONFIG_DIR �
     const res = runGuardSelftest(r, store('cli:\n  agents:\n    ashigaru4: { type: codex }\n'), HOME);
     expect(claudeLines(res.out ?? '')).toHaveLength(1);
     expect(claudeLines(res.out ?? '')[0]).toContain('名簿に claude の足軽が居らぬ');
+    // (3) 名簿が本当に空なら今どおり『居らぬ』と言い、『読めぬ』とは言わぬ
+    expect(claudeLines(res.out ?? '')[0]).not.toContain('読めぬ');
+  });
+
+  test('(1) settings.yaml が壊れておれば、claude の行は『読めぬ』と言い『居らぬ』と言わぬ（中身は載せぬ）', () => {
+    const r = root();
+    userSettings(join(HOME, '.claude'), '{}');
+    // claude の足軽を書いてあるが、YAML として閉じておらぬ。偽の値が出に載らぬことも見る
+    const db = store(`cli:\n  agents:\n    ashigaru1: { type: claude, note: FAKE-settings-value-do-not-print\n`);
+    const res = runGuardSelftest(r, db, HOME);
+    const line = claudeLines(res.out ?? '')[0];
+    expect(claudeLines(res.out ?? '')).toHaveLength(1);
+    expect(line).toContain('設定が読めぬ');
+    expect(line).toContain('壊れておる');
+    expect(line).toContain(`${join(HOME, '.claude')} だけを見た`);
+    expect(line).not.toContain('居らぬ');
+    expect(res.out).not.toContain('FAKE-settings-value-do-not-print');
+    // 生き死にの判じは変えぬ（既定の dir に disableAllHooks は無い）
+    expect(line).toContain('生きておる');
+  });
+
+  test('(1) settings.yaml が在らぬ・在り処を覚えておらぬ時も、種別を添えて『読めぬ』と言う', () => {
+    const r = root();
+    userSettings(join(HOME, '.claude'), '{}');
+    const dir = mkdtempSync(join(BASE, 'db-missing-'));
+    const missing = join(dir, 'h.db');
+    const db = openStore({ path: missing });
+    tx(db, () => setSetting(db, SETTINGS_PATH_KEY, join(dir, 'settings.yaml'), 'roster'));
+    db.close();
+    const l1 = claudeLines(runGuardSelftest(r, missing, HOME).out ?? '')[0];
+    expect(l1).toContain('設定が読めぬ');
+    expect(l1).toContain('在らぬ');
+    expect(l1).not.toContain('居らぬ');
+    const unset = join(mkdtempSync(join(BASE, 'db-unset-')), 'h.db');
+    openStore({ path: unset }).close();
+    const l2 = claudeLines(runGuardSelftest(r, unset, HOME).out ?? '')[0];
+    expect(l2).toContain('設定が読めぬ');
+    expect(l2).toContain('在り処を覚えておらぬ');
+    expect(l2).not.toContain('居らぬ');
   });
 });
 

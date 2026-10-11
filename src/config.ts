@@ -46,12 +46,21 @@ export function settingsPath(db: Database): string | null {
   return getSetting(db, SETTINGS_PATH_KEY);
 }
 
+/**
+ * 読めなんだ訳の種別。文（message）は道や例外の文を含みうるゆえ、中身を出してはならぬ所
+ * （selftest の行など）はこの種別だけを使う。
+ */
+export type LoadFailure = 'unset' | 'missing' | 'unreadable' | 'broken';
+
 /** 覚えた設定を読む。 */
-export function load(db: Database): { ok: true; doc: unknown; path: string } | { ok: false; message: string } {
+export function load(
+  db: Database,
+): { ok: true; doc: unknown; path: string } | { ok: false; message: string; reason: LoadFailure } {
   const p = settingsPath(db);
   if (!p) {
     return {
       ok: false,
+      reason: 'unset',
       message:
         '設定の在り処を覚えておらぬ。\n' +
         '  honden roster sync --settings <settings.yaml> で入れられよ。\n' +
@@ -59,10 +68,17 @@ export function load(db: Database): { ok: true; doc: unknown; path: string } | {
         '  honden を迂回する道が開く。',
     };
   }
+  let text: string;
   try {
-    return { ok: true, doc: Bun.YAML.parse(readFileSync(p, 'utf8')), path: p };
+    text = readFileSync(p, 'utf8');
   } catch (e) {
-    return { ok: false, message: `${p} を読めぬ: ${String(e).slice(0, 160)}` };
+    const reason = (e as { code?: string } | null)?.code === 'ENOENT' ? 'missing' : 'unreadable';
+    return { ok: false, reason, message: `${p} を読めぬ: ${String(e).slice(0, 160)}` };
+  }
+  try {
+    return { ok: true, doc: Bun.YAML.parse(text), path: p };
+  } catch (e) {
+    return { ok: false, reason: 'broken', message: `${p} を読めぬ: ${String(e).slice(0, 160)}` };
   }
 }
 
