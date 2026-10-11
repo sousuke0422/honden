@@ -18,7 +18,8 @@
 #      告げて止まる
 #   4. patch が触った file だけを add して commit（文は --message-file）。add か commit が
 #      落ちれば（pre-commit hook が拒む等）、index から降ろして作業木を戻し、止まる
-#   5. trailer を git cat-file -p で確かめる。違えば commit を解いて当てた物を戻し、止まる
+#   5. trailer を git cat-file -p で確かめる（git interpret-trailers --parse で取り出し、
+#      Assisted-by の一行と完全に一致すること。検め 1 の文の trailer も同じ判じ）。違えば commit を解いて当てた物を戻し、止まる
 #   6. git push origin HEAD:<branch>。fast-forward のみで、force は決して使わぬ。拒まれれば
 #      commit を解いて当てた物を戻し、遠方の今の先端を告げて止まる
 #   7. 押した SHA を最後の行に出す
@@ -119,6 +120,27 @@ BRANCH="${BRANCH#refs/heads/}"
 
 g() { git -C "$WT" "$@"; }
 
+# 文から trailer を取り出し（git interpret-trailers --parse）、Assisted-by の一行と
+# 完全に一致するかを問う。一致せねば非ゼロで、余分な trailer の名だけを標準出力へ出す
+# （値は出さぬ。名が無ければ「Assisted-by が無い」）。部分一致・前方一致・行の重複は通さぬ。
+# 文は標準入力から読む。
+trailer_extras() {
+  local parsed line name matched=0
+  parsed="$(g interpret-trailers --parse)"
+  [[ "$parsed" != "$ASSISTED" ]] || return 0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    if ((matched == 0)) && [[ "$line" == "$ASSISTED" ]]; then
+      matched=1
+      continue
+    fi
+    name="${line%%:*}"
+    printf '%s\n' "$name"
+  done <<<"$parsed"
+  if ((matched == 0)); then echo "Assisted-by が無い、または値が違う"; fi
+  return 1
+}
+
 # ---- 1. 検め（何も変えぬ） ----
 [[ -d "$WT" ]] || stop "作業木が無い: $WT"
 [[ "$(g rev-parse --is-inside-work-tree 2>/dev/null || true)" == "true" ]] || stop "git の作業木ではない: $WT"
@@ -144,6 +166,9 @@ if grep -qiE '^(Claude-Session|Co-authored-by):' "$MSG"; then
 fi
 last="$(grep -v '^[[:space:]]*$' "$MSG" | tail -n 1)"
 [[ "$last" == "$ASSISTED" ]] || stop "commit 文の末尾が「$ASSISTED」ではない（末尾: ${last:-空}）"
+if ! extras="$(trailer_extras <"$MSG")"; then
+  stop "commit 文の trailer が「$ASSISTED」の一行だけでない（余分: $(tr '\n' ' ' <<<"$extras")）"
+fi
 
 actual="$(sha256sum "$PATCH" | cut -d' ' -f1)"
 [[ "$actual" == "$SHA256" ]] || stop "patch の sha256 が合わぬ（渡された: $SHA256 / 実の: $actual）"
@@ -228,9 +253,15 @@ new="$(g rev-parse HEAD)"
 
 # ---- 5. trailer ----
 body="$(g cat-file -p "$new")"
-if grep -qiE '^(Claude-Session|Co-authored-by):' <<<"$body" || ! grep -qx "$ASSISTED" <<<"$body"; then
+# cat-file -p は先頭に tree・author 等の頭を付ける。最初の空行までを落とした残りが commit 文。
+msg_after="$(sed '1,/^$/d' <<<"$body")"
+if grep -qiE '^(Claude-Session|Co-authored-by):' <<<"$body"; then
   uncommit_restore
-  stop "commit の trailer が「$ASSISTED」の一行だけでない（hook が足した等）。commit を解いて戻した"
+  stop "commit の trailer に Claude-Session か Co-authored-by が在る（hook が足した等）。commit を解いて戻した"
+fi
+if ! extras="$(trailer_extras <<<"$msg_after")"; then
+  uncommit_restore
+  stop "commit の trailer が「$ASSISTED」の一行だけでない（余分: $(tr '\n' ' ' <<<"$extras")。hook が足した等）。commit を解いて戻した"
 fi
 echo "  commit: $new（trailer は $ASSISTED のみ）"
 

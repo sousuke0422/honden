@@ -213,6 +213,68 @@ describe('apply_guard_patch.sh — 検めで止まり、何も変えぬ', () => 
   });
 });
 
+describe('apply_guard_patch.sh — trailer は Assisted-by の一行と完全に一致せねば進まぬ', () => {
+  const SOB = 'Signed-off-by: x <x@example.invalid>';
+
+  // 事前の検め: commit 文の trailer
+  const pre: [string, string, string][] = [
+    ['Signed-off-by を Assisted-by の前に足した文', `fix\n\n本文。\n\n${SOB}\n${ASSISTED}\n`, 'Signed-off-by'],
+    ['Signed-off-by を Assisted-by の後に足した文', `fix\n\n本文。\n\n${ASSISTED}\n${SOB}\n`, '末尾が'], // 古い末尾の検めでも止まる
+    ['Assisted-by が二行', `fix\n\n本文。\n\n${ASSISTED}\n${ASSISTED}\n`, 'Assisted-by'],
+    ['Assisted-by の値が違う', 'fix\n\n本文。\n\nAssisted-by: someone-else\n', '末尾が'],
+    ['Assisted-by の値が前方一致だけ', `fix\n\n本文。\n\n${ASSISTED}-x\n`, '末尾が'],
+  ];
+  for (const [name, text, extra] of pre) {
+    test(`事前: ${name}は止まり、余分な trailer の名を出し、何も変えぬ`, () => {
+      const b = sandbox();
+      const head0 = b.git('rev-parse', 'HEAD');
+      const remote0 = b.remoteTip();
+      const r = apply(b, args(b, { 'message-file': message(b, text) }));
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain(extra);
+      unchanged(b, head0, remote0);
+    });
+  }
+
+  // commit 後の検め: hook が commit 文を書き換えて trailer を足す
+  const post: [string, string, string][] = [
+    [
+      'Signed-off-by を Assisted-by の前に足す',
+      `sed -i '/^Assisted-by:/i ${SOB}' "$1"`,
+      'Signed-off-by',
+    ],
+    ['Assisted-by をもう一行足す', `printf '%s\\n' '${ASSISTED}' >> "$1"`, 'Assisted-by'],
+    ['Assisted-by の値を書き換える', `sed -i 's/^Assisted-by: .*/Assisted-by: other/' "$1"`, 'Assisted-by'],
+  ];
+  for (const [name, body, extra] of post) {
+    test(`commit 後: hook が ${name}と、commit を解いて戻し、余分な trailer の名を出す`, () => {
+      const b = sandbox();
+      const head0 = b.git('rev-parse', 'HEAD');
+      const remote0 = b.remoteTip();
+      const dir = join(b.repo, '.git/hooks');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'commit-msg'), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(dir, 'commit-msg'), 0o755);
+      const r = apply(b, args(b));
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toContain('trailer');
+      expect(r.stderr).toContain(extra);
+      expect(r.stderr).toContain('当てた物を戻した');
+      unchanged(b, head0, remote0);
+    });
+  }
+
+  test('陽性対照: Assisted-by の一行だけなら今どおり進む（本文に Signed-off-by の語が在っても）', () => {
+    const b = sandbox();
+    const r = apply(
+      b,
+      args(b, { 'message-file': message(b, `fix\n\nSigned-off-by の話は本文であって trailer ではない。\n\n${ASSISTED}\n`) }),
+    );
+    expect(r.status, r.stderr).toBe(0);
+    expect(b.remoteTip()).toBe(b.git('rev-parse', 'HEAD'));
+  });
+});
+
 describe('apply_guard_patch.sh — 試験が落ちれば戻す', () => {
   test('当てた物が戻り、非ゼロで、遠方は動かぬ', () => {
     const b = sandbox();
