@@ -472,16 +472,30 @@ export function submitQc(
     };
   }
 
-  // 既に検めてあるものを二度検めない。二つの判定が残ると、門がどちらを見るか決まらない。
-  const dup = db
-    .query("SELECT id FROM report WHERE agent = ? AND task_id = ? AND verdict IS NOT NULL")
-    .get(QC_AUTHOR, target.task_id) as { id: number } | null;
+  // 同じ報告を二度検めない。二つの判定が残ると、門がどちらを見るか決まらない。
+  //
+  // 初めは仕事（task）ごとに一度しか検めさせなんだ。差し戻し（CHANGES_REQUESTED）の後に
+  // 足軽が同じ仕事で出し直した報告まで「既に検めてある」で弾き、台帳が閉じられぬまま
+  // 詰まった（cmd_233 の #1046 → #1047）。検めは報告に付く——差し戻しの後の新しい報告は
+  // 新しい検めを受ける。門・覆いは仕事の最も新しい報告とその検めだけを見る（taskThreads）。
+  const thread = taskThreads(db, target.cmd_id, target.task_id)[0];
+  const dup = thread?.reviews.find((q) => q.reviewed === rid);
   if (dup) {
     return {
       ok: false,
       message:
-        `${target.task_id} は既に検めてある（#${dup.id}）。\n` +
-        '  やり直させるなら新しい仕事として振り直されよ（現行の Redo Protocol と同じ）。',
+        `報告 #${rid}（${target.task_id}）は既に検めてある（#${dup.row.id} ${dup.row.verdict}）。\n` +
+        '  同じ報告を二度は検めぬ——二つの判定が残ると、門がどちらを見るか決まらぬ。\n' +
+        '  直させるなら差し戻し、足軽が同じ仕事で出し直した新しい報告を検められよ。書き込みは行っておらぬ。',
+    };
+  }
+  // 差し替わった古い報告は検めぬ。門は最も新しい報告への検めしか見ぬゆえ、判定が宙に浮く。
+  if (thread && thread.latest.id !== rid) {
+    return {
+      ok: false,
+      message:
+        `報告 #${rid} は ${target.task_id} の最も新しい報告ではない（最新は #${thread.latest.id}）。\n` +
+        '  門は最も新しい報告への検めだけを見る。最新の報告を検められよ。書き込みは行っておらぬ。',
     };
   }
 
@@ -544,6 +558,87 @@ export function submitQc(
   };
 }
 
+/** 報告の行。足軽の報告（verdict が NULL）か、軍師の検め。 */
+export interface ReportRow {
+  id: number;
+  agent: string;
+  taskId: string | null;
+  verdict: string | null;
+  createdAt: string | null;
+  raw: string;
+}
+
+/** 一つの仕事の報告と検めの並び。 */
+export interface TaskThread {
+  taskId: string | null;
+  /** その仕事の最も新しい足軽の報告。門・覆い・検め待ちはこれだけを見る */
+  latest: ReportRow;
+  /** 最も新しい報告への検め。無ければ null（古い報告への検めはここに来ぬ） */
+  review: ReportRow | null;
+  /** その仕事の検めすべてと、それぞれが検めた報告の番号 */
+  reviews: { row: ReportRow; reviewed: number | null }[];
+}
+
+function rawObject(raw: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(raw);
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 足軽の報告の status（done / failed / blocked）。読めねば null。 */
+const statusOf = (r: ReportRow): unknown => rawObject(r.raw)?.['status'] ?? null;
+
+/**
+ * 司令の仕事ごとに、最も新しい報告と、それへの検めを引く。
+ *
+ * ## 検めは報告に付く
+ *
+ * 検めの行は元の報告の verdict を書き換えず、軍師の名で新しい行として入る（submitQc）。
+ * どの報告を検めたかは raw の `report_id` に在る（submitQc が必ず入れる。本陣の正本の
+ * 検めの行は全て数の report_id を持つ・2026-10-11 に readonly で数えた）。読めぬ旧い行は、
+ * 同じ仕事でその検めより前に上がった最も新しい報告への検めと見る——検めは常に報告の後に
+ * 入るゆえ。**既にある行は書き換えぬ**（migration は要らぬ）。
+ *
+ * ## 最も新しい報告だけを見る
+ *
+ * 初めは「その仕事に検めが一つでも在るか」で数えておった。差し戻しの後に出し直した報告を
+ * 検められず（submitQc の門）、覆いは古い差し戻しに縛られて白紙のまま、閉じられなんだ
+ * （cmd_233）。逆に古い報告への是が新しい報告の上に残れば、検めておらぬ報告で閉じうる。
+ * ゆえに、最も新しい報告と、それへの検めだけを見る。古い報告への検めは跡として残る。
+ */
+export function taskThreads(db: Database, cmdId: string | null, taskId?: string | null): TaskThread[] {
+  const cols = 'SELECT id, agent, task_id taskId, verdict, created_at createdAt, raw FROM report';
+  const rows = (
+    taskId === undefined
+      ? db.query(`${cols} WHERE cmd_id IS ? ORDER BY id`).all(cmdId)
+      : db.query(`${cols} WHERE cmd_id IS ? AND task_id IS ? ORDER BY id`).all(cmdId, taskId)
+  ) as ReportRow[];
+  const groups = new Map<string, ReportRow[]>();
+  for (const r of rows) {
+    const k = JSON.stringify(r.taskId);
+    groups.set(k, [...(groups.get(k) ?? []), r]);
+  }
+  const out: TaskThread[] = [];
+  for (const group of groups.values()) {
+    const workers = group.filter((r) => r.verdict === null);
+    const latest = workers.at(-1);
+    if (!latest) continue;
+    const reviews = group
+      .filter((r) => r.verdict !== null)
+      .map((row) => {
+        const n = Number(rawObject(row.raw)?.['report_id']);
+        const before = workers.filter((w) => w.id < row.id).at(-1);
+        return { row, reviewed: Number.isInteger(n) && n > 0 ? n : (before?.id ?? null) };
+      });
+    const review = reviews.filter((q) => q.reviewed === latest.id).at(-1)?.row ?? null;
+    out.push({ taskId: latest.taskId, latest, review, reviews });
+  }
+  return out;
+}
+
 export interface Coverage {
   criteria: Criterion[];
   /** 条件番号 → 証拠を出した報告 */
@@ -586,25 +681,39 @@ export interface Coverage {
  */
 export function coverageOf(db: Database, cmdId: string): Coverage {
   const criteria = criteriaOf(db, cmdId);
-  const rows = db
-    .query(
-      `SELECT ra.idx idx, ra.evidence evidence, r.id rid, r.agent agent
-         FROM report_acceptance ra
-         JOIN report r ON r.id = ra.report_id
-         JOIN cmd_acceptance ca ON ca.cmd_id = r.cmd_id AND ca.idx = ra.idx
-        WHERE r.cmd_id = ? AND r.verdict IS NULL
-          AND json_extract(r.raw, '$.status') = 'done'
-          -- 条件の文言が変わる前に集めた証拠は、変わった後の条件を覆っておらぬ。
-          -- 消しはせぬ（なぜ覆いが減ったか分からなくなる）。数えぬだけである。
-          AND (ca.changed_at IS NULL OR r.created_at >= ca.changed_at)
-          AND EXISTS (
-            SELECT 1 FROM report q
-             WHERE q.cmd_id = r.cmd_id AND q.task_id = r.task_id
-               AND q.verdict IN (${PASSING_VERDICTS.map(() => '?').join(',')})
+  // 仕事ごとに、最も新しい報告とそれへの検めだけを見る（taskThreads）。
+  const threads = taskThreads(db, cmdId);
+  const isPassing = (v: string | null) => v !== null && (PASSING_VERDICTS as readonly string[]).includes(v);
+  const done = threads.filter((t) => statusOf(t.latest) === 'done');
+  // 最も新しい報告が是と検められた仕事について、**最後の差し戻し（是でない検め）より後**に
+  // 上がった done の報告の証拠を数える。差し戻しの前の証拠は、是とされた物ではないゆえ数えぬ。
+  // 差し戻しの後に足りぬ条件だけを足した報告（補いの報告）は、同じ回の物として数える——
+  // 本陣の正本に、数秒の間を置いて足りぬ条件だけを補った報告が現に在る（cmd_69 の #637・#638）。
+  const approved = done
+    .filter((t) => isPassing(t.review?.verdict ?? null))
+    .flatMap((t) => {
+      const lastNo = Math.max(0, ...t.reviews.filter((q) => !isPassing(q.row.verdict)).map((q) => q.row.id));
+      const round = db
+        .query('SELECT id, raw FROM report WHERE cmd_id IS ? AND task_id IS ? AND verdict IS NULL AND id > ? AND id <= ? ORDER BY id')
+        .all(cmdId, t.taskId, lastNo, t.latest.id) as { id: number; raw: string }[];
+      return round.filter((r) => rawObject(r.raw)?.['status'] === 'done').map((r) => r.id);
+    });
+  const rows =
+    approved.length === 0
+      ? []
+      : (db
+          .query(
+            `SELECT ra.idx idx, ra.evidence evidence, r.id rid, r.agent agent
+               FROM report_acceptance ra
+               JOIN report r ON r.id = ra.report_id
+               JOIN cmd_acceptance ca ON ca.cmd_id = r.cmd_id AND ca.idx = ra.idx
+              WHERE ra.report_id IN (${approved.map(() => '?').join(',')})
+                -- 条件の文言が変わる前に集めた証拠は、変わった後の条件を覆っておらぬ。
+                -- 消しはせぬ（なぜ覆いが減ったか分からなくなる）。数えぬだけである。
+                AND (ca.changed_at IS NULL OR r.created_at >= ca.changed_at)
+              ORDER BY r.id`,
           )
-        ORDER BY r.id`,
-    )
-    .all(cmdId, ...PASSING_VERDICTS) as { idx: number; evidence: string; rid: number; agent: string }[];
+          .all(...approved) as { idx: number; evidence: string; rid: number; agent: string }[]);
 
   const covered = new Map<number, { reportId: number; agent: string; evidence: string }>();
   for (const r of rows) covered.set(r.idx, { reportId: r.rid, agent: r.agent, evidence: r.evidence });
@@ -623,38 +732,27 @@ export function coverageOf(db: Database, cmdId: string): Coverage {
     ).map((r) => r.idx),
   );
 
-  // 却下された報告が出した証拠。覆いには数えぬが、家老へ見せる——
+  // 却下された（最も新しい）報告が出した証拠。覆いには数えぬが、家老へ見せる——
   // 「証拠は在るのに覆われておらぬ」理由が分からねば、次の手が打てぬ。
-  const rejected = db
-    .query(
-      `SELECT DISTINCT ra.idx idx, r.agent agent, q.verdict verdict
-         FROM report_acceptance ra
-         JOIN report r ON r.id = ra.report_id
-         JOIN report q ON q.cmd_id = r.cmd_id AND q.task_id = r.task_id AND q.verdict IS NOT NULL
-        WHERE r.cmd_id = ? AND r.verdict IS NULL
-          AND q.verdict NOT IN (${PASSING_VERDICTS.map(() => '?').join(',')})
-        ORDER BY ra.idx`,
-    )
-    .all(cmdId, ...PASSING_VERDICTS) as { idx: number; agent: string; verdict: string }[];
+  const rejected: { idx: number; agent: string; verdict: string }[] = [];
+  for (const t of done) {
+    if (!t.review || isPassing(t.review.verdict)) continue;
+    const idxs = db
+      .query('SELECT DISTINCT idx FROM report_acceptance WHERE report_id = ? ORDER BY idx')
+      .all(t.latest.id) as { idx: number }[];
+    for (const { idx } of idxs) rejected.push({ idx, agent: t.latest.agent, verdict: t.review.verdict! });
+  }
+  rejected.sort((a, b) => a.idx - b.idx);
 
-  const passing = db
-    .query(
-      `SELECT id, task_id taskId, verdict FROM report
-        WHERE cmd_id = ? AND verdict IN (${PASSING_VERDICTS.map(() => '?').join(',')})
-        ORDER BY id`,
-    )
-    .all(cmdId, ...PASSING_VERDICTS) as { id: number; taskId: string | null; verdict: string }[];
+  const passing = threads
+    .filter((t) => t.review && isPassing(t.review.verdict))
+    .map((t) => ({ id: t.review!.id, taskId: t.taskId, verdict: t.review!.verdict! }))
+    .sort((a, b) => a.id - b.id);
 
-  const unreviewed = db
-    .query(
-      `SELECT r.id id, r.agent agent, r.task_id taskId FROM report r
-        WHERE r.cmd_id = ? AND r.verdict IS NULL
-          AND json_extract(r.raw, '$.status') = 'done'
-          AND NOT EXISTS (SELECT 1 FROM report q WHERE q.cmd_id = r.cmd_id
-                            AND q.task_id = r.task_id AND q.verdict IS NOT NULL)
-        ORDER BY r.id`,
-    )
-    .all(cmdId) as { id: number; agent: string; taskId: string | null }[];
+  const unreviewed = done
+    .filter((t) => !t.review)
+    .map((t) => ({ id: t.latest.id, agent: t.latest.agent, taskId: t.taskId }))
+    .sort((a, b) => a.id - b.id);
 
   return {
     criteria,

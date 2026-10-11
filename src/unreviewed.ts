@@ -5,13 +5,12 @@
  *
  * 次の五つが揃った報告を「検められておらぬ」と呼ぶ。
  *
- *   一、その task の**最新の報告行**である —— 検め（QC）は元の行の verdict を
- *       書き換えず、軍師の名で**新しい行**を挿す（src/report.ts の submitQc）。
- *       ゆえに『verdict が NULL の行』はほぼ全ての足軽報告に当てはまり、
- *       そのままでは検め済みの物まで数えてしまう。task ごとに最新の一行だけを
- *       見れば、検めが出た task は最新行に verdict が立ち、自然に外れる。
- *       後から差し替わった古い報告も、最新でないゆえ同じ理屈で外れる
- *   二、その最新行の verdict が NULL —— 検めがまだ出ておらぬ
+ *   一、その task の**最も新しい足軽の報告**である —— 後から差し替わった古い
+ *       報告は、もう誰の検めも待っておらぬ
+ *   二、その報告への検めがまだ無い —— 検め（QC）は元の行の verdict を書き換えず、
+ *       軍師の名で新しい行を挿し、どの報告を検めたかを raw の report_id に持つ
+ *       （src/report.ts の taskThreads）。古い報告への検め（差し戻し等）は、
+ *       出し直した新しい報告の検めにはならぬ——新しい報告は改めて検めを待つ
  *   三、cmd_id があり、その司令が閉じておらぬ —— status が pending / in_progress。
  *       cmd_id の無い持ち場からの報告は submitReport の門で作れなくなったため、
  *       残るのは司令の状態を判じられぬ旧報告だけである。閉じた司令に残った
@@ -43,7 +42,7 @@ import { journal, tx } from './store';
 import { deliver } from './inbox';
 import { DEFAULT_LEASE_MINUTES } from './lease';
 import { ASSIGNER } from './dispatch';
-import { QC_AUTHOR } from './report';
+import { QC_AUTHOR, taskThreads } from './report';
 
 /** 上がってからこれだけ経つまでは詰まりと判じない。 */
 export const UNREVIEWED_AFTER_MS = DEFAULT_LEASE_MINUTES * 60_000;
@@ -58,52 +57,28 @@ export interface Unreviewed {
   createdAt: string;
 }
 
-const BASE_WHERE = `
+export function findUnreviewed(db: Database, now: Date = new Date()): Unreviewed[] {
+  // 差し戻しの後に出し直した報告も数える——軍師は新しい報告を検められる
+  // （src/report.ts submitQc の門は同じ報告を二度検めぬだけ）。
+  const rows = db
+    .query(
+      `SELECT r.id reportId, r.task_id taskId, r.cmd_id cmdId, r.agent agent, r.created_at createdAt
+       FROM report r
        WHERE r.verdict IS NULL
          AND r.origin = 'native'
          AND r.task_id IS NOT NULL
-         AND r.id = (SELECT MAX(r2.id) FROM report r2 WHERE r2.task_id = r.task_id)
+         AND r.id = (SELECT MAX(r2.id) FROM report r2 WHERE r2.task_id = r.task_id AND r2.verdict IS NULL)
          AND r.cmd_id IS NOT NULL
          AND EXISTS (
-               SELECT 1 FROM cmd c WHERE c.id = r.cmd_id AND c.status IN ('pending','in_progress'))`;
-
-export function findUnreviewed(db: Database, now: Date = new Date()): Unreviewed[] {
-  // 検め済みの task への直しの報告は数えぬ——軍師は同じ task を二度検められぬ
-  // （src/report.ts submitQc の門）。軍師へ報せても果たせぬ命になる。
-  // その形は findRereported が拾い、家老へ別の言葉で届く。
-  const rows = db
-    .query(
-      `SELECT r.id reportId, r.task_id taskId, r.cmd_id cmdId, r.agent agent, r.created_at createdAt
-       FROM report r
-       ${BASE_WHERE}
-         AND NOT EXISTS (SELECT 1 FROM report q
-               WHERE q.task_id = r.task_id AND q.agent = ? AND q.verdict IS NOT NULL)
+               SELECT 1 FROM cmd c WHERE c.id = r.cmd_id AND c.status IN ('pending','in_progress'))
        ORDER BY r.created_at`,
     )
-    .all(QC_AUTHOR) as Unreviewed[];
-  return rows.filter((r) => now.getTime() - Date.parse(r.createdAt) >= UNREVIEWED_AFTER_MS);
-}
-
-/**
- * 検め済みの task へ上がった直しの報告。
- *
- * 軍師はこれを検められぬ（submitQc が拒む）ゆえ、放っておけば誰にも
- * 読まれぬまま朽ちる——それ自体が「振り直しが要る」印である。
- * 黙って捨てず、差配できる家老へ届ける。
- */
-export function findRereported(db: Database, now: Date = new Date()): Unreviewed[] {
-  const rows = db
-    .query(
-      `SELECT r.id reportId, r.task_id taskId, r.cmd_id cmdId, r.agent agent, r.created_at createdAt
-       FROM report r
-       ${BASE_WHERE}
-         AND r.agent != ?
-         AND EXISTS (SELECT 1 FROM report q
-               WHERE q.task_id = r.task_id AND q.agent = ? AND q.verdict IS NOT NULL)
-       ORDER BY r.created_at`,
-    )
-    .all(QC_AUTHOR, QC_AUTHOR) as Unreviewed[];
-  return rows.filter((r) => now.getTime() - Date.parse(r.createdAt) >= UNREVIEWED_AFTER_MS);
+    .all() as Unreviewed[];
+  return rows.filter(
+    (r) =>
+      now.getTime() - Date.parse(r.createdAt) >= UNREVIEWED_AFTER_MS &&
+      taskThreads(db, r.cmdId, r.taskId).find((t) => t.latest.id === r.reportId)?.review === null,
+  );
 }
 
 /**
@@ -172,31 +147,5 @@ export function notifyUnreviewed(db: Database, now: Date = new Date()): Unreview
     }
   }
 
-  // 検め済みの task への直しの報告——軍師には果たせぬゆえ、家老へ別の言葉で。
-  // 案内は submitQc の門と同じ言葉に揃える（読む者が同じ手順へ辿り着くように）。
-  for (const u of findRereported(db, now)) {
-    const rid = `msg_requeue_${u.taskId}_r${u.reportId}`;
-    tx(db, () => {
-      if (db.query('SELECT 1 FROM inbox WHERE id = ?').get(rid)) return;
-      deliver(db, {
-      id: rid,
-      agent: ASSIGNER,
-      at: now.toISOString(),
-      type: 'report_requeue',
-      sender: 'core',
-      body:
-        `振り直しが要る報告: #${u.reportId} ${u.agent} / ${u.taskId}${u.cmdId ? ` / ${u.cmdId}` : ''}\n\n` +
-        `${u.taskId} は既に検めてあり、軍師は同じ仕事を二度検められぬ。\n` +
-        `直しの報告が上がったままでは誰にも読まれぬ。\n` +
-        `やり直させるなら新しい仕事として振り直されよ（現行の Redo Protocol と同じ）。`,
-    });
-      journal(db, {
-        actor: 'core',
-        action: 'report.requeue.notice',
-        target: u.taskId,
-        detail: `report=#${u.reportId} agent=${u.agent}`,
-      });
-    });
-  }
   return sent;
 }
