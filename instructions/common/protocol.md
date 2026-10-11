@@ -55,8 +55,9 @@ honden inbox write --to ashigaru3 --type task_assigned --from karo \
 `lease_stalled` を受けた家老は、振り直すか、貸与を解くか、長い処理ならそのまま待つか差配せよ。
 `report_unreviewed` を受けた軍師は、その報告を honden report qc で検めよ。
 家老に届いた時は軍師が動けておらぬ印である——軍師を立て直すか、検めの運びを差配せよ。
-`report_requeue` を受けた家老は、その task を新しい仕事として振り直せ
-（既に検めた task への直しの報告は、軍師が二度検められぬ）。
+`report_requeue` は旧い報せで、今は出ぬ。差し戻し（CHANGES_REQUESTED）の後に同じ task で
+出し直した報告は、軍師が改めて検められる（`report_unreviewed` として軍師へ届く）。
+受け箱に残っておれば、その報告が検められたかを `honden cmd show` で見よ。
 
 Delivery is handled by the resident watch, which calls `honden nudge`.
 **Agents NEVER call tmux send-keys directly.**

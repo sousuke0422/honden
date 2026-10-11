@@ -84,13 +84,15 @@ describe('検め待ちの一覧', () => {
     expect(listPendingReviews(db)).toEqual([]);
   });
 
-  test('陰性: 検め済み task への直しの報告は出ない', () => {
+  test('検め済み task への直しの報告も検め待ちに出る——軍師は新しい報告を検められ、古い是では閉じぬゆえ（cmd_237）', () => {
     const { db, cmdId, taskId } = seeded();
-    addDoneReport(db, taskId, cmdId);
+    const first = addDoneReport(db, taskId, cmdId);
     addDoneReport(db, taskId, cmdId, { agent: 'gunshi', verdict: 'APPROVED' });
     const rid = addDoneReport(db, taskId, cmdId, { agent: 'ashigaru2' });
     const pending = listPendingReviews(db);
-    expect(pending.some((p) => p.id === rid)).toBe(false);
+    expect(pending.map((p) => p.id)).toEqual([rid]);
+    // 検められた古い報告は出ぬ
+    expect(pending.some((p) => p.id === first)).toBe(false);
   });
 });
 
