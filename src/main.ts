@@ -1630,8 +1630,55 @@ function claudeRows(c: GateCheck, base: string, dbPath: string | undefined, home
 }
 
 /**
+ * cursor-agent が hooks.json の注釈を落とす読み方（2026.09.08・09.18・10.01 の 190.index.js の
+ * parseJSONC を字句どおり写す）。**文字列の中か外かを区別せぬ**——行末までの行の注釈と塊の注釈を
+ * 一律に削るゆえ、文字列の中の URL の `//` や `/` + `*` まで削り、正しい JSON を壊す。
+ * cursor が実際に読めるかを問うには、これと同じ読みで確かめねばならぬ。
+ */
+function cursorStripComments(text: string): string {
+  return text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * 文字列の中（エスケープ付きの引用符を含む）と外を区別し、外の行の注釈（行末まで）と塊の注釈
+ * だけを落とす。JSON として正しいかを、cursor の癖と切り離して問うための読み。閉じぬ塊の注釈は
+ * 落とさず残す（JSON.parse が壊れておると言う）。
+ */
+function stripJsonComments(text: string): string {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end < 0) {
+        out += text.slice(i);
+        break;
+      }
+      i = end + 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * cursor の user の層（`<HOME>/.cursor/hooks.json`）の様子を一句で。中身は出さぬ（鍵や命が
  * 載りうる）。数えるのは beforeShellExecution の hook の本数だけ。
+ *
+ * 三つに分ける: cursor の読み方で読めれば本数を言う。cursor の読み方では読めぬが、文字列を
+ * 区別して読めば正しい JSON なら、**壊れておるとは言わず**「cursor-agent は読めぬ」と言う
+ * （cursor は文字列の中の注釈の印まで注釈と取り違え、その層を載せぬ）。どちらでも読めぬ時だけ
+ * 壊れておる。門は project の層に在り user の層とは別に読まれる——この句は生死の判じに関わらぬ。
  */
 function cursorUserLayerNote(file: string): string {
   let text: string;
@@ -1641,11 +1688,16 @@ function cursorUserLayerNote(file: string): string {
     return (e as { code?: string } | null)?.code === 'ENOENT' ? 'user の hooks.json 無し' : 'user の hooks.json を読めず';
   }
   try {
-    const doc = JSON.parse(text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')) as { hooks?: Record<string, unknown> };
+    const doc = JSON.parse(cursorStripComments(text)) as { hooks?: Record<string, unknown> };
     const hooks = doc?.hooks?.['beforeShellExecution'];
     return `user の hooks.json 有り（beforeShellExecution ${Array.isArray(hooks) ? hooks.length : 0} 本）`;
   } catch {
-    return 'user の hooks.json が壊れておる';
+    try {
+      JSON.parse(stripJsonComments(text));
+      return 'user の hooks.json は JSON として正しいが、cursor-agent は読めぬ（文字列の中の注釈の印を注釈と取り違える。その層は載らぬ）';
+    } catch {
+      return 'user の hooks.json が壊れておる';
+    }
   }
 }
 

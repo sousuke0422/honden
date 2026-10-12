@@ -306,3 +306,74 @@ describe('隔離の下の HOME', () => {
     expect(runIsolateWrap(db, 'cursor-agent', 'cursor', 'ashigaru7', HOME, which).code).toBe(0);
   });
 });
+
+describe('selftest が user の層の注釈を、文字列の中と外を区別して読む', () => {
+  // cursor-agent（2026.09.08・09.18・10.01 の parseJSONC）は文字列の中の `//` `/*` も注釈として削る。
+  // ゆえに URL を持つ正しい JSON は、cursor には読めぬが「壊れておる」ではない。
+  const gate = JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: '.cursor/hooks/guard-shell.sh', failClosed: true }] } });
+  function root(): string {
+    const r = mkdtempSync(join(BASE, 'rootc-'));
+    mkdirSync(join(r, '.cursor', 'hooks'), { recursive: true });
+    writeFileSync(join(r, '.cursor', 'hooks.json'), gate);
+    const sh = join(r, '.cursor', 'hooks', 'guard-shell.sh');
+    writeFileSync(sh, `#!/bin/bash\ncat >/dev/null\necho '{"permission":"deny"}'\n`);
+    chmodSync(sh, 0o755);
+    return r;
+  }
+  /** 偽の user の層を置いて selftest を撃ち、cursor の足軽の行を返す。 */
+  function lineFor(body: string): { code: number; line: string } {
+    const own = mk(join(BASE, `cursor-c-${Math.random().toString(36).slice(2)}`));
+    mkdirSync(join(own, '.cursor'), { recursive: true });
+    writeFileSync(join(own, '.cursor', 'hooks.json'), body);
+    const res = runGuardSelftest(root(), store(`cli:\n  agents:\n${agent('ashigaru7', own)}`), HOME);
+    return { code: res.code, line: (res.out ?? '').split('\n').filter((l) => l.trim().startsWith('cursor'))[0] ?? '' };
+  }
+  const withCmd = (command: string) => `{"version":1,"hooks":{"beforeShellExecution":[{"command":${JSON.stringify(command)}}]}}`;
+
+  test('(1) command に URL を持つ正しい JSON は「壊れておる」と言われぬ（cursor が読めぬ事は言う）。門は生きておる', () => {
+    const { code, line } = lineFor(withCmd('curl https://example.invalid/x'));
+    expect(code).toBe(0);
+    expect(line).toContain('生きておる');
+    expect(line).not.toContain('壊れておる');
+    expect(line).toContain('JSON として正しい');
+    expect(line).toContain('cursor-agent は読めぬ');
+  });
+
+  test('(2) 文字列に `/*` を含む正しい JSON も同じ。エスケープ付きの引用符の直後の `//` も', () => {
+    for (const cmd of ['echo "a/*b"', 'echo \\"//still-string', 'x "\\\\" // y']) {
+      // 最初の物は、文字列の中の `/*` に外の塊の注釈の `*/` が対になって cursor の読みを壊す形
+      const { code, line } = lineFor(cmd.includes('/*') ? `${withCmd(cmd)} /* 外の注釈 */` : withCmd(cmd));
+      expect(code, cmd).toBe(0);
+      expect(line, cmd).not.toContain('壊れておる');
+      expect(line, cmd).toContain('JSON として正しい');
+    }
+  });
+
+  test('(3) 外の行の注釈と塊の注釈は今までどおり落ち、cursor にも読める（本数を数える）', () => {
+    const body = `// 先頭の注釈\n{ /* 塊 */ "version": 1,\n  "hooks": { "beforeShellExecution": [ { "command": "/x/a.js" } ] } // 末尾\n}\n`;
+    const { code, line } = lineFor(body);
+    expect(code).toBe(0);
+    expect(line).toContain('user の hooks.json 有り（beforeShellExecution 1 本）');
+    expect(line).not.toContain('壊れておる');
+  });
+
+  test('(4) 本当に壊れた JSON は今までどおり「壊れておる」。閉じぬ塊の注釈も', () => {
+    for (const body of ['{"hooks": {"stop": [', '{"hooks": {} /* 閉じぬ']) {
+      const { code, line } = lineFor(body);
+      expect(code, body).toBe(0);
+      expect(line, body).toContain('user の hooks.json が壊れておる');
+    }
+  });
+
+  test('(5) 門の生死の判じは変わらぬ: 根の層が symlink なら、user の層が何であれ効いておらぬ', () => {
+    const real = root();
+    const a = mkdtempSync(join(BASE, 'rootc-link-'));
+    symlinkSync(join(real, '.cursor'), join(a, '.cursor'));
+    const own = mk(join(BASE, 'cursor-c-sym'));
+    mkdirSync(join(own, '.cursor'), { recursive: true });
+    writeFileSync(join(own, '.cursor', 'hooks.json'), withCmd('curl https://example.invalid/x'));
+    const res = runGuardSelftest(a, store(`cli:\n  agents:\n${agent('ashigaru7', own)}`), HOME);
+    expect(res.code).not.toBe(0);
+    expect((res.out ?? '').split('\n').find((l) => l.trim().startsWith('cursor'))).toContain('**効いておらぬ**');
+  });
+});
