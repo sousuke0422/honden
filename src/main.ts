@@ -1701,6 +1701,49 @@ function cursorUserLayerNote(file: string): string {
   }
 }
 
+/**
+ * ある家から見える global の `core.hooksPath`（`git config --global --includes --get --type=path`）。
+ * `--type=path` で `~` を**その家**で解く——`~/.git-hooks` と書かれた物は、家を分ければ別の道になる。
+ * 家以外の口（XDG_CONFIG_HOME・GIT_CONFIG_GLOBAL）は渡さぬ——渡せば家を分けても同じ物が見える。
+ * 未設定は `value: undefined`、引けぬ（git が無い・設定が壊れておる）は `ok: false`。
+ */
+function globalHooksPathOf(homeDir: string): { ok: true; value: string | undefined } | { ok: false; why: string } {
+  try {
+    const p = Bun.spawnSync(['git', 'config', '--global', '--includes', '--type=path', '--get', 'core.hooksPath'], {
+      cwd: tmpdir(),
+      env: { PATH: process.env.PATH ?? '', HOME: homeDir, LANG: 'C' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    if (p.exitCode === 1) return { ok: true, value: undefined };
+    if (p.exitCode !== 0) return { ok: false, why: p.stderr.toString().trim().split('\n')[0] || `git が exit ${p.exitCode}` };
+    const v = p.stdout.toString().trim();
+    return { ok: true, value: v === '' ? undefined : v };
+  } catch (e) {
+    return { ok: false, why: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * HOME を分けた足軽の家から、本陣の家と同じ global の git hook が見えるか。見えぬなら一句。
+ *
+ * 本陣の側が未設定（global の hook を使わぬ機）なら比べず黙る。引けぬ時は黙らず、引けなんだと言う。
+ * 門（cursor の hook）そのものは生きておる——ゆえこれは note に留め、生死の判じには効かせぬ。
+ */
+function globalHookNote(mainHome: string, movedHome: string): string {
+  const main = globalHooksPathOf(mainHome);
+  if (!main.ok) return `global の git hook を本陣の家から引けなんだ（${main.why}）`;
+  if (main.value === undefined) return '';
+  const moved = globalHooksPathOf(movedHome);
+  if (!moved.ok) return `global の git hook を分けた家から引けなんだ（${moved.why}）`;
+  if (moved.value === main.value) return '';
+  return (
+    `分けた家から global の git hook が見えぬ（本陣: ${main.value} / この家: ${moved.value ?? '無し'}）。` +
+    `commit の trailer を揃える hook が飛ぶ。家の .gitconfig に [include] path = ${join(mainHome, '.gitconfig')} を置かれよ` +
+    `（hooksPath を ~ で書いておるなら、家ごとに解けて道が変わる——絶対の道で書くか、同じ道に hook を置く）`
+  );
+}
+
 /** 道が symlink か（lstat。無ければ false）。 */
 function isSymlink(p: string): boolean {
   try {
@@ -1780,9 +1823,10 @@ function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home
   for (const [d, ids] of groups) {
     const layer = cursorUserLayerNote(join(d, '.cursor', 'hooks.json'));
     const dbOf = good.find((a) => (a.dir ?? home) === d)?.db;
+    const gitHook = ids.length > 0 && d !== home ? globalHookNote(home, d) : '';
     const who =
       ids.length > 0
-        ? `${ids.join(', ')}（HOME=${d}。${layer}${dbOf !== undefined ? `。正本は本陣と同じ ${dbOf}` : ''}）`
+        ? `${ids.join(', ')}（HOME=${d}。${layer}${dbOf !== undefined ? `。正本は本陣と同じ ${dbOf}` : ''}${gitHook !== '' ? `。${gitHook}` : ''}）`
         : roster.ok
           ? `（名簿に cursor の足軽が居らぬ。${d} を見た。${layer}）`
           : `（設定が読めぬ（${roster.why}）ゆえ名簿を引けぬ。${d} だけを見た。${layer}）`;

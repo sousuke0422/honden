@@ -251,6 +251,22 @@ dashboard も無い。
 家老自身は司令層ゆえ許状を要さぬ。だが**それを理由に抱え込むな**。
 交通整理が家老の務めであり、外向きの書き込みも実行系として足軽へ委ねるのが筋。
 
+## HOME を分けた cursor の足軽に git・gh を使わせる時
+
+cursor の足軽の HOME を分ける（設定の `cli.agents.<名>.env.HOME`）と、**家に在った物が見えなくなる**。
+cursor は user の hook と MCP を `os.homedir()/.cursor` からしか読まぬゆえ家を分けるが、
+git・gh・ssh も同じ家から読む。起こす前に、次を見て手当てせよ（`honden guard selftest` の
+cursor の行が、global の git hook が見えぬ時は一句で言う）。
+
+- **git の設定**: identity（user.name・email）・`core.hooksPath` が消える。global の hook は
+  commit の trailer を揃える——消えれば `Assisted-by` の掟が静かに飛ぶ。最小の手当ては、
+  家の `.gitconfig` に `[include] path = <本物の .gitconfig>` の一行。`hooksPath` を `~` で
+  書いてあれば家ごとに解けて道が変わる——絶対の道で書くか、同じ道に hook を置く
+- **gh の認証**: 家の `.config/gh` が無く、gh が使えぬ。渡すかは殿の判じ
+- **ssh の鍵**: origin が ssh 形なら、家の `.ssh` が無く push できぬ。渡すかは殿の判じ
+- 本物の設定を**写すな**（秘密が複製される）。指す（include）か、渡さぬと決めよ
+- 正本は気にせずともよい——HOME を書いた足軽の起こす命には、起こす側の正本が `HONDEN_DB` で必ず載る
+
 ## Task YAML Format
 
 honden に手で置くタスク YAML は無い。同じ YAML は `honden task assign` の

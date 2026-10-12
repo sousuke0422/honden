@@ -365,6 +365,13 @@ describe('selftest が user の層の注釈を、文字列の中と外を区別�
     }
   });
 
+  test('(4b) 正しい JSON の後に閉じぬ塊の注釈が続く形は「壊れておる」（閉じぬ塊を黙って捨てれば括弧が釣り合って通ってしまう）', () => {
+    const { code, line } = lineFor('{"version":1,"hooks":{"beforeShellExecution":[]}} /* 閉じぬ');
+    expect(code).toBe(0);
+    expect(line).toContain('user の hooks.json が壊れておる');
+    expect(line).not.toContain('JSON として正しい');
+  });
+
   test('(5) 門の生死の判じは変わらぬ: 根の層が symlink なら、user の層が何であれ効いておらぬ', () => {
     const real = root();
     const a = mkdtempSync(join(BASE, 'rootc-link-'));
@@ -375,5 +382,95 @@ describe('selftest が user の層の注釈を、文字列の中と外を区別�
     const res = runGuardSelftest(a, store(`cli:\n  agents:\n${agent('ashigaru7', own)}`), HOME);
     expect(res.code).not.toBe(0);
     expect((res.out ?? '').split('\n').find((l) => l.trim().startsWith('cursor'))).toContain('**効いておらぬ**');
+  });
+});
+
+describe('selftest が、分けた家から global の git hook が見えぬ形を言う', () => {
+  const gate = JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: '.cursor/hooks/guard-shell.sh', failClosed: true }] } });
+  function root(): string {
+    const r = mkdtempSync(join(BASE, 'rootg-'));
+    mkdirSync(join(r, '.cursor', 'hooks'), { recursive: true });
+    writeFileSync(join(r, '.cursor', 'hooks.json'), gate);
+    const sh = join(r, '.cursor', 'hooks', 'guard-shell.sh');
+    writeFileSync(sh, `#!/bin/bash\ncat >/dev/null\necho '{"permission":"deny"}'\n`);
+    chmodSync(sh, 0o755);
+    return r;
+  }
+  /** 使い捨ての本陣の家と分けた家を作る。各 .gitconfig の @MAIN@ は本陣の家の道に置き換わる（null は置かぬ）。 */
+  function homes(main: string | null, moved: string | null) {
+    const m = mk(join(BASE, `main-${Math.random().toString(36).slice(2)}`));
+    const d = mk(join(BASE, `moved-${Math.random().toString(36).slice(2)}`));
+    if (main !== null) writeFileSync(join(m, '.gitconfig'), main.replaceAll('@MAIN@', m));
+    if (moved !== null) writeFileSync(join(d, '.gitconfig'), moved.replaceAll('@MAIN@', m));
+    return { m, d };
+  }
+  const run = (m: string, d: string) => {
+    const res = runGuardSelftest(root(), store(`cli:\n  agents:\n${agent('ashigaru7', d)}`), m);
+    return { code: res.code, line: (res.out ?? '').split('\n').find((l) => l.trim().startsWith('cursor')) ?? '' };
+  };
+  const hooks = '[core]\n\thooksPath = @MAIN@/.git-hooks\n';
+  const include = '[include]\n\tpath = @MAIN@/.gitconfig\n';
+
+  test('(1) 本陣の家に core.hooksPath が在り、分けた家が空なら note が出る。門は生きておる', () => {
+    const { m, d } = homes(hooks, null);
+    const { code, line } = run(m, d);
+    expect(code).toBe(0);
+    expect(line).toContain('生きておる');
+    expect(line).toContain('分けた家から global の git hook が見えぬ');
+    expect(line).toContain(`${m}/.git-hooks`);
+    expect(line).toContain('この家: 無し');
+    expect(line).toContain(`[include] path = ${m}/.gitconfig`);
+  });
+
+  test('(2) 分けた家の .gitconfig が [include] で本陣の物を指せば note は出ぬ', () => {
+    const { m, d } = homes(hooks, include);
+    const { code, line } = run(m, d);
+    expect(code).toBe(0);
+    expect(line).not.toContain('git hook');
+    expect(line).toContain('生きておる');
+  });
+
+  test('(3) 本陣の家に core.hooksPath が無ければ、比べず黙る（分けた家に在っても）', () => {
+    for (const main of [null, '[user]\n\tname = fake\n']) {
+      const { m, d } = homes(main, '[core]\n\thooksPath = /somewhere/else\n');
+      const { code, line } = run(m, d);
+      expect(code).toBe(0);
+      expect(line).not.toContain('git hook');
+    }
+  });
+
+  test('(3b) ~ で書かれた hooksPath は家ごとに解ける——include していても道が違えば言う', () => {
+    const { m, d } = homes('[core]\n\thooksPath = ~/.git-hooks\n', include);
+    const { line } = run(m, d);
+    expect(line).toContain('分けた家から global の git hook が見えぬ');
+    expect(line).toContain(`${m}/.git-hooks`);
+    expect(line).toContain(`この家: ${d}/.git-hooks`);
+  });
+
+  test('(4) どれでも門の生死の判じは変わらぬ: 根の層が symlink なら note の有無に関わらず効いておらぬ', () => {
+    const real = root();
+    const a = mkdtempSync(join(BASE, 'rootg-link-'));
+    symlinkSync(join(real, '.cursor'), join(a, '.cursor'));
+    for (const moved of [null, include]) {
+      const { m, d } = homes(hooks, moved);
+      const res = runGuardSelftest(a, store(`cli:\n  agents:\n${agent('ashigaru7', d)}`), m);
+      expect(res.code).not.toBe(0);
+    }
+    // 陽性対照: 実体の根なら note が出ても code 0
+    const { m, d } = homes(hooks, null);
+    expect(run(m, d).code).toBe(0);
+  });
+
+  test('(5) git が引けぬ時は黙って落とさず、引けなんだと言う（PATH に git が無い）', () => {
+    const { m, d } = homes(hooks, null);
+    const saved = process.env.PATH;
+    process.env.PATH = '/nonexistent';
+    try {
+      const { code, line } = run(m, d);
+      expect(code).toBe(0);
+      expect(line).toContain('引けなんだ');
+    } finally {
+      process.env.PATH = saved;
+    }
   });
 });
