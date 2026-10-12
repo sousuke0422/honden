@@ -70,6 +70,31 @@ options:
 
 値段と使えるクラスは https://chatgpt.com/pricing で確かめる。
 
+### 三の二、Q2b: その他の CLI の購読（AskUserQuestion）
+
+顔ぶれ（一で引いた `honden roster`）に、CLI が cursor か opencode の者が居る時だけ問う。
+居なければ問わない。
+いくつ選んでもよい（multiSelect）。
+
+```
+question: "cursor と opencode の購読を、使っておる物すべて選んでください。"
+header: "その他の CLI"
+multiSelect: true
+options:
+  - label: "cursor（Start 以外）"
+    description: "各社の模型の束と、cursor の自前の模型の束（Composer、Grok）が使える。値段と枠は公式の頁で確かめる"
+  - label: "cursor（Start）"
+    description: "cursor の自前の模型の束だけが使える。値段と使える地域は公式の頁で確かめる"
+  - label: "OpenCode Go"
+    description: "opencode で使える各社の模型の束。一部は既存のクラス（Luna など）に写り、多くは「その他」になる。値段と顔ぶれは公式の頁で確かめる"
+  - label: "どれも無い"
+    description: "cursor と opencode は各社の API の鍵か無料の模型で回す"
+```
+
+cursor のプランと模型の束は https://cursor.com/docs/models 、OpenCode Go は https://opencode.ai/go で確かめる。
+この問いは型（下の「五」）を変えない。
+答えは、草稿の `available_cost_groups` の枠の名と、「その他」の模型の警告に使う。
+
 ### 四、Q3: 枠の優先（両方を使う時だけ）
 
 Q1 が Free でもなしでもなく、かつ Q2 が Plus か Pro の時だけ問う。
@@ -121,9 +146,9 @@ options:
 2. Q3a で先にしなかった側の、目安が L3 以下のクラスの `max_bloom` を一段下げる（L3 なら L2 へ）。振り先は軽い順に選ばれるので、下げた側には L3 が回らなくなる
 3. Q3b で先にしなかった側の、目安が L4 のクラスの `max_bloom` を L3 へ下げる。L4 の仕事は、残った側の上のクラスへ回る
 4. 目安が L6 のクラスは、載せなくても制限なしで同じ働きになる。`cost_group` を書きたい時だけ `max_bloom: 6` で載せる
-5. クラス不明の模型は載せない。載せぬ模型は制限なし（L6）で振られるので、警告に出す
+5. クラス不明の模型と「その他」の模型は載せない。載せぬ模型は制限なし（L6）で振られるので、警告に出す。「その他」の目安は人が試して決め、決まってから載せる
 6. 表の鍵には、`honden roster` に出た模型の名をそのまま使う。値はクラスで決め、名は今の版に当てる
-7. `cost_group` の名は、人が `available_cost_groups` に宣する名に揃える。草稿では置き字にしておく
+7. `cost_group` の名は、人が `available_cost_groups` に宣する名に揃える。草稿では置き字にしておく。Q2b で cursor か OpenCode Go を選んだ時は、その枠の置き字も足す
 
 出す形（置き字は人が埋める）:
 
@@ -131,6 +156,8 @@ options:
 available_cost_groups:
   - <Claude の枠の名>
   - <ChatGPT の枠の名>
+  - <cursor の枠の名>      # Q2b で cursor を選んだ時だけ
+  - <OpenCode Go の枠の名>  # Q2b で OpenCode Go を選んだ時だけ
 
 capability_tiers:
   <顔ぶれの Haiku クラスの模型の名>:
@@ -159,6 +186,7 @@ capability_tiers:
    - 草稿を当てた後で、L1 から L6 の各段について、振れる働き手（`role` が worker）が一人も居ない段を挙げる。表に無い模型は L6 まで振れるとして数える
    - Q1 が Free かなしで、顔ぶれに目安 L6 のクラスが居ない時は「L6 に振れる者が居らぬ」と出す
    - クラス不明の模型が居れば「制限なしで振られる。人が目安を決めよ」と出す
+   - 「その他」の模型（Composer、Grok、OpenCode Go の他社の模型など）が居れば「制限なしで振られる。人が試して目安を決めよ」と出す
 5. 次の段（下の「八」）
 
 ### 八、人が当てる

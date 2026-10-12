@@ -50,35 +50,53 @@ honden は `config/settings.yaml` の `capability_tiers` を **能力に制限�
 名        役      CLI     模型                 クラス     Bloom の目安  capability_tiers
 <名>      worker  claude  claude-<クラス>-…    Sonnet     L5            載っておらぬ（制限なし）
 <名>      worker  codex   gpt-…-<クラス>       Sol        L5〜L6        max_bloom: 6
+<名>      worker  cursor  composer-…           その他     人が試す      載っておらぬ（制限なし）
 <名>      worker  <CLI>   <知らぬ名>           不明       -             載っておらぬ（制限なし）
 ```
 
 クラスが不明の行は、目安を空けたまま「不明」と出す。推し量りで埋めない。
+「その他」の行は、目安の欄に「人が試す」と出す。
 
 ## 名からクラスへの写し
 
 模型の名の形でクラスを決める。
-`provider/model` の形（`/` を含む名）は、最後の段だけを見る。
+当てる前に、名を二段で整える。
+
+1. `/` を含む名は、最後の段だけを残す。opencode の名は `provider_id/model_id` の形で、`/` が二つ入ることもある（`<provider>/<vendor>/<model>` など）。先頭の provider の名は、下の表の一行で使うので控えておく
+2. 名の末に付いた努力の段と速さの印を、付いておるだけ落とす。cursor の名に付く印は `-none`、`-minimal`、`-low`、`-medium`、`-high`、`-xhigh`、`-max`、`-fast`、`-thinking` である
+
+整えた名を下の表に、上の行から順に当てる。大文字と小文字は分けない。
 どの形にも当たらぬ名は **クラス不明** とする。
 
-| 名の形 | クラス |
+| 名の形（整えた後） | クラス |
 |---|---|
-| `claude-fable-*` | Fable |
-| `claude-mythos-*` | Mythos |
-| `claude-opus-*` | Opus |
-| `claude-sonnet-*` | Sonnet |
-| `claude-haiku-*` | Haiku |
+| 文を書かぬ模型（名に `embedding`、`image`、`tts`、`realtime`、`live` を含む物、`veo-*`、`lyria-*`） | 対象外（最初に当てる） |
+| `claude-fable-*`、`claude-*-fable` | Fable |
+| `claude-mythos-*`、`claude-*-mythos` | Mythos |
+| `claude-opus-*`、`claude-*-opus` | Opus |
+| `claude-sonnet-*`、`claude-*-sonnet` | Sonnet |
+| `claude-haiku-*`、`claude-*-haiku` | Haiku |
 | `gpt-*-astra` | Astra |
 | `gpt-*-sol` | Sol |
 | `gpt-*-terra` | Terra |
 | `gpt-*-luna` | Luna |
 | `gpt-*-mini` | mini |
 | `gpt-*-nano` | nano |
-| `gemini-*-flash-lite*` | Flash-Lite（`flash` より先に当てる） |
-| `gemini-*-flash*` | Flash |
-| `gemini-*-pro*` | Pro |
+| `gemini-*flash-lite*` | Flash-Lite（`flash` より先に当てる） |
+| `gemini-*flash*` | Flash |
+| `gemini-*pro*` | Pro |
+| `composer-*` | その他（cursor の自前の模型） |
+| `grok-*`、`cursor-grok-*` | その他（xAI の Grok） |
+| `deepseek-*`、`glm-*`、`kimi-*`、`qwen*`、`minimax-*`、`mimo-*`、`longcat-*`、`muse-spark-*` | その他（opencode などで使える他社の模型） |
+| `gpt-<版>` だけでクラスの語を持たぬ名 | 不明 |
 | `gpt-*-codex*`、`codex-mini-*` | 不明（旧い codex 系。各社がクラスとしての文を出しておらぬ） |
-| `gemini-*` の `-tts`、`-image`、`-live` 付き | 対象外（文を書く模型ではない） |
+| `auto` | 不明（cursor が呼ぶたびに模型を選ぶ。クラスが定まらぬ） |
+| provider が `opencode-go` か `opencode` の名で、上のどれにも当たらぬ物 | その他（OpenCode Go と OpenCode Zen が出す模型） |
+
+`claude-*-opus` の形（版がクラスの語より前に来る形）は、cursor の一覧に旧い模型として残っておる。
+**その他** は、確かに在る模型だが既存のクラスへ写せぬ物を一括りにする。
+その他の向き不向きと Bloom の目安は、確かな事が言えぬので、人が試して決める。
+不明とは分けて扱う（不明は、名の形を知らぬ物である）。
 
 この写しには限りが二つある。
 
@@ -126,6 +144,34 @@ Bloom の目安は、その文から引いた見立てであって、各社が�
 
 出所: https://ai.google.dev/gemini-api/docs/models
 （Gemini もクラスとしての公式の文は無く、各クラスの最新の版の札から引いた。Flash は版によって位置づけの幅が大きい。）
+
+### cursor（cursor-agent）
+
+cursor は、各社の模型と、cursor の自前の模型の両方を出す。
+使える名は `cursor-agent --list-models` で挙がる。
+
+- 各社の模型（Claude、GPT、Gemini など）は、名を整えてから上の表で既存のクラスへ写す
+- 自前の模型の束（cursor の言う Cursor Models の pool）は、Composer と Grok から成る。どちらも「その他」とする
+  - Composer の公式の位置づけ: 「Composer 2.5 is Cursor's own agentic model. It builds on Composer 2 with stronger intelligence on long agentic tasks」
+  - 向き不向きと Bloom の目安は、人が試して決める
+- `auto` は、呼ぶたびに cursor が模型を選ぶ。クラスが定まらぬので不明とする
+
+出所: https://cursor.com/docs/models 、https://cursor.com/docs/models/cursor-composer-2-5
+
+### opencode
+
+opencode は、多くの provider の模型を同じ CLI で使う。
+名は `provider_id/model_id` の形で、使える名は `opencode models` で挙がる。
+
+- 各社の provider（openai、google など）の模型は、最後の段を上の表で既存のクラスへ写す
+- **OpenCode Go** は、opencode の側の購読で、`opencode-go/` の provider として出る。各社の模型の束を含む
+  - 既存のクラスに写る物（GPT の Luna など）と、写らぬ物（GLM、Kimi、DeepSeek、Qwen、MiniMax、MiMo、LongCat、Grok、Muse Spark など）が混じる
+  - 写らぬ物は「その他」とし、人が試して決める
+- `opencode/` の provider（OpenCode Zen）にも、各社の模型と、期間を限った無料の模型が並ぶ。同じく名を整えて当てる
+- 手元の模型（LM Studio、llama.cpp など）を自前の provider の名で足せる。名は人ごとに違うので、写しの表には載せない。当たらねば不明である
+
+出所: https://opencode.ai/docs/models/ 、https://opencode.ai/go
+（含む模型の顔ぶれは変わる。今の顔ぶれは `opencode models` か公式の頁で確かめる。）
 
 ## Bloom の段
 
