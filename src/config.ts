@@ -122,11 +122,21 @@ export function dig(doc: unknown, dotted: string): { kind: 'scalar'; value: stri
  *   `.claude.json` がこの下へ移る。値は道であって秘密ではない（鍵はその dir の中に在り、
  *   命の字面には載らぬ）。`ANTHROPIC_API_KEY` 等の秘密の名は、ここへ足さぬ。
  *
+ * - `HOME`: **cursor の足軽だけ**の、家の在り処（dir の道）。cursor-agent は user の層の
+ *   `hooks.json`・`mcp.json`・skills・cli-config.json・資格・信頼の記録を、すべて `os.homedir()` の
+ *   下の `.cursor` に置く。`CURSOR_CONFIG_DIR` は `cli-config.json` と statsig の写しを移すだけで、
+ *   `hooks.json` も `mcp.json` も移さぬ（cursor-agent 2026.10.01-e373342 の源と、使い捨ての HOME での
+ *   実測）。ゆえに本物の `~/.cursor` を汚さず足軽 1 人だけに hindsight の hook と MCP を載せるには、
+ *   その足軽の HOME を分けるほかない。値は道であって秘密ではない。
+ *   **HOME は他の CLI の足軽には書かせぬ**（agentEnv が止める）。HOME は全ての道具が読む名で、
+ *   claude・codex の足軽に載せれば、`~/.claude`・`~/.codex` の在り処が割れ、selftest が別の
+ *   dir を見て「生きておる」と言いうる。
+ *
  * **type と名が合わぬ足軽（codex の足軽の CLAUDE_CONFIG_DIR 等）も止めぬ。** 名は起こす命の
  * 頭に載るだけで、その CLI が読まねば何も起こらぬ。selftest と隔離の包みが在り処を引くのは、
  * その名を読む type の足軽だけである（codexHomeOf・claudeConfigDirOf を引く所）。
  */
-export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME', 'HINDSIGHT_CONFIG', 'CLAUDE_CONFIG_DIR'];
+export const AGENT_ENV_ALLOWED: readonly string[] = ['CODEX_HOME', 'HINDSIGHT_CONFIG', 'CLAUDE_CONFIG_DIR', 'HOME'];
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -175,6 +185,7 @@ const ENV_VALUE_RULES: Record<string, (v: string) => string | null> = {
   CODEX_HOME: absolutePathRule('/home/me/.codex-ashigaru3'),
   HINDSIGHT_CONFIG: absolutePathRule('/home/me/.hindsight-ashigaru3/coding-agent.json'),
   CLAUDE_CONFIG_DIR: absolutePathRule('/home/me/.claude-ashigaru3'),
+  HOME: absolutePathRule('/home/me/.cursor-home-ashigaru7'),
 };
 
 /** shell の単引用で包む。単引用そのものは `'\''` で抜ける。空白・`$`・`!` も崩れぬ。 */
@@ -220,6 +231,18 @@ export function agentEnv(doc: unknown, agent: string): { ok: true; env: [string,
     }
     const bad = ENV_VALUE_RULES[name]?.(v);
     if (bad) return { ok: false, message: `cli.agents.${agent}.env.${name} の値の誤り——${bad}` };
+    if (name === 'HOME') {
+      const t = dig(doc, `cli.agents.${agent}.type`);
+      const type = t.kind === 'scalar' ? t.value : undefined;
+      if (type !== 'cursor') {
+        return {
+          ok: false,
+          message:
+            `cli.agents.${agent}.env.HOME は cursor の足軽にだけ書ける（この足軽の type: ${type ?? '未設定'}）。\n` +
+            '  HOME は全ての道具が読む名で、cursor 以外に載せれば ~/.claude・~/.codex の在り処が割れ、selftest が別の dir を見る。',
+        };
+      }
+    }
     env.push([name, v]);
   }
   return { ok: true, env };
@@ -255,6 +278,22 @@ export function claudeConfigDirOf(
   if (!r.ok) return { ok: false, message: r.message };
   const v = r.env.find(([n]) => n === 'CLAUDE_CONFIG_DIR')?.[1];
   return v === undefined ? { ok: true, path: `${home}/.claude`, custom: false } : { ok: true, path: v, custom: true };
+}
+
+/**
+ * その足軽の実効の HOME（cursor の user の層 `<HOME>/.cursor` の在り処）。env に在ればそれ
+ * （agentEnv の判じを通った絶対の道）、無ければ `home`。**selftest が cursor の user の層を見る先と、
+ * 起こす前の検めが dir の在る無しを問う先は、ここだけから引く**（codexHomeOf と同じ考え）。
+ */
+export function cursorHomeOf(
+  doc: unknown,
+  agent: string,
+  home: string,
+): { ok: true; path: string; custom: boolean } | { ok: false; message: string } {
+  const r = agentEnv(doc, agent);
+  if (!r.ok) return { ok: false, message: r.message };
+  const v = r.env.find(([n]) => n === 'HOME')?.[1];
+  return v === undefined ? { ok: true, path: home, custom: false } : { ok: true, path: v, custom: true };
 }
 
 /**
@@ -447,7 +486,7 @@ export function envPrefix(env: [string, string][]): string {
 export function envPlanOf(
   db: Database,
   agent: string,
-): { ok: true; prefix: string; hindsightConfig: string | undefined; type: string | undefined } | { ok: false; message: string } {
+): { ok: true; prefix: string; hindsightConfig: string | undefined; homeDir: string | undefined; type: string | undefined } | { ok: false; message: string } {
   if (agent.trim() === '') return { ok: false, message: '誰の env か渡されよ。例: honden config env ashigaru3' };
   const doc = load(db);
   if (!doc.ok) return { ok: false, message: doc.message };
@@ -458,6 +497,7 @@ export function envPlanOf(
     ok: true,
     prefix: envPrefix(r.env),
     hindsightConfig: r.env.find(([n]) => n === 'HINDSIGHT_CONFIG')?.[1],
+    homeDir: r.env.find(([n]) => n === 'HOME')?.[1],
     type: t.kind === 'scalar' ? t.value : undefined,
   };
 }
