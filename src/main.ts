@@ -104,7 +104,7 @@ import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
-import { get as configGet, load as configLoad, dig as configDig, envPlanOf as configEnvPlanOf, codexHomeOf as configCodexHomeOf, claudeConfigDirOf as configClaudeConfigDirOf, cursorHomeOf as configCursorHomeOf, hindsightConfigProblem, SETTINGS_PATH_KEY } from './config';
+import { get as configGet, load as configLoad, dig as configDig, envPlanOf as configEnvPlanOf, codexHomeOf as configCodexHomeOf, claudeConfigDirOf as configClaudeConfigDirOf, cursorHomeOf as configCursorHomeOf, launchDbOf as configLaunchDbOf, hindsightConfigProblem, SETTINGS_PATH_KEY } from './config';
 import { settingsPath as settingsPathOf } from './config';
 import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import {
@@ -1676,15 +1676,16 @@ function isSymlink(p: string): boolean {
  * 足軽ごとには HOME の在り処と user の層の様子を書く。皮が据わっておらぬ・拒めぬ時は元の一行を返す。
  * 名簿に cursor の足軽が居らぬ（設定が読めぬを含む）時は、家の user の層を一行で見る。
  */
-function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home: string): GateCheck[] {
+function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home: string, launchedDb?: string): GateCheck[] {
   if (!c.configured || !c.denies) return [c];
   const links = [join(base, '.cursor'), join(base, '.cursor', 'hooks.json')].filter(isSymlink);
   const symlinked =
     links.length > 0
       ? `${links.map((l) => l.slice(base.length + 1)).join('・')} が symlink。cursor は symlink を含む project の hooks.json を読まず、門ごと黙って止める`
       : undefined;
-  const agents: { id: string; dir?: string; bad?: string }[] = [];
+  const agents: { id: string; dir?: string; bad?: string; db?: string }[] = [];
   const roster = selftestRoster(dbPath);
+  const mainDb = ownDbFile(dbPath);
   if (roster.ok) {
     const list = configDig(roster.doc, 'cli.agents');
     for (const id of list.kind === 'branch' ? list.keys : []) {
@@ -1693,6 +1694,21 @@ function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home
       const h = configCursorHomeOf(roster.doc, id, home);
       if (!h.ok) {
         agents.push({ id, bad: h.message.split('\n')[0] });
+        continue;
+      }
+      // HOME を分けた足軽は、命に載る正本（HONDEN_DB）が本陣の正本と同じであること。
+      // 載らぬ形・違う道なら、その足軽の honden は本陣と別の正本を見る（門の hook も inbox も）
+      if (h.custom) {
+        const l = configLaunchDbOf(roster.doc, id, launchedDb ?? mainDb);
+        if (!l.ok) {
+          agents.push({ id, bad: `起こす命に正本の道が載らぬ——${l.message.split('\n')[0]}` });
+          continue;
+        }
+        if (l.path !== mainDb) {
+          agents.push({ id, bad: `見る正本が本陣と違う（足軽: ${l.path} / 本陣: ${mainDb}）` });
+          continue;
+        }
+        agents.push({ id, dir: h.path, db: mainDb });
         continue;
       }
       agents.push({ id, dir: h.path });
@@ -1711,9 +1727,10 @@ function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home
   }
   for (const [d, ids] of groups) {
     const layer = cursorUserLayerNote(join(d, '.cursor', 'hooks.json'));
+    const dbOf = good.find((a) => (a.dir ?? home) === d)?.db;
     const who =
       ids.length > 0
-        ? `${ids.join(', ')}（HOME=${d}。${layer}）`
+        ? `${ids.join(', ')}（HOME=${d}。${layer}${dbOf !== undefined ? `。正本は本陣と同じ ${dbOf}` : ''}）`
         : roster.ok
           ? `（名簿に cursor の足軽が居らぬ。${d} を見た。${layer}）`
           : `（設定が読めぬ（${roster.why}）ゆえ名簿を引けぬ。${d} だけを見た。${layer}）`;
@@ -1738,6 +1755,8 @@ export function runGuardSelftest(
   dbPath?: string,
   /** 試験の口。家の道（~ の在り処）。省けば os の homedir。 */
   home: string = homedir(),
+  /** 試験の口。HOME を分けた足軽の命に載る正本の道。省けば起こす側と同じ（ownDbFile）。 */
+  launchedDb?: string,
 ): RunResult {
   const base = resolvePath(root ?? process.cwd());
   // codex の信頼と claude の disableAllHooks は門（src/guard.ts）の外で、足軽ごとに見る（codexRows・claudeRows）。
@@ -1763,7 +1782,7 @@ export function runGuardSelftest(
       : c.cli === 'claude'
         ? claudeRows(c, base, dbPath, home)
         : c.cli === 'cursor'
-          ? cursorRows(c, base, dbPath, home)
+          ? cursorRows(c, base, dbPath, home, launchedDb)
           : [c],
   );
   const lines = rows.map((c) => {
@@ -2742,6 +2761,15 @@ export function runConfig(dbPath: string | undefined, key: string | undefined): 
 }
 
 /**
+ * 起こす側が今使う正本の道。--db・HONDEN_DB・既定の順で決まり、相対なら今の作業 dir を基に絶対へ解く
+ * （openStore が相対を解く基と同じ）。:memory: はそのまま返す。
+ */
+export function ownDbFile(dbPath: string | undefined): string {
+  const p = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+  return p === ':memory:' ? p : resolvePath(p);
+}
+
+/**
  * `honden config env <名>` — その足軽を起こす命の頭に置く env の前置き（`CODEX_HOME='…'`）。
  * 無ければ空を返す。名が外れておれば非ゼロで止まる——出陣と立て直しは、起こす前に
  * これを引いて止まる。値は shell の単引用で包んである（src/config.ts の shellQuote）。
@@ -2750,7 +2778,7 @@ export function runConfigEnv(dbPath: string | undefined, agent: string): RunResu
   const db = openStore({ path: dbPath });
   // 前置きと検めを同じ一度の読みから出す（envPlanOf）。二度読めば、間に設定が書き換わった時、
   // 検めを通らぬ道が前置きに載りうる。
-  const r = configEnvPlanOf(db, agent);
+  const r = configEnvPlanOf(db, agent, ownDbFile(dbPath));
   if (!r.ok) return { code: EXIT_INVALID, err: r.message };
   // 道の掟（設定の層・agentEnv）を通った後に、HINDSIGHT_CONFIG の file を開いて検める。
   // 在る無しの検めを起こす前の口に置くのは、CODEX_HOME の在る無しを runIsolateWrap に

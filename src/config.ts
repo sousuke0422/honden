@@ -479,6 +479,33 @@ export function envPrefix(env: [string, string][]): string {
 }
 
 /**
+ * HOME を分けた足軽の起こす命に載せる正本の道（`HONDEN_DB`）。載せぬ足軽は undefined。
+ *
+ * honden の既定の正本は `<HOME>/.honden/honden.db` ゆえ、HOME を分けた足軽の pane の honden は
+ * 何もせねば分けた家の下に**空の正本を黙って建てる**（本陣と別の正本になり、inbox も司令も見えぬ）。
+ * symlink の置き忘れに頼らず、起こす側が今使う正本（`ownDb`。--db・HONDEN_DB・既定の順で決まった物を、
+ * 呼び手が絶対の道にしたもの）を命に必ず載せる。**設定の欄で人が HONDEN_DB を書く口は開けぬ**
+ * （AGENT_ENV_ALLOWED に足さぬ）。載せられぬ形（:memory:・相対の道）は誤りとして返す。
+ * selftest と `config env` は、ここだけから引く。
+ */
+export function launchDbOf(
+  doc: unknown,
+  agent: string,
+  ownDb: string,
+): { ok: true; path: string | undefined } | { ok: false; message: string } {
+  const r = agentEnv(doc, agent);
+  if (!r.ok) return { ok: false, message: r.message };
+  if (!r.env.some(([n]) => n === 'HOME')) return { ok: true, path: undefined };
+  if (ownDb === ':memory:') {
+    return { ok: false, message: `${agent} は HOME を分けておるが、起こす側の正本が :memory: で、命に載せる道が無い。` };
+  }
+  if (!ownDb.startsWith('/')) {
+    return { ok: false, message: `${agent} の命に載せる正本の道が絶対でない: ${JSON.stringify(ownDb)}。--db か HONDEN_DB を絶対の道で渡されよ。` };
+  }
+  return { ok: true, path: ownDb };
+}
+
+/**
  * `honden config env <名>` の中身。設定を一度読み、検めて、前置きと、起こす前の検めに要る物
  * （HINDSIGHT_CONFIG の道と足軽の type）を、**同じ一度の読み**から返す。二度読めば、間に設定が
  * 書き換わった時、検めた道と渡す道が割れうる。
@@ -486,6 +513,8 @@ export function envPrefix(env: [string, string][]): string {
 export function envPlanOf(
   db: Database,
   agent: string,
+  /** 起こす側が今使う正本の絶対の道（呼び手が --db・HONDEN_DB・既定から決める）。HOME を分けた足軽の命に載る */
+  ownDb: string,
 ): { ok: true; prefix: string; hindsightConfig: string | undefined; homeDir: string | undefined; type: string | undefined } | { ok: false; message: string } {
   if (agent.trim() === '') return { ok: false, message: '誰の env か渡されよ。例: honden config env ashigaru3' };
   const doc = load(db);
@@ -493,9 +522,11 @@ export function envPlanOf(
   const r = agentEnv(doc.doc, agent);
   if (!r.ok) return { ok: false, message: r.message };
   const t = dig(doc.doc, `cli.agents.${agent}.type`);
+  const l = launchDbOf(doc.doc, agent, ownDb);
+  if (!l.ok) return { ok: false, message: l.message };
   return {
     ok: true,
-    prefix: envPrefix(r.env),
+    prefix: envPrefix(l.path === undefined ? r.env : [...r.env, ['HONDEN_DB', l.path]]),
     hindsightConfig: r.env.find(([n]) => n === 'HINDSIGHT_CONFIG')?.[1],
     homeDir: r.env.find(([n]) => n === 'HOME')?.[1],
     type: t.kind === 'scalar' ? t.value : undefined,

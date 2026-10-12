@@ -9,9 +9,9 @@
  * （Bun の os.homedir() は走る中の HOME に従わぬ）。
  */
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { openStore, tx } from '../src/store';
 import { setSetting } from '../src/settings';
 import { AGENT_ENV_ALLOWED, SETTINGS_PATH_KEY } from '../src/config';
@@ -38,11 +38,12 @@ const mk = (d: string) => (mkdirSync(d, { recursive: true }), d);
 describe('HOME を cursor の足軽の env の欄で許す', () => {
   test('(1) 書いた cursor の足軽の起こす命に、単引用で載る（shell が解けば一字違わず渡る）', () => {
     const dir = mk(join(BASE, 'cursor home $x'));
-    const r = runConfigEnv(store(`cli:\n  agents:\n${agent('ashigaru7', dir)}`), 'ashigaru7');
-    expect(r).toEqual({ code: 0, out: `HOME='${dir}'` });
+    const db = store(`cli:\n  agents:\n${agent('ashigaru7', dir)}`);
+    const r = runConfigEnv(db, 'ashigaru7');
+    expect(r).toEqual({ code: 0, out: `HOME='${dir}' HONDEN_DB='${db}'` });
     expect(AGENT_ENV_ALLOWED).toContain('HOME');
-    const p = Bun.spawnSync(['bash', '-c', `${r.out} printenv HOME`], { env: {} });
-    expect(p.stdout.toString()).toBe(`${dir}\n`);
+    const p = Bun.spawnSync(['bash', '-c', `${r.out} printenv HOME HONDEN_DB`], { env: {} });
+    expect(p.stdout.toString()).toBe(`${dir}\n${db}\n`);
   });
 
   test('(2) 相対・~・.・..・空は設定の層で止まる（CODEX_HOME と同じ掟）', () => {
@@ -79,6 +80,82 @@ describe('HOME を cursor の足軽の env の欄で許す', () => {
     const f = join(BASE, 'a-file');
     writeFileSync(f, '');
     expect(runConfigEnv(store(`cli:\n  agents:\n${agent('ashigaru7', f)}`), 'ashigaru7').code).not.toBe(0);
+  });
+});
+
+describe('HOME を分けた足軽の命に、起こす側の正本を HONDEN_DB で必ず載せる（cmd_242）', () => {
+  const REPO = join(import.meta.dir, '..');
+
+  test('(1) 前置きに HONDEN_DB=絶対の道 が載る。設定の欄に人が HONDEN_DB を書く口は無い', () => {
+    const dir = mk(join(BASE, 'db-home-1'));
+    const db = store(`cli:\n  agents:\n${agent('ashigaru7', dir)}`);
+    expect(runConfigEnv(db, 'ashigaru7').out).toBe(`HOME='${dir}' HONDEN_DB='${db}'`);
+    expect(AGENT_ENV_ALLOWED).not.toContain('HONDEN_DB');
+    const bad = `cli:\n  agents:\n    ashigaru7:\n      type: cursor\n      env:\n        HOME: ${JSON.stringify(dir)}\n        HONDEN_DB: /x/y.db\n`;
+    const r = runConfigEnv(store(bad), 'ashigaru7');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('HONDEN_DB は許しておらぬ');
+  });
+
+  test('(2) 起こす側が相対の道（--db・HONDEN_DB）で動いておっても、絶対の道で載る', () => {
+    const dir = mk(join(BASE, 'db-home-2'));
+    const abs = store(`cli:\n  agents:\n${agent('ashigaru7', dir)}`);
+    const rel = relative(process.cwd(), abs);
+    expect(rel.startsWith('/')).toBe(false);
+    expect(runConfigEnv(rel, 'ashigaru7').out).toBe(`HOME='${dir}' HONDEN_DB='${abs}'`);
+    // --db を渡さぬ時は HONDEN_DB（相対）を引く
+    const saved = process.env.HONDEN_DB;
+    process.env.HONDEN_DB = rel;
+    try {
+      expect(runConfigEnv(undefined, 'ashigaru7').out).toBe(`HOME='${dir}' HONDEN_DB='${abs}'`);
+    } finally {
+      if (saved === undefined) delete process.env.HONDEN_DB;
+      else process.env.HONDEN_DB = saved;
+    }
+  });
+
+  test('起こす側の正本が :memory: なら、載せる道が無いゆえ止まる', () => {
+    const saved = process.env.HONDEN_DB;
+    process.env.HONDEN_DB = ':memory:';
+    try {
+      const r = runConfigEnv(':memory:', 'ashigaru7');
+      expect(r.code).not.toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env.HONDEN_DB;
+      else process.env.HONDEN_DB = saved;
+    }
+  });
+
+  test('(3) HOME を書かぬ足軽（cursor でも）には HONDEN_DB を載せぬ。他の env だけの足軽にも載せぬ', () => {
+    const cfg = join(BASE, 'h.json');
+    writeFileSync(cfg, '{}');
+    const db = store(
+      `cli:\n  agents:\n${agent('ashigaru7')}    ashigaru3:\n      type: codex\n      env:\n        CODEX_HOME: "/home/me/.codex-a3"\n`,
+    );
+    expect(runConfigEnv(db, 'ashigaru7')).toEqual({ code: 0, out: '' });
+    expect(runConfigEnv(db, 'ashigaru3')).toEqual({ code: 0, out: `CODEX_HOME='/home/me/.codex-a3'` });
+  });
+
+  test('(4) 載った前置きで起こした子の honden は、分けた家の下に正本を作らず、本陣の正本を開く', () => {
+    const home = mk(join(BASE, 'db-home-4'));
+    const real = mk(join(BASE, 'db-real-4'));
+    const mainDb = join(real, 'h.db');
+    const settings = join(real, 'settings.yaml');
+    writeFileSync(settings, `cli:\n  agents:\n${agent('ashigaru7', home)}`);
+    const o = openStore({ path: mainDb });
+    tx(o, () => setSetting(o, SETTINGS_PATH_KEY, settings, 'roster'));
+    o.close();
+    const plan = runConfigEnv(mainDb, 'ashigaru7');
+    expect(plan.out).toContain(`HONDEN_DB='${mainDb}'`);
+    const run = (prefix: string) =>
+      Bun.spawnSync(['bash', '-c', `${prefix} bun ${join(REPO, 'src/main.ts')} inbox unread ashigaru7`], { cwd: REPO, env: { PATH: process.env.PATH ?? '' } });
+    // 載った前置きでは、家の下に .honden は出来ず、本陣の正本が開かれる
+    run(plan.out!);
+    expect(existsSync(join(home, '.honden'))).toBe(false);
+    expect(readdirSync(real)).toContain('h.db');
+    // 陽性対照（直す前の形）: HOME だけを載せれば、家の下に空の正本を黙って建てる
+    run(`HOME='${home}'`);
+    expect(existsSync(join(home, '.honden', 'honden.db'))).toBe(true);
   });
 });
 
@@ -123,6 +200,29 @@ describe('guard selftest — cursor の門を足軽ごとの HOME で見る', ()
     expect(l8).toContain('生きておる');
     expect(l8).toContain(`HOME=${HOME}`);
     expect(l8).toContain('user の hooks.json 無し');
+  });
+
+  test('(5) HOME を分けた足軽の正本が本陣と同じなら、行に一句添えて生きておる。違えば・載らぬ形なら効いておらぬ', () => {
+    const r = root();
+    const own = mk(join(BASE, 'cursor-db'));
+    const db = store(`cli:\n  agents:\n${agent('ashigaru7', own)}${agent('ashigaru8')}`);
+    const ok = runGuardSelftest(r, db, HOME);
+    expect(ok.code).toBe(0);
+    const l7 = cursorLines(ok.out ?? '').find((l) => l.includes('ashigaru7'))!;
+    expect(l7).toContain('生きておる');
+    expect(l7).toContain(`正本は本陣と同じ ${db}`);
+    // HOME を分けぬ足軽には添えぬ
+    expect(cursorLines(ok.out ?? '').find((l) => l.includes('ashigaru8'))).not.toContain('正本は本陣と同じ');
+    // 起こす命に載る正本が本陣と違えば
+    const diff = runGuardSelftest(r, db, HOME, join(BASE, 'other.db'));
+    expect(diff.code).not.toBe(0);
+    const ld = cursorLines(diff.out ?? '').find((l) => l.includes('ashigaru7'))!;
+    expect(ld).toContain('**効いておらぬ**');
+    expect(ld).toContain('見る正本が本陣と違う');
+    // 載らぬ形（絶対でない）
+    const rel = runGuardSelftest(r, db, HOME, 'relative.db');
+    expect(rel.code).not.toBe(0);
+    expect(cursorLines(rel.out ?? '').find((l) => l.includes('ashigaru7'))).toContain('正本の道が載らぬ');
   });
 
   test('(3) user の層の hooks.json が壊れておっても、project の層の門は別に読まれる——生きておると言い、壊れておると添える', () => {
