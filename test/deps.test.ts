@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { syncLimits } from '../src/routing';
 import { createCmd, assignTask } from '../src/dispatch';
 import { amendCmd } from '../src/amend';
 import { notifyBlocked, unresolved, depSummary } from '../src/deps';
@@ -27,6 +28,12 @@ const roster = (db: ReturnType<typeof openStore>) =>
       { id: 'gunshi', role: 'commander', cli: 'claude', model: 'claude-sonnet-5' },
       { id: 'ashigaru1', role: 'worker', cli: 'claude', model: 'claude-fable-5' },
       { id: 'ashigaru2', role: 'worker', cli: 'claude', model: 'claude-fable-5' },
+    ]);
+    syncLimits(db, [
+      { model: 'claude-opus-5', maxBloom: 6, costGroup: 'claude_max' },
+      { model: 'auto', maxBloom: 6, costGroup: 'cursor' },
+      { model: 'claude-sonnet-5', maxBloom: 4, costGroup: 'claude_max' },
+      { model: 'claude-fable-5', maxBloom: 3, costGroup: 'claude_max' },
     ]);
   });
 

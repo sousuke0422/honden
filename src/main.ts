@@ -127,7 +127,7 @@ import { leaseState, expired, release, renew, DEFAULT_LEASE_MINUTES } from './le
 import { pickInput, type InputSource } from './cli';
 import { inboxWrite, inboxUnread, parseFlags, fromPositional, EXIT_OK, EXIT_INVALID, EXIT_SYSTEM } from './cli';
 import { readRosterFromSettings, syncRoster, roster, RosterError } from './roster';
-import { readLimitsFromSettings, syncLimits, recommend } from './routing';
+import { readLimitsFromSettings, syncLimits, recommend, routingGaps } from './routing';
 import type { RunResult } from './cli';
 
 /** 取り込む対象。config は秘密を含みうるので既定では入れない。 */
@@ -202,13 +202,15 @@ export function runRosterSync(dbPath: string | undefined, settingsPath: string |
     setSetting(db, SETTINGS_PATH_KEY, resolvePath(settingsPath), 'roster');
   });
   const w = entries.filter((e) => e.role === 'worker');
+  const gaps = routingGaps(db);
   return {
     code: EXIT_OK,
     out:
       `  ${entries.length} 人（上役 ${entries.length - w.length} / 足軽 ${w.length}）\n` +
       entries.map((e) => `    ${e.id.padEnd(10)} ${e.role.padEnd(9)} ${e.cli ?? ''} ${e.model ?? ''}`).join('\n') +
-      `\n  能力制限 ${limits.filter((l) => l.maxBloom < 6).length} 件（表に無いモデルは制限なし）` +
-      `\n  設定の在り処を覚えた: ${resolvePath(settingsPath)}`,
+      `\n  能力表 ${limits.length} 件（表に無いモデルは上限不明）` +
+      `\n  設定の在り処を覚えた: ${resolvePath(settingsPath)}` +
+      (gaps.length > 0 ? `\n  警告: ${gaps.join(' / ')}` : ''),
   };
 }
 
@@ -650,7 +652,10 @@ export function runRoute(
     out:
       `  L${bloom} に振れる者（足りる中で軽い順）\n` +
       r.candidates
-        .map((c) => `    ${c.agent.padEnd(10)} ${c.model.padEnd(16)} ${c.provider.padEnd(10)} L${c.maxBloom} まで`)
+        .map(
+          (c) =>
+            `    ${c.agent.padEnd(10)} ${c.model.padEnd(16)} ${c.provider.padEnd(10)} ${c.knownLimit ? `L${c.maxBloom} まで` : '上限不明'}`,
+        )
         .join('\n') + sw,
   };
 }
@@ -705,8 +710,10 @@ const USAGE = `honden — 多エージェント運用の差配層
       …
     project: vrt
     priority: high
+    bloom: L4                 # 任意。家老が振る時の既定
   EOF
   honden task assign --agent ashigaru1 --cmd_id cmd_1 --title 実装せよ [--bloom L4]
+                     [--ack-unknown-model] [--ack-no-bloom]
                      [--workspace .worktrees/x] [--branch feat/y]   重なれば振れぬ
   honden norms [ドメイン] [--root <kagemusha>]          規約の棚と、初稿へ入るもの
   honden norms root <path>                             棚の在り処を決める
@@ -965,8 +972,15 @@ export function runCmdList(dbPath: string | undefined, all: boolean): RunResult 
 export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined): RunResult {
   if (!cmdId) return { code: EXIT_INVALID, err: '司令の番号を渡されよ。例: honden cmd show cmd_1' };
   const db = openStore({ path: dbPath });
-  const cmd = db.query('SELECT id, status, purpose, created_at, completed_at FROM cmd WHERE id = ?').get(cmdId) as
-    | { id: string; status: string; purpose: string | null; created_at: string; completed_at: string | null }
+  const cmd = db.query('SELECT id, status, purpose, bloom, created_at, completed_at FROM cmd WHERE id = ?').get(cmdId) as
+    | {
+        id: string;
+        status: string;
+        purpose: string | null;
+        bloom: number | null;
+        created_at: string;
+        completed_at: string | null;
+      }
     | null;
   if (!cmd) return { code: EXIT_INVALID, err: `そのような司令は無い: ${cmdId}` };
   const cov = coverageOf(db, cmdId);
@@ -974,6 +988,7 @@ export function runCmdShow(dbPath: string | undefined, cmdId: string | undefined
     `起草から${ago(cmd.created_at)}` +
     (cmd.completed_at ? `・閉じて${ago(cmd.completed_at)}` : '');
   const lines = [`  ${cmd.id}  [${cmd.status}]  ${cmd.purpose ?? ''}（${when}）`, '  受け入れ条件:'];
+  if (cmd.bloom !== null) lines.splice(1, 0, `  難度: L${cmd.bloom}`);
   if (cov.criteria.length === 0) lines.push('    （無し）');
   for (const c of cov.criteria) {
     const got = cov.covered.get(c.idx);
@@ -1744,6 +1759,7 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
       `検め待ち ${pending.length} 件: ${pending.map((p) => `${formatPendingReview(p)} (${p.cmdId})`).join(', ')}`,
     );
   }
+  for (const gap of routingGaps(db)) tail.push(gap);
   return {
     code: EXIT_OK,
     out: renderStatus(rows) + (tail.length > 0 ? `\n\n  ${tail.join(' / ')}` : ''),

@@ -49,10 +49,11 @@ import { take as takeClaim, type Kind, type Source } from './claim';
 import { workRootOf } from './projects';
 import { readNorms, select, forTask } from './norms';
 import { normsRoot } from './settings';
+import { get as configGet } from './config';
 import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
-import { maxBloomOf } from './routing';
+import { modelLimitOf } from './routing';
 import { validate, explain, checkReason, type Schema } from './validate';
 import { DepError, insertNeeds, normalizeNeeds, unresolved } from './deps';
 
@@ -70,9 +71,20 @@ const CMD_SCHEMA: Schema = {
   command: { required: true, about: '家老への指示本文' },
   project: { required: true, about: 'どの案件か' },
   priority: { oneOf: PRIORITIES, about: '既定は medium' },
+  bloom: { structured: true, about: '任意。L1 から L6。振る時の既定になる' },
   // 一覧（YAML）でも「cmd_1,cmd_2」（旗）でも受けるゆえ、型は自前で見る (src/deps.ts)。
   depends_on: { structured: true, about: '先に済ませるべき司令の番号の一覧。済むまで振れぬ' },
 };
+
+function parseBloom(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const bloom = Number(String(value).replace(/^[Ll]/, ''));
+  return Number.isInteger(bloom) && bloom >= 1 && bloom <= 6 ? bloom : Number.NaN;
+}
+
+function flag(input: Record<string, unknown>, name: string): boolean {
+  return input[name] === true || input[name] === 'true';
+}
 
 export interface DispatchResult {
   ok: boolean;
@@ -122,7 +134,12 @@ export function createCmd(
     command: string;
     project: string;
     priority?: string;
+    bloom?: unknown;
   };
+  const cmdBloom = parseBloom(v.bloom);
+  if (Number.isNaN(cmdBloom)) {
+    return { ok: false, message: `難度は L1 から L6。受け取った値: ${JSON.stringify(v.bloom)}` };
+  }
   const needs = normalizeNeeds(input['depends_on']);
   if (!Array.isArray(needs)) return { ok: false, message: `${needs.error}\n  書き込みは行っておらぬ。` };
   const at = new Date().toISOString();
@@ -131,8 +148,8 @@ export function createCmd(
   tx(db, () => {
     id = nextCmdId(db);
     db.prepare(
-      `INSERT INTO cmd(id, created_at, north_star, purpose, body, project, priority, status, raw)
-       VALUES (?,?,?,?,?,?,?,'pending',?)`,
+      `INSERT INTO cmd(id, created_at, north_star, purpose, body, project, bloom, priority, status, raw)
+       VALUES (?,?,?,?,?,?,?,?,'pending',?)`,
     ).run(
       id,
       at,
@@ -140,6 +157,7 @@ export function createCmd(
       v.purpose,
       v.command,
       v.project,
+      cmdBloom,
       v.priority ?? 'medium',
       JSON.stringify(input),
     );
@@ -170,7 +188,9 @@ const ASSIGN_SCHEMA: Schema = {
   agent: { required: true, about: '振り先の持ち場' },
   cmd_id: { required: true, about: 'どの司令の下の仕事か' },
   title: { required: true, about: '何をする仕事か。1 行' },
-  bloom: { about: 'L1 から L6。能力の足りぬ者へは振れぬ' },
+  bloom: { structured: true, about: 'L1 から L6。能力の足りぬ者へは振れぬ' },
+  'ack-unknown-model': { structured: true, about: '能力表に無い模型へ振ることを確かめた印' },
+  'ack-no-bloom': { structured: true, about: '難度を定めずに振ることを確かめた印' },
   minutes: { about: '貸与の長さ（分）。既定 30' },
   bypass: { about: '家老を通さず将軍が直に振る。理由が要る' },
   reason: { about: '迂回・引き継ぎの理由。何が起きてそうするのかを書く' },
@@ -221,10 +241,10 @@ export function assignTask(
   const problems = validate(schema, input);
   if (problems.length > 0) return { ok: false, message: explain(problems) };
 
-  const v = input as { agent: string; cmd_id: string; title: string; bloom?: string; minutes?: string };
+  const v = input as { agent: string; cmd_id: string; title: string; bloom?: unknown; minutes?: string };
 
-  const cmd = db.query('SELECT id, status FROM cmd WHERE id = ?').get(v.cmd_id) as
-    | { id: string; status: string }
+  const cmd = db.query('SELECT id, status, bloom FROM cmd WHERE id = ?').get(v.cmd_id) as
+    | { id: string; status: string; bloom: number | null }
     | null;
   if (!cmd) {
     return {
@@ -241,22 +261,43 @@ export function assignTask(
     };
   }
 
-  // 難度が宣言されていれば、能力の足りぬ者へは振らない。
-  if (v.bloom !== undefined) {
-    const bloom = Number(String(v.bloom).replace(/^[Ll]/, ''));
-    if (!Number.isInteger(bloom) || bloom < 1 || bloom > 6) {
-      return { ok: false, message: `難度は L1 から L6。受け取った値: ${JSON.stringify(v.bloom)}` };
-    }
-    const cap = entry.model ? maxBloomOf(db, entry.model) : 6;
-    if (cap < bloom) {
-      return {
-        ok: false,
-        message:
-          `${v.agent} は ${entry.model} を載せており L${cap} までである（L${bloom} に足りぬ）。\n` +
-          '  honden route <難度> --role worker で振り先を挙げられよ。\n' +
-          '  切り替えれば足りる者も併せて出る。書き込みは行っておらぬ。',
-      };
-    }
+  const explicitBloom = parseBloom(v.bloom);
+  if (Number.isNaN(explicitBloom)) {
+    return { ok: false, message: `難度は L1 から L6。受け取った値: ${JSON.stringify(v.bloom)}` };
+  }
+  const bloom = explicitBloom ?? cmd.bloom;
+  const limit = entry.model ? modelLimitOf(db, entry.model) : null;
+  const ackUnknownModel = flag(input, 'ack-unknown-model');
+  const ackNoBloom = flag(input, 'ack-no-bloom');
+  if (!limit && !ackUnknownModel) {
+    const model = entry.model ?? '模型名なし';
+    return {
+      ok: false,
+      message:
+        `${v.agent} の模型 ${model} は capability_tiers に無く、上限不明である。\n` +
+        `  まず settings.yaml に capability_tiers.${model}.max_bloom を足すべきか確かめられよ。\n` +
+        '  それでも振るなら --ack-unknown-model を付けられよ。書き込みは行っておらぬ。',
+    };
+  }
+  const routing = configGet(db, 'bloom_routing');
+  const strictNoBloom = routing.ok && ['strict', 'enforce'].includes((routing.value ?? '').toLowerCase());
+  if (bloom === null && strictNoBloom && !ackNoBloom) {
+    return {
+      ok: false,
+      message:
+        '難度が無い。家老が難度を判じて --bloom L1〜L6 を付けられよ。\n' +
+        '  それでも難度を定めず振るなら --ack-no-bloom を付けられよ。書き込みは行っておらぬ。',
+    };
+  }
+  if (bloom !== null && limit && limit.maxBloom < bloom) {
+    const cap = limit.maxBloom;
+    return {
+      ok: false,
+      message:
+        `${v.agent} は ${entry.model} を載せており L${cap} までである（L${bloom} に足りぬ）。\n` +
+        '  honden route <難度> --role worker で振り先を挙げられよ。\n' +
+        '  切り替えれば足りる者も併せて出る。書き込みは行っておらぬ。',
+    };
   }
 
   // 貸与の持ち主は、振った家老ではなく働く足軽自身にする。
@@ -397,7 +438,7 @@ export function assignTask(
       }
       db.prepare('UPDATE task SET cmd_id = ?, raw = ? WHERE agent = ?').run(
         v.cmd_id,
-        JSON.stringify({ ...input, task_id: taskId }),
+        JSON.stringify({ ...input, bloom, task_id: taskId }),
         v.agent,
       );
       // 規約を初稿へ差し込む。
@@ -415,7 +456,10 @@ export function assignTask(
         at: new Date().toISOString(),
         type: 'task_assigned',
         sender: actor,
-        body: `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}` + (norms ? `\n\n${norms}` : ''),
+        body:
+          `${v.title}\n\n司令: ${v.cmd_id}\n仕事: ${taskId}` +
+          (bloom === null ? '' : `\n難度: L${bloom}`) +
+          (norms ? `\n\n${norms}` : ''),
       });
     for (const w of wants) {
       const got = takeClaim(db, { ...w, agent: v.agent, taskId, cmdId: v.cmd_id });
@@ -434,7 +478,7 @@ export function assignTask(
       action: wantsBypass ? 'task.assign.bypass' : wantsTakeover ? 'task.assign.takeover' : 'task.assign',
       target: v.agent,
       detail:
-        `${taskId} cmd=${v.cmd_id}${v.bloom ? ` bloom=${v.bloom}` : ''}` +
+        `${taskId} cmd=${v.cmd_id}${bloom === null ? '' : ` bloom=L${bloom}`}` +
         (wantsBypass
           ? ` reason=${JSON.stringify(input['reason'])} 迂回時の家老=[${observeBypassed(db, ASSIGNER)}]` +
             (openNeeds.length > 0 ? ` 未解の依存=${openNeeds.join(',')}` : '')
@@ -443,13 +487,38 @@ export function assignTask(
           ? ` reason=${JSON.stringify(input['reason'])} 引き継いだ仕事=${cur?.task_id ?? '不明'} 期限=${cur?.lease_until ?? 'なし'}`
           : ''),
     });
+      if (!limit && ackUnknownModel) {
+        journal(db, {
+          actor,
+          action: 'task.assign.ack_unknown_model',
+          target: v.agent,
+          detail: `${taskId} cmd=${v.cmd_id} model=${entry.model ?? '模型名なし'}`,
+        });
+      }
+      if (bloom === null && ackNoBloom) {
+        journal(db, {
+          actor,
+          action: 'task.assign.ack_no_bloom',
+          target: v.agent,
+          detail: `${taskId} cmd=${v.cmd_id}`,
+        });
+      }
+      const warnings: string[] = [];
+      if (bloom === null && !strictNoBloom) {
+        warnings.push(
+          '難度が無い（bloom_routing は既定の警告運用）。次から --bloom L1〜L6 を付けるか、司令に bloom を置かれよ。',
+        );
+      }
+      if (inferred) {
+        warnings.push(
+          `場所が書かれておらぬゆえ、所在から補った（見立て）。\n  ${inferred}\n` +
+            '  見立ては重なっても断らぬ。確かに握らせるなら --workspace を書かれよ。',
+        );
+      }
       result = {
         ok: true,
         id: taskId,
-        message: inferred
-          ? `場所が書かれておらぬゆえ、所在から補った（見立て）。\n  ${inferred}\n` +
-            '  見立ては重なっても断らぬ。確かに握らせるなら --workspace を書かれよ。'
-          : undefined,
+        message: warnings.length > 0 ? warnings.join('\n\n') : undefined,
       };
     });
   } catch (e) {

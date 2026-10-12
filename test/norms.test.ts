@@ -12,6 +12,7 @@
 import { expect, test, describe } from 'bun:test';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { readNorms, select, parseEntry, forTask, PROMPT_TIERS } from '../src/norms';
 import { setSetting } from '../src/settings';
@@ -139,6 +140,7 @@ describe('生成側へ差し込む', () => {
       ]);
       setSetting(db, 'norms_root', root, 'shogun');
     });
+    trustRosterModels(db);
     const c = createCmd(db, 'shogun', {
       north_star: '規約を初稿へ戻す',
       purpose: '生成側へ還流する',
