@@ -6,6 +6,7 @@
 skills/
   competitive-survey/       自作
   external-to-honden/       自作
+  honden-bloom-config/      自作。旧 shogun-bloom-config の作り直し。問いで capability_tiers の草稿を組む
   honden-coder/             自作。旧 shogun-coder の移し。script を隣（scripts/）に持つ
   honden-model-list/        自作。旧 shogun-model-list の作り直し。版の表を持たずクラスで書く
   honden-model-switch/      自作。旧 shogun-model-switch の作り直し。scripts/switch_cli.sh を包む
