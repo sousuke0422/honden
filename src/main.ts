@@ -58,7 +58,7 @@ const REPO_ROOT = (() => {
   if (existsSync(join(fromSrc, 'bin', 'honden-parse'))) return fromSrc;
   return fromBin; // 見つからねば realRunner が拒む
 })();
-import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, renameSync, unlinkSync, statSync, lstatSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative, dirname } from 'node:path';
 import { importTree, collectYaml, type ImportResult } from './import';
@@ -104,7 +104,7 @@ import { deliver as inboxDeliver, signal as inboxSignal } from './inbox';
 import { amendCmd, workersOn } from './amend';
 import { patchFiles } from './patchfile';
 import { raise as raiseDecision, decide as decideOne, open as openDecisions } from './decision';
-import { get as configGet, load as configLoad, dig as configDig, envPlanOf as configEnvPlanOf, codexHomeOf as configCodexHomeOf, claudeConfigDirOf as configClaudeConfigDirOf, hindsightConfigProblem, SETTINGS_PATH_KEY } from './config';
+import { get as configGet, load as configLoad, dig as configDig, envPlanOf as configEnvPlanOf, codexHomeOf as configCodexHomeOf, claudeConfigDirOf as configClaudeConfigDirOf, cursorHomeOf as configCursorHomeOf, launchDbOf as configLaunchDbOf, hindsightConfigProblem, SETTINGS_PATH_KEY } from './config';
 import { settingsPath as settingsPathOf } from './config';
 import { apply as applyRoster, current as currentRoster, suggestModels, LAUNCHABLE_CLIS, isCli, type Change } from './rosteredit';
 import {
@@ -1630,6 +1630,217 @@ function claudeRows(c: GateCheck, base: string, dbPath: string | undefined, home
 }
 
 /**
+ * cursor-agent が hooks.json の注釈を落とす読み方（2026.09.08・09.18・10.01 の 190.index.js の
+ * parseJSONC を字句どおり写す）。**文字列の中か外かを区別せぬ**——行末までの行の注釈と塊の注釈を
+ * 一律に削るゆえ、文字列の中の URL の `//` や `/` + `*` まで削り、正しい JSON を壊す。
+ * cursor が実際に読めるかを問うには、これと同じ読みで確かめねばならぬ。
+ */
+function cursorStripComments(text: string): string {
+  return text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+/**
+ * 文字列の中（エスケープ付きの引用符を含む）と外を区別し、外の行の注釈（行末まで）と塊の注釈
+ * だけを落とす。JSON として正しいかを、cursor の癖と切り離して問うための読み。閉じぬ塊の注釈は
+ * 落とさず残す（JSON.parse が壊れておると言う）。
+ */
+function stripJsonComments(text: string): string {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (c === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      if (end < 0) {
+        out += text.slice(i);
+        break;
+      }
+      i = end + 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * cursor の user の層（`<HOME>/.cursor/hooks.json`）の様子を一句で。中身は出さぬ（鍵や命が
+ * 載りうる）。数えるのは beforeShellExecution の hook の本数だけ。
+ *
+ * 三つに分ける: cursor の読み方で読めれば本数を言う。cursor の読み方では読めぬが、文字列を
+ * 区別して読めば正しい JSON なら、**壊れておるとは言わず**「cursor-agent は読めぬ」と言う
+ * （cursor は文字列の中の注釈の印まで注釈と取り違え、その層を載せぬ）。どちらでも読めぬ時だけ
+ * 壊れておる。門は project の層に在り user の層とは別に読まれる——この句は生死の判じに関わらぬ。
+ */
+function cursorUserLayerNote(file: string): string {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    return (e as { code?: string } | null)?.code === 'ENOENT' ? 'user の hooks.json 無し' : 'user の hooks.json を読めず';
+  }
+  try {
+    const doc = JSON.parse(cursorStripComments(text)) as { hooks?: Record<string, unknown> };
+    const hooks = doc?.hooks?.['beforeShellExecution'];
+    return `user の hooks.json 有り（beforeShellExecution ${Array.isArray(hooks) ? hooks.length : 0} 本）`;
+  } catch {
+    try {
+      JSON.parse(stripJsonComments(text));
+      return 'user の hooks.json は JSON として正しいが、cursor-agent は読めぬ（文字列の中の注釈の印を注釈と取り違える。その層は載らぬ）';
+    } catch {
+      return 'user の hooks.json が壊れておる';
+    }
+  }
+}
+
+/**
+ * ある家から見える global の `core.hooksPath`（`git config --global --includes --get --type=path`）。
+ * `--type=path` で `~` を**その家**で解く——`~/.git-hooks` と書かれた物は、家を分ければ別の道になる。
+ * 家以外の口（XDG_CONFIG_HOME・GIT_CONFIG_GLOBAL）は渡さぬ——渡せば家を分けても同じ物が見える。
+ * 未設定は `value: undefined`、引けぬ（git が無い・設定が壊れておる）は `ok: false`。
+ */
+function globalHooksPathOf(homeDir: string): { ok: true; value: string | undefined } | { ok: false; why: string } {
+  try {
+    const p = Bun.spawnSync(['git', 'config', '--global', '--includes', '--type=path', '--get', 'core.hooksPath'], {
+      cwd: tmpdir(),
+      env: { PATH: process.env.PATH ?? '', HOME: homeDir, LANG: 'C' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    if (p.exitCode === 1) return { ok: true, value: undefined };
+    if (p.exitCode !== 0) return { ok: false, why: p.stderr.toString().trim().split('\n')[0] || `git が exit ${p.exitCode}` };
+    const v = p.stdout.toString().trim();
+    return { ok: true, value: v === '' ? undefined : v };
+  } catch (e) {
+    return { ok: false, why: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * HOME を分けた足軽の家から、本陣の家と同じ global の git hook が見えるか。見えぬなら一句。
+ *
+ * 本陣の側が未設定（global の hook を使わぬ機）なら比べず黙る。引けぬ時は黙らず、引けなんだと言う。
+ * 門（cursor の hook）そのものは生きておる——ゆえこれは note に留め、生死の判じには効かせぬ。
+ */
+function globalHookNote(mainHome: string, movedHome: string): string {
+  const main = globalHooksPathOf(mainHome);
+  if (!main.ok) return `global の git hook を本陣の家から引けなんだ（${main.why}）`;
+  if (main.value === undefined) return '';
+  const moved = globalHooksPathOf(movedHome);
+  if (!moved.ok) return `global の git hook を分けた家から引けなんだ（${moved.why}）`;
+  if (moved.value === main.value) return '';
+  return (
+    `分けた家から global の git hook が見えぬ（本陣: ${main.value} / この家: ${moved.value ?? '無し'}）。` +
+    `commit の trailer を揃える hook が飛ぶ。家の .gitconfig に [include] path = ${join(mainHome, '.gitconfig')} を置かれよ` +
+    `（hooksPath を ~ で書いておるなら、家ごとに解けて道が変わる——絶対の道で書くか、同じ道に hook を置く）`
+  );
+}
+
+/** 道が symlink か（lstat。無ければ false）。 */
+function isSymlink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * cursor の門の行を、足軽ごとの HOME で作り直す。
+ *
+ * 門の hook は根の project の層（`<根>/.cursor/` の hooks.json）に在る。cursor-agent
+ * （2026.10.01-e373342）は hooks.json を enterprise・team・user・project の層から**別々に**読み、
+ * どの層の hook も走らせる（一つの層が壊れておれば、その層の誤りを控えるだけで他の層は読まれる）。
+ * 許す否は「deny が ask に、ask が allow に勝つ」（公式の hooks の文書）。ゆえに user の層に hook を
+ * 足しても、project の層の門を黙らせる形は無い——user の層が持てるのは足すことだけである。
+ * user の層は `os.homedir()` の下の `.cursor/` で、`CURSOR_CONFIG_DIR` では動かぬ。足軽の user の層の
+ * 在り処は、その足軽の HOME（env の `HOME`、無ければ家）である。
+ *
+ * 門を黙らせうるのは、project の層そのものが読まれぬ形である: 源は、project の hooks.json の道が
+ * 根の内で symlink を含めば「refusing to load config path that contains a symlink」と断る。
+ * ゆえに根の `.cursor` かその hooks.json が symlink なら「効いておらぬ」と言う。
+ *
+ * 足軽ごとには HOME の在り処と user の層の様子を書く。皮が据わっておらぬ・拒めぬ時は元の一行を返す。
+ * 名簿に cursor の足軽が居らぬ（設定が読めぬを含む）時は、家の user の層を一行で見る。
+ */
+function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home: string, launchedDb?: string): GateCheck[] {
+  if (!c.configured || !c.denies) return [c];
+  const links = [join(base, '.cursor'), join(base, '.cursor', 'hooks.json')].filter(isSymlink);
+  const symlinked =
+    links.length > 0
+      ? `${links.map((l) => l.slice(base.length + 1)).join('・')} が symlink。cursor は symlink を含む project の hooks.json を読まず、門ごと黙って止める`
+      : undefined;
+  const agents: { id: string; dir?: string; bad?: string; db?: string }[] = [];
+  const roster = selftestRoster(dbPath);
+  const mainDb = ownDbFile(dbPath);
+  if (roster.ok) {
+    const list = configDig(roster.doc, 'cli.agents');
+    for (const id of list.kind === 'branch' ? list.keys : []) {
+      const t = configDig(roster.doc, `cli.agents.${id}.type`);
+      if (t.kind !== 'scalar' || t.value !== 'cursor') continue;
+      const h = configCursorHomeOf(roster.doc, id, home);
+      if (!h.ok) {
+        agents.push({ id, bad: h.message.split('\n')[0] });
+        continue;
+      }
+      // HOME を分けた足軽は、命に載る正本（HONDEN_DB）が本陣の正本と同じであること。
+      // 載らぬ形・違う道なら、その足軽の honden は本陣と別の正本を見る（門の hook も inbox も）
+      if (h.custom) {
+        const l = configLaunchDbOf(roster.doc, id, launchedDb ?? mainDb);
+        if (!l.ok) {
+          agents.push({ id, bad: `起こす命に正本の道が載らぬ——${l.message.split('\n')[0]}` });
+          continue;
+        }
+        if (l.path !== mainDb) {
+          agents.push({ id, bad: `見る正本が本陣と違う（足軽: ${l.path} / 本陣: ${mainDb}）` });
+          continue;
+        }
+        agents.push({ id, dir: h.path, db: mainDb });
+        continue;
+      }
+      agents.push({ id, dir: h.path });
+    }
+  }
+  const rows: GateCheck[] = [];
+  for (const a of agents.filter((x) => x.bad)) {
+    rows.push({ cli: 'cursor', configured: true, denies: false, note: `${a.id}: env の欄が誤っておる——${a.bad}` });
+  }
+  const groups = new Map<string, string[]>();
+  const good = agents.filter((x) => !x.bad);
+  if (good.length === 0 && agents.length === 0) groups.set(home, []);
+  for (const a of good) {
+    const d = a.dir ?? home;
+    groups.set(d, [...(groups.get(d) ?? []), a.id]);
+  }
+  for (const [d, ids] of groups) {
+    const layer = cursorUserLayerNote(join(d, '.cursor', 'hooks.json'));
+    const dbOf = good.find((a) => (a.dir ?? home) === d)?.db;
+    const gitHook = ids.length > 0 && d !== home ? globalHookNote(home, d) : '';
+    const who =
+      ids.length > 0
+        ? `${ids.join(', ')}（HOME=${d}。${layer}${dbOf !== undefined ? `。正本は本陣と同じ ${dbOf}` : ''}${gitHook !== '' ? `。${gitHook}` : ''}）`
+        : roster.ok
+          ? `（名簿に cursor の足軽が居らぬ。${d} を見た。${layer}）`
+          : `（設定が読めぬ（${roster.why}）ゆえ名簿を引けぬ。${d} だけを見た。${layer}）`;
+    rows.push({
+      cli: 'cursor',
+      configured: true,
+      denies: symlinked === undefined,
+      note: symlinked === undefined ? [c.note, who].filter(Boolean).join(' ') : `${who} — **${symlinked}**`,
+    });
+  }
+  return rows;
+}
+
+/**
  * `honden guard selftest` — 門が生きておるかを、実際に叩いて確かめる。
  *
  * 据えた後に静かに消えるのが門の常である（信頼切れ・設定の書き換え・
@@ -1640,6 +1851,8 @@ export function runGuardSelftest(
   dbPath?: string,
   /** 試験の口。家の道（~ の在り処）。省けば os の homedir。 */
   home: string = homedir(),
+  /** 試験の口。HOME を分けた足軽の命に載る正本の道。省けば起こす側と同じ（ownDbFile）。 */
+  launchedDb?: string,
 ): RunResult {
   const base = resolvePath(root ?? process.cwd());
   // codex の信頼と claude の disableAllHooks は門（src/guard.ts）の外で、足軽ごとに見る（codexRows・claudeRows）。
@@ -1660,7 +1873,13 @@ export function runGuardSelftest(
     },
   });
   const rows = checks.flatMap((c) =>
-    c.cli === 'codex' ? codexRows(c, base, dbPath, home) : c.cli === 'claude' ? claudeRows(c, base, dbPath, home) : [c],
+    c.cli === 'codex'
+      ? codexRows(c, base, dbPath, home)
+      : c.cli === 'claude'
+        ? claudeRows(c, base, dbPath, home)
+        : c.cli === 'cursor'
+          ? cursorRows(c, base, dbPath, home, launchedDb)
+          : [c],
   );
   const lines = rows.map((c) => {
     const mark = c.denies ? '生きておる' : c.configured ? '**効いておらぬ**' : '据わっておらぬ';
@@ -2269,6 +2488,24 @@ export function runIsolateWrap(
       }
     }
   }
+  // cursor の足軽の HOME も同じ。CLI の書き道は実の `~/.cursor` 等に決め打ち（CLI_WRITES）ゆえ、
+  // 包めば cursor は分けた家の下に書けぬまま起きる。bind を組むまでは黙って包まずに止める。
+  if (r.cfg.level === 'bwrap' && r.cfg.fs && cli === 'cursor' && agent) {
+    const loaded = configLoad(db);
+    if (loaded.ok) {
+      const h = configCursorHomeOf(loaded.doc, agent, home);
+      if (!h.ok) return { code: EXIT_INVALID, err: `  ${h.message}` };
+      if (h.custom) {
+        return {
+          code: EXIT_INVALID,
+          err:
+            `  ${agent} の HOME（${h.path}）は、fs の縛りの下ではまだ扱わぬ——檻が書けるのは実の ~/.cursor 等だけで、` +
+            'cursor が分けた家の下に書けぬまま起きる。\n' +
+            '  fs の縛りを外すか、この足軽の env から HOME を外されよ。',
+        };
+      }
+    }
+  }
   let codexHome: string | undefined;
   if (r.cfg.level === 'bwrap' && cli === 'codex' && agent) {
     const loaded = configLoad(db);
@@ -2620,6 +2857,15 @@ export function runConfig(dbPath: string | undefined, key: string | undefined): 
 }
 
 /**
+ * 起こす側が今使う正本の道。--db・HONDEN_DB・既定の順で決まり、相対なら今の作業 dir を基に絶対へ解く
+ * （openStore が相対を解く基と同じ）。:memory: はそのまま返す。
+ */
+export function ownDbFile(dbPath: string | undefined): string {
+  const p = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+  return p === ':memory:' ? p : resolvePath(p);
+}
+
+/**
  * `honden config env <名>` — その足軽を起こす命の頭に置く env の前置き（`CODEX_HOME='…'`）。
  * 無ければ空を返す。名が外れておれば非ゼロで止まる——出陣と立て直しは、起こす前に
  * これを引いて止まる。値は shell の単引用で包んである（src/config.ts の shellQuote）。
@@ -2628,7 +2874,7 @@ export function runConfigEnv(dbPath: string | undefined, agent: string): RunResu
   const db = openStore({ path: dbPath });
   // 前置きと検めを同じ一度の読みから出す（envPlanOf）。二度読めば、間に設定が書き換わった時、
   // 検めを通らぬ道が前置きに載りうる。
-  const r = configEnvPlanOf(db, agent);
+  const r = configEnvPlanOf(db, agent, ownDbFile(dbPath));
   if (!r.ok) return { code: EXIT_INVALID, err: r.message };
   // 道の掟（設定の層・agentEnv）を通った後に、HINDSIGHT_CONFIG の file を開いて検める。
   // 在る無しの検めを起こす前の口に置くのは、CODEX_HOME の在る無しを runIsolateWrap に
@@ -2636,6 +2882,23 @@ export function runConfigEnv(dbPath: string | undefined, agent: string): RunResu
   if (r.hindsightConfig !== undefined) {
     const why = hindsightConfigProblem(r.hindsightConfig, r.type);
     if (why) return { code: EXIT_INVALID, err: `${agent} の HINDSIGHT_CONFIG（${r.hindsightConfig}）——${why}` };
+  }
+  // cursor の足軽の HOME は、起こす前に在る dir であること。在らねば cursor は家の無いまま起きて、
+  // user の層も資格も書けず、hindsight の hook も MCP も載らぬ。出陣と立て直しはここで止まる
+  // （CODEX_HOME・CLAUDE_CONFIG_DIR と違い、HOME は無ければ全ての道具が困るゆえ、在る無しまで問う）。
+  if (r.homeDir !== undefined) {
+    let isDir = false;
+    try {
+      isDir = statSync(r.homeDir).isDirectory();
+    } catch {
+      /* 無い */
+    }
+    if (!isDir) {
+      return {
+        code: EXIT_INVALID,
+        err: `${agent} の HOME（${r.homeDir}）が在らぬ（dir でない）。先に mkdir -p で作り、手順書の通りに据えられよ。`,
+      };
+    }
   }
   return { code: EXIT_OK, out: r.prefix };
 }
