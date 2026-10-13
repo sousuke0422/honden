@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { submitReport } from '../src/report';
 import { releaseAllOf } from '../src/claim';
@@ -42,6 +43,7 @@ function seeded(path = ':memory:') {
       { id: 'ashigaru2', role: 'worker', cli: 'claude', model: null },
     ]);
   });
+  trustRosterModels(db);
   const c = createCmd(db, 'shogun', CMD);
   return { db, cmdId: c.id! };
 }

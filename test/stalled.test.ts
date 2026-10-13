@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { findAbandoned } from '../src/abandoned';
 import { findStalled, notifyStalled, STALLED_AFTER_MS } from '../src/stalled';
@@ -26,6 +27,7 @@ function seeded(path = ':memory:') {
       { id: 'ashigaru9', role: 'worker', cli: 'claude', model: null },
     ]);
   });
+  trustRosterModels(db);
   const cmdId = createCmd(db, 'shogun', CMD).id!;
   const assigned = assignTask(db, 'karo', {
     agent: 'ashigaru9', cmd_id: cmdId, title: '止まり試料', workspace: `/w/.worktrees/${cmdId}`,

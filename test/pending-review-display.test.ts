@@ -10,6 +10,7 @@ import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
 import { listPendingReviews } from '../src/report';
 import { runCmdList, runStatus } from '../src/main';
+import { trustRosterModels } from './model-limits';
 
 const CMD = {
   north_star: '検め待ちが見える',
@@ -30,6 +31,7 @@ function seeded(path = ':memory:') {
       { id: 'ashigaru2', role: 'worker', cli: 'codex', model: null },
     ]);
   });
+  trustRosterModels(db);
   const cmdId = createCmd(db, 'shogun', CMD).id!;
   const assigned = assignTask(db, 'karo', {
     agent: 'ashigaru1', cmd_id: cmdId, title: '試料', workspace: '/w/.worktrees/test',
