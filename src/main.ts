@@ -1672,11 +1672,133 @@ function stripJsonComments(text: string): string {
 }
 
 /**
+ * cursor-agent が hooks.json の `hooks` の鍵として知る event の名（2026.10.01-e373342 の index.js、
+ * 位置 3942934 付近の event 名の表）。表に無い名が一つでも在ると、その層は丸ごと断られる。
+ */
+const CURSOR_HOOK_EVENTS: readonly string[] = [
+  'beforeShellExecution',
+  'beforeMCPExecution',
+  'afterShellExecution',
+  'afterMCPExecution',
+  'beforeReadFile',
+  'afterFileEdit',
+  'beforeTabFileRead',
+  'afterTabFileEdit',
+  'stop',
+  'beforeSubmitPrompt',
+  'afterAgentResponse',
+  'afterAgentThought',
+  'sessionStart',
+  'sessionEnd',
+  'preCompact',
+  'subagentStart',
+  'subagentStop',
+  'preToolUse',
+  'postToolUse',
+  'postToolUseFailure',
+  'workspaceOpen',
+];
+
+/** cursor の検めの `y`（null でも配列でもない object）。 */
+const isCursorObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * cursor-agent が hooks.json の設定（注釈を落として JSON.parse した後）を検める条件を写す。
+ * index.js 位置 3961120 付近の `se`（設定）と 3959141 付近の `re`（hook 一つ）。当たれば**その層を
+ * 丸ごと断り**、層の hook は一つも走らぬ。断る訳を返す（無ければ undefined）。
+ *
+ * 写したのは源で確かめた条件だけ: 設定が object でない・version が数でない・整数でないか 1 未満・
+ * hooks が object でない・未知の event 名・event の値が配列でない・hook の形（type・command・prompt・
+ * matcher・timeout・loop_limit・failClosed）。訳は最初の三つまでを挙げる。
+ */
+function cursorHooksRefusal(doc: unknown): string | undefined {
+  if (!isCursorObject(doc)) return '設定が object でない';
+  const why: string[] = [];
+  if (typeof doc.version !== 'number') why.push('version が数でない（無い）');
+  else if (!Number.isInteger(doc.version) || doc.version < 1) why.push('version が 1 以上の整数でない');
+  if (!isCursorObject(doc.hooks)) {
+    why.push('hooks が object でない');
+  } else {
+    for (const [event, list] of Object.entries(doc.hooks)) {
+      if (!CURSOR_HOOK_EVENTS.includes(event)) {
+        why.push(`未知の event 名 ${event}`);
+        continue;
+      }
+      if (list === undefined) continue;
+      if (!Array.isArray(list)) {
+        why.push(`${event} が配列でない`);
+        continue;
+      }
+      list.forEach((h, i) => {
+        const bad = cursorHookEntryRefusal(h);
+        if (bad !== undefined) why.push(`${event}[${i}] ${bad}`);
+      });
+    }
+  }
+  if (why.length === 0) return undefined;
+  return why.length > 3 ? `${why.slice(0, 3).join('・')}・ほか ${why.length - 3} 件` : why.join('・');
+}
+
+/** hook 一つの検め（`re`）。断る訳を返す。 */
+function cursorHookEntryRefusal(h: unknown): string | undefined {
+  if (!isCursorObject(h)) return 'が object でない';
+  if (h.type === 'prompt') {
+    if (typeof h.prompt !== 'string' || h.prompt.trim() === '') return 'の prompt が文字列でない・空';
+    if (h.model !== undefined && (typeof h.model !== 'string' || h.model.trim() === '')) return 'の model が文字列でない・空';
+  } else if (h.type === 'command' || h.type === undefined) {
+    if (typeof h.command !== 'string') return 'の command が文字列でない';
+  } else {
+    return `の type が不正（${String(h.type)}）`;
+  }
+  if (h.matcher !== undefined) {
+    if (typeof h.matcher !== 'string') return 'の matcher が文字列でない';
+    if (h.matcher !== '' && h.matcher !== '*') {
+      try {
+        new RegExp(h.matcher);
+      } catch {
+        return 'の matcher が正規表現として不正';
+      }
+    }
+  }
+  if (h.timeout !== undefined && (typeof h.timeout !== 'number' || h.timeout <= 0)) return 'の timeout が正の数でない';
+  if (h.loop_limit !== undefined && h.loop_limit !== null) {
+    if (typeof h.loop_limit !== 'number' || !Number.isInteger(h.loop_limit) || h.loop_limit <= 0) return 'の loop_limit が正の整数でない';
+  }
+  if (h.failClosed !== undefined && typeof h.failClosed !== 'boolean') return 'の failClosed が真偽でない';
+  return undefined;
+}
+
+/**
+ * cursor の project の層（`<根>/.cursor/hooks.json`）を cursor-agent が載せるか。門の配線そのものゆえ、
+ * 断られる形なら門は黙って止まる——**生死に効かせる**。載せぬ訳を返す（載せる・読めぬ・無い時は undefined）。
+ */
+function cursorProjectLayerRefusal(file: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+  try {
+    const bad = cursorHooksRefusal(JSON.parse(cursorStripComments(text)));
+    return bad === undefined ? undefined : `project の hooks.json が cursor-agent に断られる（${bad}）。門の hook は一つも走らず、門ごと黙って止まる`;
+  } catch {
+    try {
+      JSON.parse(stripJsonComments(text));
+      return 'project の hooks.json は JSON として正しいが、cursor-agent は読めぬ（文字列の中の注釈の印を注釈と取り違える）。門ごと黙って止まる';
+    } catch {
+      return 'project の hooks.json が壊れておる。cursor-agent は読めず、門ごと黙って止まる';
+    }
+  }
+}
+
+/**
  * cursor の user の層（`<HOME>/.cursor/hooks.json`）の様子を一句で。中身は出さぬ（鍵や命が
  * 載りうる）。数えるのは beforeShellExecution の hook の本数だけ。
  *
- * 三つに分ける: cursor の読み方で読めれば本数を言う。cursor の読み方では読めぬが、文字列を
- * 区別して読めば正しい JSON なら、**壊れておるとは言わず**「cursor-agent は読めぬ」と言う
+ * 四つに分ける: cursor の読み方で読めて検めも通れば本数を言う。読めても検めに断られる形
+ * （version 欠け等）なら、その層の hook は一つも走らぬと言う。cursor の読み方では読めぬが、
+ * 文字列を区別して読めば正しい JSON なら、**壊れておるとは言わず**「cursor-agent は読めぬ」と言う
  * （cursor は文字列の中の注釈の印まで注釈と取り違え、その層を載せぬ）。どちらでも読めぬ時だけ
  * 壊れておる。門は project の層に在り user の層とは別に読まれる——この句は生死の判じに関わらぬ。
  */
@@ -1688,8 +1810,10 @@ function cursorUserLayerNote(file: string): string {
     return (e as { code?: string } | null)?.code === 'ENOENT' ? 'user の hooks.json 無し' : 'user の hooks.json を読めず';
   }
   try {
-    const doc = JSON.parse(cursorStripComments(text)) as { hooks?: Record<string, unknown> };
-    const hooks = doc?.hooks?.['beforeShellExecution'];
+    const doc = JSON.parse(cursorStripComments(text)) as unknown;
+    const bad = cursorHooksRefusal(doc);
+    if (bad !== undefined) return `user の hooks.json は cursor-agent に断られる（${bad}）。その層の hook は一つも走らぬ`;
+    const hooks = (doc as { hooks: Record<string, unknown> }).hooks['beforeShellExecution'];
     return `user の hooks.json 有り（beforeShellExecution ${Array.isArray(hooks) ? hooks.length : 0} 本）`;
   } catch {
     try {
@@ -1778,6 +1902,9 @@ function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home
     links.length > 0
       ? `${links.map((l) => l.slice(base.length + 1)).join('・')} が symlink。cursor は symlink を含む project の hooks.json を読まず、門ごと黙って止める`
       : undefined;
+  // 門の配線（project の層）を cursor が断る形なら、門は黙って止まる。symlink と同じく生死に効かせる
+  const refused = cursorProjectLayerRefusal(join(base, '.cursor', 'hooks.json'));
+  const dead = [symlinked, refused].filter((x): x is string => x !== undefined).join('。');
   const agents: { id: string; dir?: string; bad?: string; db?: string }[] = [];
   const roster = selftestRoster(dbPath);
   const mainDb = ownDbFile(dbPath);
@@ -1833,8 +1960,8 @@ function cursorRows(c: GateCheck, base: string, dbPath: string | undefined, home
     rows.push({
       cli: 'cursor',
       configured: true,
-      denies: symlinked === undefined,
-      note: symlinked === undefined ? [c.note, who].filter(Boolean).join(' ') : `${who} — **${symlinked}**`,
+      denies: dead === '',
+      note: dead === '' ? [c.note, who].filter(Boolean).join(' ') : `${who} — **${dead}**`,
     });
   }
   return rows;
