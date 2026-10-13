@@ -1699,6 +1699,23 @@ const CURSOR_HOOK_EVENTS: readonly string[] = [
   'workspaceOpen',
 ];
 
+/** 断りの訳に載せる file 由来の文字の丈の上限（字数）。 */
+const CURSOR_QUOTE_MAX = 60;
+
+/**
+ * 断りの訳へ載せる file 由来の文字（鍵の名・値）を、一行に収まる見える形にする。
+ * 設定の中の文字は誰が書いたか分からぬ——そのまま表へ流せば、改行で偽の行を差し込めたり
+ * ANSI の escape 列で端末を操れたりする。`JSON.stringify` で改行・引用符・制御の字（ESC を含む）を
+ * `\n` `\u001b` の形にし、JSON が escape せぬ DEL・C1 の制御・行区切り（U+2028/2029）も同じ形にし、
+ * 丈（字数）を切って `…` を付ける。env の値の制御の字を拒む筋（src/config.ts）と揃え、
+ * ここは拒まず見える形にして出す。固定の表から来る名（既知の event 名）は通さずともよい。
+ */
+function cursorQuoted(v: unknown): string {
+  const chars = Array.from(String(v));
+  const cut = chars.length > CURSOR_QUOTE_MAX ? `${chars.slice(0, CURSOR_QUOTE_MAX).join('')}…` : chars.join('');
+  return JSON.stringify(cut).replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 /** cursor の検めの `y`（null でも配列でもない object）。 */
 const isCursorObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -1721,7 +1738,7 @@ function cursorHooksRefusal(doc: unknown): string | undefined {
   } else {
     for (const [event, list] of Object.entries(doc.hooks)) {
       if (!CURSOR_HOOK_EVENTS.includes(event)) {
-        why.push(`未知の event 名 ${event}`);
+        why.push(`未知の event 名 ${cursorQuoted(event)}`);
         continue;
       }
       if (list === undefined) continue;
@@ -1748,7 +1765,7 @@ function cursorHookEntryRefusal(h: unknown): string | undefined {
   } else if (h.type === 'command' || h.type === undefined) {
     if (typeof h.command !== 'string') return 'の command が文字列でない';
   } else {
-    return `の type が不正（${String(h.type)}）`;
+    return `の type が不正（${cursorQuoted(h.type)}）`;
   }
   if (h.matcher !== undefined) {
     if (typeof h.matcher !== 'string') return 'の matcher が文字列でない';
