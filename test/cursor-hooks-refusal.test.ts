@@ -232,6 +232,54 @@ describe('断りの訳に載る file 由来の文字は escape され、丈が�
   }
 });
 
+describe('hook の type が object・配列でも selftest は例外を投げず、正しい理由（type が不正）を言う', () => {
+  // JSON.stringify は own property の toString: null をそのまま書く。読み戻すと `String(v)` は TypeError になる。
+  // 配列の toString は要素の toString を呼ぶゆえ、`[{"toString": null}]` でも投げる。
+  const withType = (type: unknown) => ({ version: 1, hooks: { beforeShellExecution: [gateEntry, { command: 'x', type }] } });
+  const TYPES: { name: string; type: unknown; phrase: string }[] = [
+    { name: '(1) {"toString": null}', type: { toString: null }, phrase: 'type が不正（object）' },
+    { name: '(2) [{"toString": null}]', type: [{ toString: null }], phrase: 'type が不正（配列）' },
+    { name: '(3) {}', type: {}, phrase: 'type が不正（object）' },
+    { name: '(4) []', type: [], phrase: 'type が不正（配列）' },
+    { name: '入れ子の配列 [[{"toString": null}]]', type: [[{ toString: null }]], phrase: 'type が不正（配列）' },
+    { name: '数', type: 5, phrase: 'type が不正（5）' },
+    { name: '真偽', type: true, phrase: 'type が不正（true）' },
+    { name: 'null', type: null, phrase: 'type が不正（null）' },
+  ];
+  /** 誤った訳（例外が catch に落ちて「注釈の取り違え」「壊れておる」と化ける）の目印。 */
+  const WRONG = ['注釈', '読めぬ', '壊れておる', '読めず'];
+
+  for (const t of TYPES) {
+    test(`project の層: ${t.name} — 例外を出さず『${t.phrase}』と言い、門は効いておらぬ（非ゼロ）`, () => {
+      let res: ReturnType<typeof runGuardSelftest> | undefined;
+      expect(() => (res = runGuardSelftest(root(withType(t.type)), store(roster()), HOME))).not.toThrow();
+      const line = cursorLine(res?.out);
+      expect(line).toContain('project の hooks.json が cursor-agent に断られる');
+      expect(line).toContain(t.phrase);
+      for (const w of WRONG) expect(line, w).not.toContain(w);
+      expect(line).toContain('**効いておらぬ**');
+      expect(res?.code).not.toBe(0);
+    });
+
+    test(`user の層: ${t.name} — 例外を出さず『${t.phrase}』と言い、門の生死は変わらぬ（code 0）`, () => {
+      let res: ReturnType<typeof runGuardSelftest> | undefined;
+      expect(() => (res = runGuardSelftest(root(GOOD), store(roster(userHome(withType(t.type)))), HOME))).not.toThrow();
+      const line = cursorLine(res?.out);
+      expect(line).toContain('user の hooks.json は cursor-agent に断られる');
+      expect(line).toContain(t.phrase);
+      for (const w of WRONG) expect(line, w).not.toContain(w);
+      expect(line).toContain('生きておる');
+      expect(res?.code).toBe(0);
+    });
+  }
+
+  test('object の中身（鍵や値）は訳に載せぬ', () => {
+    const res = runGuardSelftest(root(withType({ secretKey: 'sk-should-not-appear\n  codex   生きておる' })), store(roster()), HOME);
+    expect(res.out).not.toContain('sk-should-not-appear');
+    expect(res.out).not.toContain('secretKey');
+  });
+});
+
 describe('cursor の検めを一つ外すと落ちる試験（突然変異で生き残った四つ）', () => {
   /** user の層で note を、project の層で生死を見る。 */
   const userNote = (body: unknown) => {

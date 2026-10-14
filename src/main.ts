@@ -1711,7 +1711,14 @@ const CURSOR_QUOTE_MAX = 60;
  * ここは拒まず見える形にして出す。固定の表から来る名（既知の event 名）は通さずともよい。
  */
 function cursorQuoted(v: unknown): string {
-  const chars = Array.from(String(v));
+  // 文字列だけを文字として扱う。object と配列は `String` に渡さぬ——object の `toString` が null や
+  // 関数でない物なら TypeError を投げ、配列の `toString` は要素の `toString` を呼ぶゆえ
+  // `[{"toString": null}]` でも投げる。中身は出さず、型を示す定型の句にする。
+  // 数・真偽・null は `String` が投げぬ（JSON 由来ゆえ BigInt・Symbol は来ぬ）ので、字面のまま出す。
+  if (Array.isArray(v)) return '配列';
+  if (typeof v === 'object' && v !== null) return 'object';
+  if (typeof v !== 'string') return String(v);
+  const chars = Array.from(v);
   const cut = chars.length > CURSOR_QUOTE_MAX ? `${chars.slice(0, CURSOR_QUOTE_MAX).join('')}…` : chars.join('');
   return JSON.stringify(cut).replace(/[\u007f-\u009f\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
