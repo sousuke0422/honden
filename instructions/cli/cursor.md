@@ -113,6 +113,33 @@ honden に `CLAUDE.md`・`AGENTS.md`・`.cursor/rules/`・`.cursor/skills/` は�
 cursor には起動時に自動で読む md が無い。名乗りと作法は sessionStart フックの
 `additional_context` だけが運ぶ。**このフックが黙れば、cursor は己が誰かを知らぬまま働く。**
 
+## hooks.json を cursor-agent が断る形
+
+cursor-agent は `hooks.json` を enterprise・team・user・project の層ごとに別々に読む。
+次のどれかに当たると、**その層を丸ごと断り、層の hook は一つも走らぬ**（他の層は読まれる）。
+黙って飛ぶゆえ、気づかぬまま働く。条件は cursor-agent（2026.10.01-e373342）の源で確かめた物で、
+`honden guard selftest` の cursor の検め（`src/main.ts` の `cursorHooksRefusal`）が写している:
+
+- 設定が object でない
+- `version` が数でない・整数でない・1 未満
+- `hooks` が object でない
+- 未知の event 名が `hooks` の鍵に在る（一つでも在れば層ごと断る）
+- event の値が配列でない
+- hook の形が不正（`type`・`command`・`prompt`・`matcher`・`timeout`・`loop_limit`・`failClosed` の型や値）
+
+断られた層が何を黙らせるかは層による:
+
+- **project の層**（`<根>/.cursor/hooks.json`）が断られれば、**門ごと黙る**。`honden guard selftest` が
+  cursor の行で「効いておらぬ」と言う
+- **user の層**（`<HOME>/.cursor/hooks.json`）が断られれば、門は生きる。ただし user の層に載せた hook
+  （記憶を残す hook など）が黙る。selftest は注として言う
+
+外の道具（installer など）や手で `hooks.json` を書いた後は、**`honden guard selftest` の cursor の行で
+載ったかを確かめよ**。書いた側の「成功」の表示は、cursor-agent が受け取るかを保証せぬ。
+
+例: hindsight の installer 0.7.0 は `version` を書かぬ。cursor-agent はそれを断るゆえ、撃った後に
+`"version": 1` を足す要がある。これは一例であり、規則は installer を問わず全ての hook に当たる。
+
 ## MCP ツール呼び出し構文
 
 Cursor Agent の MCP 呼び出し構文は Claude Code と異なる（`__` → `_`）。
