@@ -142,7 +142,9 @@ cursor-agent が受け取るかを保証せぬ。
 - 断りの検めは、cursor-agent（2026.10.01-e373342）の検めを写した**静的な検め**である。hook を実際に
   撃ってはおらぬ（門の皮を直に走らせ、`rm -rf /` に deny が返るかと、設定が皮を指すかを見る）。
   cursor-agent の版が上がれば条件がずれうる
-- 生死に効かせるのは project の層の断りと、その道に symlink が含まれることだけ
+- hooks.json の断りのうち生死に効かせるのは project の層だけ（その道に symlink が含まれる形も同じ）。
+  hooks.json の外にも、足軽の env の欄の誤り・起こす命に載る正本のずれ（HOME を分けた足軽）は
+  「効いておらぬ」の別の行になる
 - user の層は note に留まり、門の生死に響かぬ。note が数えるのも `beforeShellExecution` の hook の本数だけ
 - enterprise・team の層は見ぬ
 - 断られずとも、hook が実際に走ったかは見ぬ。門以外の hook（記憶を残す hook など）は、その hook の跡で確かめよ
