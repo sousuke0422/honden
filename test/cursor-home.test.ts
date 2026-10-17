@@ -473,4 +473,32 @@ describe('selftest が、分けた家から global の git hook が見えぬ形�
       process.env.PATH = saved;
     }
   });
+
+  test('(6) 走る process に XDG_CONFIG_HOME と GIT_CONFIG_GLOBAL が据わっても、分けた家の判じが漏れぬ', () => {
+    const { m, d } = homes(hooks, null);
+    const mainHooks = `${m}/.git-hooks`;
+    const xdg = mk(join(BASE, `xdg-${Math.random().toString(36).slice(2)}`));
+    mkdirSync(join(xdg, 'git'), { recursive: true });
+    writeFileSync(join(xdg, 'git', 'config'), `[core]\n\thooksPath = ${mainHooks}\n`);
+    const gcgDir = mk(join(BASE, `gcg-${Math.random().toString(36).slice(2)}`));
+    const gcgFile = join(gcgDir, 'gitconfig');
+    writeFileSync(gcgFile, `[core]\n\thooksPath = ${mainHooks}\n`);
+
+    const savedXdg = process.env.XDG_CONFIG_HOME;
+    const savedGcg = process.env.GIT_CONFIG_GLOBAL;
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.GIT_CONFIG_GLOBAL = gcgFile;
+    try {
+      const { code, line } = run(m, d);
+      expect(code).toBe(0);
+      expect(line).toContain('分けた家から global の git hook が見えぬ');
+      expect(line).toContain(`${m}/.git-hooks`);
+      expect(line).toContain('この家: 無し');
+    } finally {
+      if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = savedXdg;
+      if (savedGcg === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = savedGcg;
+    }
+  });
 });
