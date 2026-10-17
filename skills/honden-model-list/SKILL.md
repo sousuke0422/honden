@@ -98,8 +98,9 @@ honden は `config/settings.yaml` の `capability_tiers` を **能力に制限�
 その他の向き不向きと Bloom の目安は、確かな事が言えぬので、人が試して決める。
 不明とは分けて扱う（不明は、名の形を知らぬ物である）。
 
-この写しには限りが二つある。
+この写しには限りが三つある。
 
+- 写しは、名の形からクラスを当てる物である。名が実在するか、その account で使えるかは答えない。実在せぬ名でも、形が合えばクラスが当たる。名の確かめは、対象の CLI の列挙（`cursor-agent --list-models`、`opencode models` など）か、提供元の現行の一覧で行う
 - Anthropic は、名からクラスを推さず、Models API が返す `line` の欄を読むよう求めておる（models overview の頁）。名の形で当てるのは、鍵を持たずに読める近道にすぎない。迷えば `line` を見る
 - OpenAI の Sol は、世代によって段が違う。5.6 の世代では最上位（flagship）で、6 の世代では Astra の下に入る。同じ世代の中での並びは Astra、Sol、Terra、Luna の順である
 
