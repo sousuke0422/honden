@@ -134,8 +134,18 @@ cursor-agent は `hooks.json` を enterprise・team・user・project の層ご�
 - **user の層**（`<HOME>/.cursor/hooks.json`）が断られれば、門は生きる。ただし user の層に載せた hook
   （記憶を残す hook など）が黙る。selftest は注として言う
 
-hook を書いた後の確かめ（`honden guard selftest`）は共通の規則に従う（`forbidden_actions.md`）。
-書いた側の「成功」の表示は、cursor-agent が受け取るかを保証せぬ。cursor の行がその理由を言う。
+hook を書いた後の確かめは共通の規則に従う（`forbidden_actions.md`）。書いた側の「成功」の表示は、
+cursor-agent が受け取るかを保証せぬ。
+
+**selftest の cursor の行の限り**（`src/main.ts` の `cursorRows` を読んで確かめた）:
+
+- 断りの検めは、cursor-agent（2026.10.01-e373342）の検めを写した**静的な検め**である。hook を実際に
+  撃ってはおらぬ（門の皮を直に走らせ、`rm -rf /` に deny が返るかと、設定が皮を指すかを見る）。
+  cursor-agent の版が上がれば条件がずれうる
+- 生死に効かせるのは project の層の断りと、その道に symlink が含まれることだけ
+- user の層は note に留まり、門の生死に響かぬ。note が数えるのも `beforeShellExecution` の hook の本数だけ
+- enterprise・team の層は見ぬ
+- 断られずとも、hook が実際に走ったかは見ぬ。門以外の hook（記憶を残す hook など）は、その hook の跡で確かめよ
 
 例: hindsight の installer 0.7.0 は `version` を書かぬ。cursor-agent はそれを断るゆえ、撃った後に
 `"version": 1` を足す要がある。これは一例であり、規則は installer を問わず全ての hook に当たる。
