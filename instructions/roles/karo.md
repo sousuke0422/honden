@@ -264,8 +264,6 @@ cursor の行が、global の git hook が見えぬ時は一句で言う）。
   書いてあれば家ごとに解けて道が変わる——絶対の道で書くか、同じ道に hook を置く
 - **gh の認証**: 家の `.config/gh` が無く、gh が使えぬ。渡すかは殿の判じ
 - **ssh の鍵**: origin が ssh 形なら、家の `.ssh` が無く push できぬ。渡すかは殿の判じ
-- **足軽の家の `.cursor/hooks.json` に hook を足した後は**、`honden guard selftest` の cursor の行で載ったかを確かめよ。
-  cursor が層を丸ごと断る形は `instructions/cli/cursor.md` にある
 - 本物の設定を**写すな**（秘密が複製される）。指す（include）か、渡さぬと決めよ
 - 正本は気にせずともよい——HOME を書いた足軽の起こす命には、起こす側の正本が `HONDEN_DB` で必ず載る
 

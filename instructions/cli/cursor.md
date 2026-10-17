@@ -134,8 +134,8 @@ cursor-agent は `hooks.json` を enterprise・team・user・project の層ご�
 - **user の層**（`<HOME>/.cursor/hooks.json`）が断られれば、門は生きる。ただし user の層に載せた hook
   （記憶を残す hook など）が黙る。selftest は注として言う
 
-外の道具（installer など）や手で `hooks.json` を書いた後は、**`honden guard selftest` の cursor の行で
-載ったかを確かめよ**。書いた側の「成功」の表示は、cursor-agent が受け取るかを保証せぬ。
+hook を書いた後の確かめ（`honden guard selftest`）は共通の規則に従う（`forbidden_actions.md`）。
+書いた側の「成功」の表示は、cursor-agent が受け取るかを保証せぬ。cursor の行がその理由を言う。
 
 例: hindsight の installer 0.7.0 は `version` を書かぬ。cursor-agent はそれを断るゆえ、撃った後に
 `"version": 1` を足す要がある。これは一例であり、規則は installer を問わず全ての hook に当たる。

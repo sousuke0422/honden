@@ -97,6 +97,10 @@ honden も同じ順で名乗りを決める:
 
 門が生きておるかは `honden guard selftest` で確かめられる。
 **据えただけでは効かぬことがある**——hook の設定を書き換えると信頼が切れ、黙って飛ぶ。
+門の hook に限らぬ。記憶を残す hook も含め、どの CLI のどの層でも、hook の設定を書いた後
+（外の道具に書かせた後も）は `honden guard selftest` で載ったかを確かめよ。黙って飛ぶ形は
+CLI ごとに違い、selftest がその理由を一句で言う。cursor が設定を層ごと断る条件は
+`instructions/cli/cursor.md` に在る。
 
 門が捕まえられぬものは、下の訓戒が持つ。紋様に乗らぬゆえ、読んで守るしかない。
 
