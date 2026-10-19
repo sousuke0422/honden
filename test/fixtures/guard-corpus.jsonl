@@ -9,7 +9,7 @@
 {"kind":"attack","expect":"deny:D005","cmd":"FOO=bar sudo id"}
 {"kind":"attack","expect":"deny:D001","cmd":"[[ -n $(rm -rf /) ]]"}
 {"kind":"attack","expect":"deny:D006","cmd":"[[ -n x ]] > /tmp/o; kill 1"}
-{"kind":"attack","expect":"allow","cmd":"\\rm -rf /"}
+{"kind":"attack","expect":"deny:D001","cmd":"\\rm -rf /"}
 {"kind":"attack","expect":"deny:D000","cmd":"`kill 1`"}
 {"kind":"attack","expect":"deny:D005","cmd":"a | sudo tee x"}
 {"kind":"attack","expect":"deny:D007","cmd":"a || mkfs.ext4 /dev/sda1"}
@@ -29,9 +29,9 @@
 {"kind":"attack","expect":"deny:D005","cmd":"case x in x) sudo id;; esac"}
 {"kind":"attack","expect":"deny:D006","cmd":"cat <(sh -c 'a; kill 1')"}
 {"kind":"attack","expect":"deny:D005","cmd":"cat <(sudo id)"}
-{"kind":"attack","expect":"allow","cmd":"cat <<'A' <<B\nx\nA\n$(kill 1)\nB"}
-{"kind":"attack","expect":"allow","cmd":"cat <<EOF\n$(rm -rf /)\nEOF"}
-{"kind":"attack","expect":"allow","cmd":"cat <<EOF\n`kill 1`\nEOF"}
+{"kind":"attack","expect":"deny:D006","cmd":"cat <<'A' <<B\nx\nA\n$(kill 1)\nB"}
+{"kind":"attack","expect":"deny:D001","cmd":"cat <<EOF\n$(rm -rf /)\nEOF"}
+{"kind":"attack","expect":"deny:D006","cmd":"cat <<EOF\n`kill 1`\nEOF"}
 {"kind":"attack","expect":"deny:D001","cmd":"cat <<EOF | sh\nrm -rf /\nEOF"}
 {"kind":"attack","expect":"deny:D015","cmd":"cat ~/.config/app.pem"}
 {"kind":"attack","expect":"deny:D005","cmd":"chmod -R 777 /etc"}
@@ -52,15 +52,15 @@
 {"kind":"attack","expect":"deny:D006","cmd":"echo \"$(kill 1)\""}
 {"kind":"attack","expect":"deny:D001","cmd":"echo \"$(rm -rf /)\""}
 {"kind":"attack","expect":"deny:D001","cmd":"echo \"a\\\"b\"; rm -rf /"}
-{"kind":"attack","expect":"allow","cmd":"echo \"sudo id\" | bash"}
+{"kind":"attack","expect":"deny:D005","cmd":"echo \"sudo id\" | bash"}
 {"kind":"attack","expect":"deny:D001","cmd":"echo $'a\\'b'; rm -rf /"}
 {"kind":"attack","expect":"deny:D001","cmd":"echo 'a'\\''b'; rm -rf /"}
 {"kind":"attack","expect":"deny:D012","cmd":"echo 'exit 0' > .claude/hooks/guard.sh"}
 {"kind":"attack","expect":"deny:D005","cmd":"echo `sudo id`"}
-{"kind":"attack","expect":"allow","cmd":"echo kill | sh"}
+{"kind":"attack","expect":"deny:D006","cmd":"echo kill | sh"}
 {"kind":"attack","expect":"deny:D012","cmd":"echo x > .claude/settings.json"}
 {"kind":"attack","expect":"deny:D012","cmd":"echo x > src/guard.ts"}
-{"kind":"attack","expect":"allow","cmd":"echo x | base64 -d | sh"}
+{"kind":"attack","expect":"deny:D000","cmd":"echo x | base64 -d | sh"}
 {"kind":"attack","expect":"deny:D005","cmd":"echo x | xargs -I{} sudo {}"}
 {"kind":"attack","expect":"deny:D006","cmd":"echo x | xargs kill"}
 {"kind":"attack","expect":"deny:D001","cmd":"env -S 'a; rm -rf /'"}
@@ -133,7 +133,7 @@
 {"kind":"attack","expect":"deny:D001","cmd":"setsid rm -rf /"}
 {"kind":"attack","expect":"deny:D000","cmd":"sh -c \"$X\""}
 {"kind":"attack","expect":"deny:D006","cmd":"sh -c 'ls; kill 1'"}
-{"kind":"attack","expect":"allow","cmd":"sh <<<\"kill 1\""}
+{"kind":"attack","expect":"deny:D006","cmd":"sh <<<\"kill 1\""}
 {"kind":"attack","expect":"deny:D005","cmd":"ssh h \"a; sudo b\""}
 {"kind":"attack","expect":"deny:D006","cmd":"ssh h \"kill 1\""}
 {"kind":"attack","expect":"deny:D001","cmd":"ssh h 'a; rm -rf /'"}
@@ -260,7 +260,7 @@
 {"kind":"benign","expect":"allow","cmd":"if [ -f a ]; then echo yes; else echo no; fi"}
 {"kind":"benign","expect":"allow","cmd":"jq '.a|kill' f.json"}
 {"kind":"benign","expect":"allow","cmd":"jq -r '.items[] | .name' a.json"}
-{"kind":"benign","expect":"deny:D006","cmd":"kill -l"}
+{"kind":"benign","expect":"allow","cmd":"kill -l"}
 {"kind":"benign","expect":"allow","cmd":"ln -s core/x/target/release bin"}
 {"kind":"benign","expect":"allow","cmd":"ls -la /tmp/work"}
 {"kind":"benign","expect":"allow","cmd":"ls; echo done"}
