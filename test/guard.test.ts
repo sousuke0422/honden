@@ -176,9 +176,12 @@ describe('表の中の取りこぼし（三度目の監査 2026-09-01 が釣っ�
     //
     // `echo '…' | sh` はここに在ったが、shell の標準入力へ流す字を解き手が読むように
     // なって止まる（test/guard-holes-shell.test.ts が縛る）。
+    // `python3 -c` の os.system と `node -e` の execSync に字どおりの命を渡す形も在ったが、
+    // 源の中の shell を呼ぶ口を読むようになって止まる（test/guard-holes-wrap.test.ts）。
+    // 今も届かぬのは、口の名を組み立てる源と、編輯器の中から起こす形である。
     for (const c of [
-      `python3 -c "import os; os.system('${RM}')"`,
-      `node -e "require('child_process').execSync('${RM}')"`,
+      `python3 -c "import os; f = getattr(os, 'sys' + 'tem'); f('${RM}')"`,
+      `vim -c '!${RM}' -c q`,
     ]) {
       expect(S(c), c).toBe('allow');
     }
