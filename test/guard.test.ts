@@ -173,10 +173,12 @@ describe('表の中の取りこぼし（三度目の監査 2026-09-01 が釣っ�
   test('**それでも一覧の外は通る。これは堀であって城壁ではない**', () => {
     // 守れておらぬ範囲を、釘としても残す。次に読む者が「全部止まる」と
     // 誤解せぬように。列挙では原理的に届かぬ形がある
+    //
+    // `echo '…' | sh` はここに在ったが、shell の標準入力へ流す字を解き手が読むように
+    // なって止まる（test/guard-holes-shell.test.ts が縛る）。
     for (const c of [
       `python3 -c "import os; os.system('${RM}')"`,
       `node -e "require('child_process').execSync('${RM}')"`,
-      `echo '${RM}' | sh`,
     ]) {
       expect(S(c), c).toBe('allow');
     }
