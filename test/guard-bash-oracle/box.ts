@@ -4,7 +4,7 @@
  * 箱の形:
  * - 全ての名前空間を分ける（`--unshare-all`）。網は lo だけで、外へ出られぬ
  * - 根は空の tmpfs を読み取り専用にした物（`--remount-ro /`）。手元の家・repo・/usr は見えぬ
- * - 入れるのは bash と、その共有 library だけ（どれも読み取り専用）。bash は `/oracle/sh` に置き、
+ * - 入れるのは bash と、その共有 library だけ（どれも読み取り専用）。library は `/oracle/lib`（loader だけは元の道）、bash は `/oracle/sh` に置き、
  *   PATH の上にも `/bin` にも無い。他に走らせられる file は箱の中に無い
  * - 書き込めるのは `/tmp`（捨てる tmpfs）だけ。箱が閉じれば消える
  * - 命の字は手元の一時 dir の file から、読み取り専用で `/oracle/in/case` に置く
@@ -45,10 +45,13 @@ export interface Loosen {
 
 /** 箱の bwrap の argv。`inDir` を `/oracle/in` に読み取り専用で置き、`script` を箱の bash に読ませる。 */
 export function boxArgv(inDir: string, script: string, loosen: Loosen = {}): string[] {
+  // 箱の根の形を土地に依らず揃える（glob の値が土地で変わらぬように）: 共有 library は /oracle/lib に置いて
+  // LD_LIBRARY_PATH で引かせ、ELF に道が書き込まれておる loader（ld-linux）だけを元の道に置く
   const binds: string[] = [];
   for (const lib of libraries()) {
-    // 道が symlink なら、実の file を同じ道に置く（ld が道で探すため）
-    binds.push('--ro-bind', realpathSync(lib), lib);
+    const real = realpathSync(lib);
+    if (/\/ld-linux[^/]*$/.test(lib)) binds.push('--ro-bind', real, lib);
+    else binds.push('--ro-bind', real, `/oracle/lib/${lib.split('/').pop()}`);
   }
   return [
     'bwrap',
@@ -59,6 +62,7 @@ export function boxArgv(inDir: string, script: string, loosen: Loosen = {}): str
     '--clearenv',
     '--setenv', 'HOME', '/tmp',
     '--setenv', 'LANG', 'C.UTF-8',
+    ...(loosen.usr ? [] : ['--setenv', 'LD_LIBRARY_PATH', '/oracle/lib']),
     ...(loosen.usr ? ['--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib64', '/lib64', '--setenv', 'PATH', '/usr/bin'] : []),
     '--ro-bind', BASH, '/oracle/sh',
     ...(loosen.usr ? [] : binds),
@@ -74,8 +78,10 @@ export function boxArgv(inDir: string, script: string, loosen: Loosen = {}): str
 }
 
 export interface BoxRun {
-  /** 箱の bash が fd 9（記録）と標準出力へ出した物 */
+  /** 箱の bash が標準出力へ出した物（記録係では fd 9 の記録） */
   stdout: string;
+  /** 箱の bash が標準エラーへ出した物（記録係では fd 8 の陽性対照の痕） */
+  stderr: string;
   status: number | null;
   /** 時限で殺した */
   timedOut: boolean;
@@ -95,7 +101,7 @@ export function runInBox(files: Record<string, string>, script: string, timeoutM
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const timedOut = r.error !== undefined && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
-    return { stdout: r.stdout ?? '', status: r.status, timedOut };
+    return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status, timedOut };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

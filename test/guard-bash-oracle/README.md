@@ -17,7 +17,7 @@
   - PATH は空の dir で、名だけの命は見つからず `command_not_found_handle` が何もせずに返る
   - 道を書いた命は file が無いゆえ exec が落ちる（`execfail` で続ける）
   - `exec`・`source`・`.`・`kill`・`trap`・`enable` は `enable -n` で外す
-  - argv は xtrace（展開・引用の除去・`$IFS` の分割・brace 展開の後）で fd 9 へ出す
+  - argv は xtrace（展開・引用の除去・`$IFS` の分割・brace 展開の後）で fd 9 へ出す。陽性対照の痕は fd 8 へ分ける
 - 陽性対照（`controls.ts`）は、群れを渡す前に毎回撃つ
   - 緩めた箱で痕が残る形が、記録係の箱では痕を残さぬことを、対で見る
   - 見るのは五つ: touch が走らぬ・shell を呼び直せぬ・lo の待ち受けに届かぬ・家と repo が見えず `/tmp` の他に書けぬ・外した組み込みが効かぬ

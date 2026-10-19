@@ -6,9 +6,10 @@
 # - shell そのものを替える・外を読む・印を替える組み込み（exec・source・.・kill・trap・enable）は
 #   enable -n で外す。外した名は PATH を探しに行き、見つからずに記録だけが残る
 # xtrace は展開・引用の除去・$IFS の分割・brace 展開の後の語を出す。各件の頭に \x01、関数の名の後に \x02 を置き、
-# 改行を含む語でも件の境が割れぬようにする。命の字は /oracle/in/case から読む（攻撃の形をこの file に書かぬ）。
+# 改行を含む語でも件の境が割れぬようにする（bash の版で、改行を $'\n' で出すか生の改行で出すかが違う）。
+# fd 8 は陽性対照の痕を書く口（標準エラーへ出る）。記録の fd 9 には件の他は混ぜぬ。命の字は /oracle/in/case から読む（攻撃の形をこの file に書かぬ）。
 case_text=$(< /oracle/in/case)
-exec 9>&1 1>/dev/null 2>/dev/null </dev/null
+exec 9>&1 8>&2 1>/dev/null 2>/dev/null </dev/null
 BASH_XTRACEFD=9
 PS4=$'\x01${FUNCNAME[0]-}\x02'
 PATH=/oracle/empty

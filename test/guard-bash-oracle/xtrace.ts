@@ -5,8 +5,9 @@
  * - 字だけの語はそのまま
  * - shell の字を含む語は `'…'`（中の `'` は `'\''`）
  * - 制御の字を含む語は `$'…'`（C の escape）
- * 件の頭は \x01 の連なり（入れ子の深さの分だけ繰り返る）。件の行は最初の改行まで（改行を含む語は bash が
- * `$'…'` で出す）。記録係の command_not_found_handle の中の件は捨てる。
+ * 件の頭は \x01 の連なり（入れ子の深さの分だけ繰り返る）。件は次の \x01 まで（改行を含む語を、bash 5.3 は
+ * `$'…'` で、5.2 は引用の中の生の改行で出すゆえ、行では割らぬ）。記録の fd 9 には件の他は混ざらぬ
+ * （陽性対照の痕は fd 8）。記録係の command_not_found_handle の中の件は捨てる。
  */
 
 export interface Traced {
@@ -84,20 +85,15 @@ export function splitWords(line: string): string[] | undefined {
 const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
 
 /** 記録の全体を件に分ける。記録係の関数の中の件は捨てる。 */
-export function parseTrace(stream: string): { traced: Traced[]; unreadable: string[]; output: string } {
+export function parseTrace(stream: string): { traced: Traced[]; unreadable: string[] } {
   const traced: Traced[] = [];
   const unreadable: string[] = [];
-  // 件の行の後に続く字は、命が fd 9 へ出した生の出力（陽性対照の痕はここで見る）
-  let output = stream.split('\x01')[0] ?? '';
   for (const chunk of stream.split(/\x01+/)) {
     if (chunk === '') continue;
     const sep = chunk.indexOf('\x02');
     if (sep < 0) continue;
     const func = chunk.slice(0, sep);
-    const rest = chunk.slice(sep + 1);
-    const nl = rest.indexOf('\n');
-    const body = nl < 0 ? rest : rest.slice(0, nl);
-    if (nl >= 0) output += rest.slice(nl + 1);
+    const body = chunk.slice(sep + 1).replace(/\n$/, '');
     if (func === 'command_not_found_handle') continue;
     const words = splitWords(body);
     if (words === undefined) {
@@ -108,5 +104,5 @@ export function parseTrace(stream: string): { traced: Traced[]; unreadable: stri
     while (words.length > 0 && ASSIGN.test(words[0]!)) assigns.push(words.shift()!);
     traced.push({ func, assigns, argv: words });
   }
-  return { traced, unreadable, output };
+  return { traced, unreadable };
 }

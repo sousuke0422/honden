@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { realRunner } from '../src/parse';
 import { probe } from './guard-bash-oracle/box';
 import { runControls } from './guard-bash-oracle/controls';
-import { loadEntries, mismatch, runOracle } from './guard-bash-oracle/oracle';
+import { loadEntries, mismatch, runOracle, shape } from './guard-bash-oracle/oracle';
 import { loadCases } from './guard-corpus/harness';
 
 const ROOT = join(import.meta.dir, '..');
@@ -52,7 +52,12 @@ describe.skipIf(why !== undefined)(`箱の中の bash を物差しにする${why
     expect(controls.every((c) => c.ok)).toBe(true);
     const diffs = runOracle(loadCases(CORPUS), realRunner(ROOT));
     const m = mismatch(diffs, loadEntries(RECORD));
-    expect(m, '違いが記録と食い違う。正しい変化なら bun run test:guard-bash-oracle --update で書き換え、分けを付ける').toEqual({
+    // 落ちた時に中身が見えねば直せぬ。増えた件と替わった件の今の違いを添える
+    const now = diffs
+      .filter((d) => m.added.includes(d.cmd) || m.changed.includes(d.cmd))
+      .map((d) => JSON.stringify({ cmd: d.cmd, ...shape(d) }))
+      .join('\n');
+    expect(m, `違いが記録と食い違う。正しい変化なら bun run test:guard-bash-oracle --update で書き換え、分けを付ける\n${now}`).toEqual({
       gone: [],
       added: [],
       changed: [],
