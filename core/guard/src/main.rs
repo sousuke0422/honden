@@ -245,12 +245,6 @@ fn walk_command(c: &ast::Command, out: &mut Extract, opts: &brush_parser::Parser
         }
         // 関数の定義そのものは命を走らせぬが、中身は後で呼ばれる。畳んでおく。
         ast::Command::Function(f) => walk_compound(&f.body.0, out, opts),
-        // `[[ … ]]` は bash の条件式であり、**命は走らぬ**。
-        //
-        // ただし中の語は展開される——`[[ -n $(cmd) ]]` の `cmd` は走る。
-        // ゆえに語だけを解いて置換を拾い、命令位置には入れぬ。
-        // 畳めぬと言うて拒めば、日常の条件式が全て止まる（実測で一件出た）。
-        ast::Command::ExtendedTest(e, _) => walk_ext_test(&e.expr, out, opts),
     }
 }
 
@@ -308,6 +302,15 @@ fn walk_compound(
                 }
             }
         }
+        // `[[ … ]]` は bash の条件式であり、**命は走らぬ**。
+        //
+        // ただし中の語は展開される——`[[ -n $(cmd) ]]` の `cmd` は走る。
+        // ゆえに語だけを解いて置換を拾い、命令位置には入れぬ。
+        // 畳めぬと言うて拒めば、日常の条件式が全て止まる（実測で一件出た）。
+        //
+        // brush-parser の 0.4.0 の後（#1274）、`[[ ]]` は Command の一つから
+        // 複合命令の一つへ移った。向き替えは Command::Compound の側で拾う。
+        ast::CompoundCommand::ExtendedTest(e) => walk_ext_test(&e.expr, out, opts),
         ast::CompoundCommand::CaseClause(c) => {
             for case in &c.cases {
                 if let Some(cmd) = &case.cmd {
