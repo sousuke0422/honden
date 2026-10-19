@@ -24,6 +24,14 @@ jobs:
       - name: 道具を入れる（bats に tmux が要る）
         run: sudo apt-get update && sudo apt-get install -y tmux bats
 
+      # 箱の中の bash を物差しにする試験（test/guard-bash-oracle.test.ts）の箱。bubblewrap は利用者の
+      # 名前空間で箱を作るが、Ubuntu 24.04 の runner は AppArmor が素の利用者の名前空間を止めておる。
+      # 使い捨ての runner ゆえ止めを外す。箱が作れねば、試験は撃たずに飛ばす（落ちぬ）。
+      - name: 物差しの箱（bubblewrap）を入れる
+        run: |
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
 
