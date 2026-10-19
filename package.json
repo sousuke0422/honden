@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "test:guard-corpus": "bun scripts/guard-corpus.ts",
     "honden": "bun run src/main.ts",
     "build": "bun build --compile --outfile=bin/honden src/main.ts && bun build --compile --outfile=bin/honden-bot src/botmain.ts",
     "typecheck": "bunx tsc --noEmit",

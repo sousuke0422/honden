@@ -163,6 +163,7 @@
 !scripts/check_githooks.sh
 !scripts/setup_global_githooks.sh
 !scripts/apply_guard_patch.sh
+!scripts/guard-corpus.ts
 !scripts/agent_status.sh
 !scripts/ratelimit_check.sh
 !scripts/switch_cli.sh
@@ -286,6 +287,7 @@ tests/specs/osato_lms_*
 !/src/**/*.ts
 !/test/
 !/test/**/*.ts
+!/test/fixtures/**/*.jsonl
 !/package.json
 !/tsconfig.json
 !/bun.lock
