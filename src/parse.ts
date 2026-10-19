@@ -19,8 +19,8 @@
  * 迷う余地があれば、いつか誰かが通す。**新しい層は fail-open として生まれる**
  * ——本日そう四度書いた。型で塞ぐのが最も確かである。
  */
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 
 /** 語ひとつの素性。**引用されておるか**が最も重い。 */
 export interface Word {
@@ -47,7 +47,12 @@ export interface Word {
 export interface Cmd {
   argv: Word[];
   assigns: string[];
+  /** 標準入力の出所（解き手が返す）。無ければ端末か、何も繋がっておらぬ */
+  stdin?: Stdin;
 }
+
+/** 標準入力の出所。`< file`・`cat file |` は file、heredoc や字どおりの管は text。 */
+export type Stdin = { file: string } | { text: string } | { opaque: true };
 
 export type Parsed =
   | {
@@ -94,7 +99,7 @@ interface Raw {
   ok: boolean;
   error?: string;
   complete?: boolean;
-  commands?: { argv?: Partial<Word>[]; assigns?: string[] }[];
+  commands?: { argv?: Partial<Word>[]; assigns?: string[]; stdin?: unknown }[];
   heredocs?: string[];
   substitutions?: string[];
   unhandled?: string[];
@@ -142,11 +147,23 @@ export function interpret(ok: boolean, stdout: string): Parsed {
     commands: (raw.commands ?? []).map((c) => ({
       argv: (c.argv ?? []).map(word),
       assigns: Array.isArray(c.assigns) ? c.assigns : [],
+      stdin: stdinOf(c.stdin),
     })),
     heredocs: Array.isArray(raw.heredocs) ? raw.heredocs : [],
     substitutions: Array.isArray(raw.substitutions) ? raw.substitutions : [],
     opaque: Array.isArray(raw.opaque) ? raw.opaque : [],
   };
+}
+
+/** 返事の stdin を型へ畳む。**読めぬ形は opaque に倒す**——「無い」と読まぬため。 */
+function stdinOf(v: unknown): Stdin | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (typeof o.file === 'string') return { file: o.file };
+    if (typeof o.text === 'string') return { text: o.text };
+  }
+  return { opaque: true };
 }
 
 export function parseCommand(cmd: string, run: Runner): Parsed {
@@ -230,7 +247,11 @@ function looseExecUnits(p: Parsed, run: Runner): string[] {
  * 構文では見分けられぬ（`docs/decisions.md` 十八の「AST でも買えぬもの」）。
  * ゆえに貰い手の名で決める。名簿は短く、明示で持つ。
  */
-export const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'eval', 'source', '.']);
+export const SHELLS = new Set([
+  'bash', 'sh', 'zsh', 'dash', 'ksh', 'eval', 'source', '.',
+  // 名の表の漏れ（`fish -c '…'`・`csh -c '…'` が素通りしておった）
+  'ash', 'mksh', 'csh', 'tcsh', 'fish', 'posh', 'yash', 'rbash', 'pdksh', 'oksh',
+]);
 
 export function heredocUnits(p: Parsed, run: Runner): string[] {
   if (!p.ok || p.heredocs.length === 0) return [];
@@ -499,8 +520,307 @@ function descendEmbedded(name: string, argv: Word[], run: Runner, depth: number,
   }
 }
 
+// ── 箱の中の命（docker・podman・kubectl） ──
+
+/** 値を取る旗。命の位置を一つに定めるため（WRAP と同じ流儀）。 */
+const BOX_VALUES: Record<string, string[]> = {
+  exec: ['-e', '--env', '-u', '--user', '-w', '--workdir', '--env-file', '--detach-keys'],
+  run: [
+    '-e', '--env', '-u', '--user', '-w', '--workdir', '-v', '--volume', '-p', '--publish', '--name',
+    '--network', '--net', '--entrypoint', '--mount', '-m', '--memory', '--env-file', '-l', '--label',
+    '-h', '--hostname', '--add-host', '--cpus', '--gpus', '--platform', '--pull', '--restart', '--device',
+    '--ulimit', '--log-driver', '--tmpfs', '--cap-add', '--cap-drop', '--security-opt', '--ipc', '--pid',
+    '--shm-size', '--workdir', '--cidfile', '--dns', '--group-add', '--expose', '--link',
+  ],
+  kubectl: ['-c', '--container', '-n', '--namespace', '--context', '--kubeconfig', '-f', '--filename'],
+};
+
+/**
+ * 箱の中で走る命の argv。`docker exec c kill 1` の `kill 1`。
+ *
+ * **ssh と同じく、中の命を照らす。** 箱の中の命は手元の同じ機で走り、箱が陣の土台
+ * （共有の db など）であることも在る。coder ssh の命は字の頭を照らさぬ（遠方の kill が
+ * 絶対域で止まり、直訴もできぬゆえ）が、箱は ssh の側に揃える。手元の命の履歴で、
+ * これで新たに止まる無害な命は 0 件だった（2026-10-20 に測った）。
+ */
+function boxInner(name: string, argv: Word[]): Word[] | undefined {
+  let sub: 'exec' | 'run' | 'kubectl';
+  let i: number;
+  if ((name === 'docker' || name === 'podman') && (argv[1]?.value === 'exec' || argv[1]?.value === 'run')) {
+    sub = argv[1].value as 'exec' | 'run';
+    i = 2;
+  } else if ((name === 'docker' || name === 'podman') && argv[1]?.value === 'container' && (argv[2]?.value === 'exec' || argv[2]?.value === 'run')) {
+    sub = argv[2].value as 'exec' | 'run';
+    i = 3;
+  } else if (name === 'kubectl' && argv[1]?.value === 'exec') {
+    sub = 'kubectl';
+    i = 2;
+  } else {
+    return undefined;
+  }
+  const values = BOX_VALUES[sub]!;
+  while (i < argv.length) {
+    const v = argv[i]!.value;
+    if (v === '--') break;
+    if (v.startsWith('-') && v.length > 1) {
+      i += values.includes(v) ? 2 : 1;
+      continue;
+    }
+    break;
+  }
+  if (argv[i]?.value !== '--') i += 1; // 箱・image・pod の名
+  if (argv[i]?.value === '--') i += 1;
+  return argv.slice(i);
+}
+
+/** 展開に依る字があっても拒まず、解けた分の命だけを足す（箱の中の環境は見えぬ）。 */
+function resolveLoose(argv: Word[], run: Runner, depth: number, out: ExecScan): void {
+  if (argv.length === 0) return;
+  const sub: ExecScan = { units: [] };
+  resolveArgv(argv, run, depth, sub);
+  out.units.push(...sub.units);
+}
+
+// ── 他の言語の源の中の、shell を呼ぶ口 ──
+
+/** 源を渡す旗。`perl -le` のように束の末尾が e の物も在る。 */
+function sourceArg(name: string, argv: Word[]): string | undefined {
+  const lang = /^python[0-9.]*$/.test(name) ? 'python' : name === 'nodejs' ? 'node' : name;
+  for (let i = 1; i + 1 < argv.length; i++) {
+    const v = argv[i]!.value;
+    const hit =
+      (lang === 'python' && v === '-c') ||
+      (lang === 'node' && (v === '-e' || v === '--eval' || v === '-p' || v === '--print')) ||
+      ((lang === 'perl' || lang === 'ruby') && /^-[a-zA-Z]*[eE]$/.test(v));
+    if (hit) return argv[i + 1]!.value;
+    if (lang === 'python' && !v.startsWith('-')) return undefined; // script の file
+  }
+  return undefined;
+}
+
+/** 字の列の頭の字どおりの文字列を読む。読めねば undefined。 */
+function readString(src: string, at: number, quotes: string): { text: string; end: number } | undefined {
+  let i = at;
+  while (i < src.length && /[rRbBuU]/.test(src[i]!) && i - at < 2) i++;
+  const q = src[i];
+  if (q === undefined || !quotes.includes(q)) return undefined;
+  if (src.startsWith(q.repeat(3), i)) return undefined; // 三重の引用は読まぬ
+  let text = '';
+  for (let j = i + 1; j < src.length; j++) {
+    const ch = src[j]!;
+    if (ch === '\\') {
+      const nx = src[j + 1];
+      text += nx === 'n' ? '\n' : nx === 't' ? '\t' : (nx ?? '');
+      j++;
+      continue;
+    }
+    if (ch === q) return { text, end: j + 1 };
+    text += ch;
+  }
+  return undefined;
+}
+
+/** `'a'` か `['a', 'b']`。字どおりなら空白で繋いだ字を返す。 */
+function readArg(src: string, at: number, quotes: string): string | undefined {
+  let i = at;
+  while (/\s/.test(src[i] ?? '')) i++;
+  if (src[i] === '[') {
+    const parts: string[] = [];
+    let j = i + 1;
+    for (;;) {
+      while (/[\s,]/.test(src[j] ?? '')) j++;
+      if (src[j] === ']') return parts.join(' ');
+      const r = readString(src, j, quotes);
+      if (!r) return undefined;
+      parts.push(r.text);
+      j = r.end;
+    }
+  }
+  const first = readString(src, i, quotes);
+  if (!first) return undefined;
+  // `system("kill", "1")`・`spawn('kill', ['1'])` の残りの字どおりの引数も繋ぐ
+  const parts = [first.text];
+  let j = first.end;
+  for (;;) {
+    while (/\s/.test(src[j] ?? '')) j++;
+    if (src[j] !== ',') break;
+    j++;
+    while (/\s/.test(src[j] ?? '')) j++;
+    const more = src[j] === '[' ? readArg(src, j, quotes) : readString(src, j, quotes)?.text;
+    if (more === undefined) break;
+    parts.push(more);
+    j = src[j] === '[' ? src.indexOf(']', j) + 1 : (readString(src, j, quotes)?.end ?? j + 1);
+  }
+  // 字の後ろに足し算や書式が続けば、渡る字は組み立てられる（`'rm' + ' -rf /'`・
+  // `'%s' % x`・`'{}'.format(x)`）。頭の字だけを命と読むと取りこぼすゆえ、字どおりでないとする
+  while (/\s/.test(src[j] ?? '')) j++;
+  if (/[+%.*\[]/.test(src[j] ?? '')) return undefined;
+  return parts.join(' ');
+}
+
+/**
+ * 他の言語の源の中で、shell を呼ぶ口に渡る命の字を取り出す。
+ *
+ * **源を完全には解かぬ。** 口の名の後ろに、字どおりの文字列（か、字どおりの文字列の列）が
+ * 来る時だけ、その字を命として返す。字どおりでない（変数・式・字の中の展開）時は opaque。
+ * 取りこぼす形: 口を別の名で呼ぶ（`from os import system as s`）、源を file や heredoc から
+ * 読む、字を組み立てる（`'ki' + 'll'`）、eval や exec で源を作る。
+ */
+function shellCallsIn(lang: string, src: string): { cmds: string[]; opaque: number } {
+  const cmds: string[] = [];
+  let opaque = 0;
+  const take = (re: RegExp, quotes: string) => {
+    for (const m of src.matchAll(re)) {
+      const at = (m.index ?? 0) + m[0].length;
+      const a = readArg(src, at, quotes);
+      if (a === undefined) opaque++;
+      else if (/\$\{|#\{|\{[a-zA-Z_]/.test(a) || (lang === 'perl' && /[$@][a-zA-Z_{]/.test(a))) opaque++;
+      else cmds.push(a);
+    }
+  };
+  const ticks = (re: RegExp) => {
+    for (const m of src.matchAll(re)) {
+      const t = m[1] ?? '';
+      if (/\$\{|#\{|[$@][a-zA-Z_{]/.test(t)) opaque++;
+      else cmds.push(t);
+    }
+  };
+  if (lang === 'python') {
+    take(/\b(?:os\.(?:system|popen|exec[lv]p?e?)|subprocess\.(?:run|call|check_call|check_output|Popen|getoutput|getstatusoutput))\s*\(/g, '\'"');
+  } else if (lang === 'node') {
+    if (/child_process/.test(src)) take(/\b(?:execSync|execFileSync|spawnSync|execFile|spawn|exec)\s*\(/g, '\'"`');
+  } else if (lang === 'perl') {
+    take(/\b(?:system|exec)\b\s*\(?/g, '\'"');
+    ticks(/`([^`]*)`/g);
+    ticks(/\bqx\s*[({\[/|]([^)}\]/|]*)[)}\]/|]/g);
+  } else if (lang === 'ruby') {
+    take(/\b(?:system|exec|spawn|IO\.popen|Open3\.(?:capture2e?|capture3|popen3))\b\s*\(?/g, '\'"');
+    ticks(/`([^`]*)`/g);
+    ticks(/%x\s*[({\[|]([^)}\]|]*)[)}\]|]/g);
+  }
+  return { cmds, opaque };
+}
+
+// ── patch を当てる命（git apply・git am・patch） ──
+
+/** 門が読む patch の大きさの上限。超えれば読まずに「解けぬ」へ倒す。 */
+const MAX_PATCH_BYTES = 1 << 20;
+
+/** patch が書き換える file の道。`--- a/x`・`+++ b/x`・`diff --git a/x b/y`・rename・copy。 */
+export function patchTargets(text: string): string[] {
+  const out = new Set<string>();
+  for (const line of text.split('\n')) {
+    let m = /^(?:---|\+\+\+)\s+(\S+)/.exec(line);
+    if (m && m[1] !== '/dev/null') out.add(m[1]!);
+    m = /^diff --git (\S+) (\S+)/.exec(line);
+    if (m) {
+      out.add(m[1]!);
+      out.add(m[2]!);
+    }
+    m = /^(?:rename|copy) (?:from|to) (.+)$/.exec(line);
+    if (m) out.add(m[1]!.trim());
+  }
+  return [...out];
+}
+
+/**
+ * patch の file を読む。**辿らず、待たず、溢れさせぬ。**
+ *
+ * - 在らぬ: missing（当てる命も落ちるゆえ、通す）
+ * - symlink・並の file でない（FIFO や dev）・上限を超える・読めぬ: unreadable（拒む）。
+ *   lstat で見るゆえ symlink を辿らず、FIFO を開かぬ（開けば門が待ちに落ちる）
+ */
+function readPatch(path: string, base: string): { text: string } | { missing: true } | { unreadable: string } {
+  const full = isAbsolute(path) ? path : join(base, path);
+  let st;
+  try {
+    st = lstatSync(full);
+  } catch {
+    return { missing: true };
+  }
+  if (st.isSymbolicLink()) return { unreadable: `${path} は symlink` };
+  if (!st.isFile()) return { unreadable: `${path} は並の file でない` };
+  if (st.size > MAX_PATCH_BYTES) return { unreadable: `${path} が大きすぎる（${st.size} byte）` };
+  try {
+    return { text: readFileSync(full, 'utf8') };
+  } catch {
+    return { unreadable: `${path} を読めぬ` };
+  }
+}
+
+/**
+ * patch を当てる命なら、patch が書き換える file の道を返す（門の D012 が当たるよう、
+ * emit の字に足す）。patch の出所は引数の file か、標準入力。
+ */
+function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { targets: string[] } | { unreadable: string } | undefined {
+  let base = process.cwd();
+  const files: string[] = [];
+  let fromStdin = false;
+  if (name === 'git') {
+    let i = 1;
+    while (i < argv.length && argv[i]!.value.startsWith('-')) {
+      const v = argv[i]!.value;
+      if (v === '-C' && argv[i + 1]) {
+        base = join(base, argv[i + 1]!.value);
+        i += 2;
+      } else if (v === '-c' || v === '--git-dir' || v === '--work-tree') i += 2;
+      else i += 1;
+    }
+    const subc = argv[i]?.value;
+    if (subc !== 'apply' && subc !== 'am') return undefined;
+    // `--check`・`--stat`・`--numstat`・`--summary` は当てずに見るだけ（`--apply` が付けば当てる）。
+    // 門の本体への直しの手順は、patch の道で `git apply --check` を打つ。これを止めぬ
+    const opts = argv.slice(i + 1).map((w) => w.value);
+    if (subc === 'apply' && opts.some((v) => ['--check', '--stat', '--numstat', '--summary'].includes(v)) && !opts.includes('--apply')) {
+      return { targets: [] };
+    }
+    for (const w of argv.slice(i + 1)) if (!w.value.startsWith('-')) files.push(w.value);
+    fromStdin = files.length === 0;
+  } else if (name === 'patch') {
+    const pos: string[] = [];
+    const VALUES = ['-p', '-d', '-o', '-r', '-B', '-V', '-z', '-D', '-F', '-g', '-Y', '--directory', '--output', '--reject-file'];
+    // `--dry-run` は当てずに見るだけ
+    if (argv.some((w) => w.value === '--dry-run')) return { targets: [] };
+    for (let i = 1; i < argv.length; i++) {
+      const v = argv[i]!.value;
+      if (v === '-i' || v === '--input') {
+        if (argv[i + 1]) files.push(argv[i + 1]!.value);
+        i++;
+      } else if (v.startsWith('--input=')) files.push(v.slice('--input='.length));
+      else if (v === '-d' || v === '--directory') {
+        if (argv[i + 1]) base = join(base, argv[i + 1]!.value);
+        i++;
+      } else if (VALUES.includes(v)) i++;
+      else if (!v.startsWith('-')) pos.push(v);
+    }
+    if (files.length === 0 && pos.length >= 2) files.push(pos[1]!);
+    fromStdin = files.length === 0;
+  } else {
+    return undefined;
+  }
+  const targets: string[] = [];
+  const add = (r: ReturnType<typeof readPatch>) => {
+    if ('unreadable' in r) return r.unreadable;
+    if ('text' in r) targets.push(...patchTargets(r.text));
+    return undefined;
+  };
+  for (const f of files) {
+    const bad = add(readPatch(f, base));
+    if (bad) return { unreadable: bad };
+  }
+  if (fromStdin && stdin) {
+    if ('opaque' in stdin) return { unreadable: '標準入力から読む patch の中身が見えぬ' };
+    if ('text' in stdin) targets.push(...patchTargets(stdin.text));
+    if ('file' in stdin) {
+      const bad = add(readPatch(stdin.file, base));
+      if (bad) return { unreadable: bad };
+    }
+  }
+  return { targets };
+}
+
 /** 一つの argv を辿り、実際に走る命へ降りる。 */
-function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): void {
+function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, stdin?: Stdin): void {
   if (depth <= 0 || out.units.length >= MAX_UNITS) {
     out.unresolved = out.unresolved ?? '入れ子が深すぎる、または命が多すぎる';
     return;
@@ -572,6 +892,55 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
     return;
   }
 
+  // ── trap の命の字は、後で走る命である ──
+  // `trap 'cmd' EXIT`・`trap -- 'cmd' INT`。`trap - EXIT`（戻す）・`trap -p`・`trap -l` は走らせぬ
+  if (name === 'trap') {
+    let i = 1;
+    if (argv[i]?.value === '--') i++;
+    const arg = argv[i];
+    if (arg && i + 1 < argv.length && arg.value !== '-' && !/^-[lp]$/.test(arg.value) && literal([arg])) {
+      descendLoose(arg.value, run, depth, out);
+    }
+    emit();
+    return;
+  }
+
+  // ── 箱の中の命。ssh と同じく照らす ──
+  const box = boxInner(name, argv);
+  if (box !== undefined) {
+    resolveLoose(box, run, depth - 1, out);
+    emit();
+    return;
+  }
+
+  // ── 他の言語の源の中の、shell を呼ぶ口 ──
+  if (/^(?:python[0-9.]*|node|nodejs|perl|ruby)$/.test(name)) {
+    const src = sourceArg(name, argv);
+    if (src !== undefined) {
+      const lang = /^python/.test(name) ? 'python' : name === 'nodejs' ? 'node' : name;
+      const calls = shellCallsIn(lang, src);
+      for (const c of calls.cmds) descendLoose(c, run, depth, out);
+      if (calls.opaque > 0) {
+        out.unresolved = out.unresolved ?? `${name} の源の中で shell を呼ぶ口に渡る字が見えぬ`;
+      }
+    }
+    emit();
+    return;
+  }
+
+  // ── patch を当てる命。patch が書き換える file の道を字に足す（門の D012 が当たる） ──
+  if (name === 'git' || name === 'patch') {
+    const pc = patchCommand(name, argv, stdin);
+    if (pc && 'unreadable' in pc) {
+      out.unresolved = out.unresolved ?? `当てる patch を読めぬ（${pc.unreadable}）`;
+      return;
+    }
+    if (pc && pc.targets.length > 0) {
+      out.units.push([name, ...argv.slice(1).map((w) => w.value), ...pc.targets].join(' '));
+      return;
+    }
+  }
+
   // ── 包み。旗を読んで、命の位置まで進む ──
   const spec = WRAP[name];
   if (!spec) {
@@ -630,6 +999,6 @@ export function execUnits(p: Parsed, run: Runner, depth = 4): ExecScan {
   if (p.opaque.length > 0) {
     out.unresolved = `shell へ流す字が見えぬ（${p.opaque.join(' / ')}）`;
   }
-  for (const c of p.commands) resolveArgv(c.argv, run, depth, out);
+  for (const c of p.commands) resolveArgv(c.argv, run, depth, out, c.stdin);
   return out;
 }
