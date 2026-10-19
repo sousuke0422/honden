@@ -146,8 +146,22 @@ export function sha256(s: string): string {
 
 interface Rule {
   id: string;
-  /** 正規化済みコマンドに対する紋様。 */
+  /**
+   * 正規化済みコマンドに対する紋様。生の字の全体に当てる（judge 単体）。
+   * 命の頭の錨は `(?:^|[;&|]\s*)` で近似しておる。
+   */
   pattern: RegExp;
+  /**
+   * 命の頭に錨を置く部分。**単純命令の argv の頭から当てる**（`^` で始まる）。
+   * 構造の層（judgeStructured）は、錨の近似を持つ `pattern` の代わりにこれと
+   * `loose` を使う。在る規則は、錨の近似を `pattern` に持つ規則である。
+   */
+  head?: RegExp;
+  /**
+   * 位置に依らず字面で当てる部分。`head` の無い規則では `pattern` そのもの。
+   * `head` の在る規則では、`pattern` から錨の付いた部分を除いた残り（無ければ無し）。
+   */
+  loose?: RegExp;
   reason: string;
   /** true なら OTP でも通さない。 */
   absolute?: boolean;
@@ -168,12 +182,14 @@ const RULES: Rule[] = [
       // かつては素通しで、settings.json の接頭当てだけが（誤検知混じりに）
       // 拾っておった（実測 2026-08-29）。
       /(?:^|[;&|]\s*)rm\s+(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*|-[rR]\s+-[fF]|-[fF]\s+-[rR])\s+(?:\/|\/mnt(?:\/\w+)?|\/home(?:\/\w+)?|~)(?:\/?\*+)?\s*(?:$|[;&|])/,
+    head: /^rm\s+(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*|-[rR]\s+-[fF]|-[fF]\s+-[rR])\s+(?:\/|\/mnt(?:\/\w+)?|\/home(?:\/\w+)?|~)(?:\/?\*+)?\s*(?:$|[;&|])/,
     reason: 'OS・ドライブ・ホームを消す形である',
     absolute: true,
   },
   {
     id: 'D001',
     pattern: /(?:^|[;&|]\s*)rm\s+(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*)\s+(?:\/mnt\/[cd]\/(?:Windows|Users|Program)\b|\/etc\b|\/usr\b|\/var\b)/i,
+    head: /^rm\s+(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*)\s+(?:\/mnt\/[cd]\/(?:Windows|Users|Program)\b|\/etc\b|\/usr\b|\/var\b)/i,
     reason: 'システム経路を消す形である',
     absolute: true,
   },
@@ -190,6 +206,8 @@ const RULES: Rule[] = [
   {
     id: 'D005',
     pattern: /(?:^|[;&|]\s*)(?:sudo|su)(?![\w.-])|(?:chmod|chown)\s+-R\s+\S*\s*(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd])/,
+    head: /^(?:sudo|su)(?![\w.-])/,
+    loose: /(?:chmod|chown)\s+-R\s+\S*\s*(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd])/,
     reason: '権限昇格・システム経路の一括変更である',
   },
   {
@@ -200,6 +218,8 @@ const RULES: Rule[] = [
     // 置きたい。門に動を持たせれば、門の側に検めと実行の隙が生まれる。
     id: 'D006',
     pattern: /(?:^|[;&|]\s*)(?:killall|pkill|kill)(?![\w.-])|tmux\s+kill-(?:server|session)\b/,
+    head: /^(?:killall|pkill|kill)(?![\w.-])/,
+    loose: /tmux\s+kill-(?:server|session)\b/,
     reason: '他エージェントや土台を殺す形である。己の下を始末するなら honden-kill <pid> を使え',
     // **絶対域とする**（殿の裁可 2026-09-01）。
     //
@@ -215,6 +235,8 @@ const RULES: Rule[] = [
   {
     id: 'D007',
     pattern: /(?:^|[;&|]\s*)(?:mkfs(?:\.[\w-]+)?|fdisk)(?![\w-])|dd\s+if=|(?:^|[;&|]\s*)(?:umount|mount)(?![\w.-])/,
+    head: /^(?:mkfs(?:\.[\w-]+)?|fdisk)(?![\w-])|^(?:umount|mount)(?![\w.-])/,
+    loose: /dd\s+if=/,
     reason: 'ディスク・区画を壊す形である',
     absolute: true,
   },
@@ -261,6 +283,7 @@ const RULES: Rule[] = [
     // あり、見分けの費えに合わぬ）。root への glob は D001 が先に絶対域で拾う。
     id: 'D016',
     pattern: /(?:^|[;&|]\s*)rm\s+[^;&|]*\*/,
+    head: /^rm\s+[^;&|]*\*/,
     reason:
       'rm に glob（*）を混ぜる形である。展開の結果は打った本人にも見えぬ——' +
       '消す物は明示の道で列挙せよ。glob でしか書けぬ正当な用なら直訴せよ',
@@ -334,6 +357,9 @@ const RULES: Rule[] = [
     id: 'D012',
     pattern:
       /(?:>|>>|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\bchmod\b|\brm\b|\btruncate\b|\bgit\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:apply|am|checkout|restore)\b|(?:^|[;&|(]\s*)(?:patch|install|ln|rsync)\b)[^;&|]*(?:\.cursor\/hooks|\.codex\/hooks|\.claude\/hooks|\.claude\/settings\.json|bin\/honden|\bguard\.ts(?![\w.]))/,
+    head: /^(?:patch|install|ln|rsync)\b[^;&|]*(?:\.cursor\/hooks|\.codex\/hooks|\.claude\/hooks|\.claude\/settings\.json|bin\/honden|\bguard\.ts(?![\w.]))/,
+    loose:
+      /(?:>|>>|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\bchmod\b|\brm\b|\btruncate\b|\bgit\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*(?:apply|am|checkout|restore)\b)[^;&|]*(?:\.cursor\/hooks|\.codex\/hooks|\.claude\/hooks|\.claude\/settings\.json|bin\/honden|\bguard\.ts(?![\w.]))/,
     reason: '門そのものを書き換える形である。門は門で守れぬゆえ、ここで止める',
   },
   {
@@ -369,6 +395,25 @@ const RULES: Rule[] = [
  * 構造だけに移せば、構造が取りこぼす形で門が緩む恐れがある——
  * 移行の間は重ねる。紋様を降ろすのは、構造が本番で通ってからでよい。
  *
+ * # 錨の付く紋様は、構造の層にだけ当てる（2026-10-19）
+ *
+ * 錨の近似 `(?:^|[;&|]\s*)` を生の字に当てると、引用の中の `|` `;` `&` を
+ * 命の切れ目と読む。`grep -nE 'foo|mount(x' a.ts` が絶対域の D007 に落ち、
+ * 直訴もできなんだ。argv を繋いだ unit の字にも、引用を外した後の `|` が残り、
+ * 同じく当たっておった。
+ *
+ * ゆえに掟を二つに分けて当てる:
+ *
+ * - `head`（命の頭に錨を置く部分）は、構造の層で単純命令ごとの argv の頭にだけ当てる
+ * - `loose`（位置に依らぬ部分）は、今どおり生の字にも unit にも当てる
+ *
+ * 紋様の層は丸ごとは外さぬ。向き替えの先（`> bin/honden`）や管の継ぎ
+ * （`curl … | sh`）は argv に載らず、生の字にしか無いためである。
+ *
+ * 頭だけに当てると、中身を shell が読む語（`eval '…'`・`ssh h '…' '…'`・
+ * `docker exec c sh -c '…'` の類）の中の命が抜ける。これらは構造の層
+ * （`parse.ts` の descendLoose）が解き直して降りる。
+ *
  * # 解けぬ命は拒む
  *
  * ここが紋様との最大の別である。紋様は**知らぬ形を通す**（fail-open）。
@@ -391,7 +436,12 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
 
   // 一、紋様の層。取りこぼしはあれど、取り過ぎはせぬ。
   // 免除した問いの語だけを伏せた姿を照らす。他の命と向き替えは伏せぬ。
-  const flat = judge(exempt ? exempt.masked : cmd);
+  //
+  // **ここで当てるのは位置に依らぬ紋様（loose）だけである。** 命の頭に錨を置く
+  // 紋様（head）を生の字に当てると、錨の近似 `(?:^|[;&|]\s*)` が引用の中の
+  // `|` `;` `&` を命の切れ目と読む（`grep -nE 'foo|mount(x'` が D007 に当たった）。
+  // 錨の付く紋様は、二の構造の層で単純命令ごとの argv の頭に当てる。
+  const flat = judgeLoose(exempt ? exempt.masked : cmd);
   if (flat.permission === 'deny') return flat;
 
   // 二、構造の層。**生の姿を解かせる。**
@@ -414,7 +464,7 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
     if (parsed.commands.length - kept.length === exempt.count) {
       target = { ...parsed, commands: kept };
     } else {
-      const whole = judge(cmd);
+      const whole = judgeLoose(cmd);
       if (whole.permission === 'deny') return whole;
     }
   }
@@ -440,7 +490,7 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
     ...heredocUnits(parsed, run),
   ];
   for (const unit of all) {
-    const v = judge(unit);
+    const v = judgeUnit(unit);
     if (v.permission === 'deny') return v;
   }
   return { permission: 'allow' };
@@ -857,6 +907,34 @@ function isStandaloneGuardInvocation(raw: string): boolean {
   if (words.length < 3) return false;
   const executable = words[0]!;
   return /(?:^|\/)honden$/.test(executable) && words[1] === 'guard' && GUARD_EXEMPT_SUBCOMMANDS.has(words[2]!);
+}
+
+function deny(r: Rule): Verdict {
+  return { permission: 'deny', rule: r.id, reason: r.reason, appealable: !r.absolute };
+}
+
+/** 位置に依らぬ紋様だけを当てる。judgeStructured の一、紋様の層（生の字）で使う。 */
+function judgeLoose(cmd: string): Verdict {
+  const n = stripEnvPrefix(normalize(cmd));
+  for (const r of RULES) {
+    const loose = r.head ? r.loose : r.pattern;
+    if (loose?.test(n)) return deny(r);
+  }
+  return { permission: 'allow' };
+}
+
+/**
+ * 単純命令ひとつ（argv を空白で繋いだ字）に当てる。錨の付いた部分は argv の頭から
+ * だけ当てる。引用を外した argv の値には、引用の中に在った `;` `|` `&` が残るが、
+ * それは命の切れ目ではない。
+ */
+function judgeUnit(unit: string): Verdict {
+  const n = stripEnvPrefix(normalize(unit));
+  for (const r of RULES) {
+    const loose = r.head ? r.loose : r.pattern;
+    if (r.head?.test(n) || loose?.test(n)) return deny(r);
+  }
+  return { permission: 'allow' };
 }
 
 export function judge(cmd: string): Verdict {
