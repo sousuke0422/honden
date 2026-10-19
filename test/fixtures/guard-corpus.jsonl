@@ -72,7 +72,7 @@
 {"kind":"attack","expect":"deny:D006","cmd":"eval kill 1"}
 {"kind":"attack","expect":"deny:D001","cmd":"eval rm -rf /"}
 {"kind":"attack","expect":"deny:D001","cmd":"exec rm -rf /"}
-{"kind":"attack","expect":"deny:D000","cmd":"f() [[ -n $(kill 1) ]]"}
+{"kind":"attack","expect":"deny:D006","cmd":"f() [[ -n $(kill 1) ]]"}
 {"kind":"attack","expect":"deny:D001","cmd":"f() { rm -rf /; }; f"}
 {"kind":"attack","expect":"deny:D006","cmd":"find . -exec kill {} \\;"}
 {"kind":"attack","expect":"deny:D001","cmd":"find . -exec sh -c 'rm -rf /' \\;"}
