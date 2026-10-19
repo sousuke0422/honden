@@ -54,6 +54,22 @@ struct WordFacts {
 struct SimpleCmd {
     argv: Vec<WordFacts>,
     assigns: Vec<String>,
+    /// 標準入力の出所。門が git apply・patch の patch を読むのに使う
+    stdin: Stdin,
+}
+
+/// 単純命令の標準入力の出所。
+#[derive(Clone, Default)]
+enum Stdin {
+    /// 端末か、何も繋がっておらぬ
+    #[default]
+    None,
+    /// `< file`・`cat file |`。file の道
+    File(String),
+    /// heredoc・here-string・字どおり読める echo や printf の管
+    Text(String),
+    /// 中身が見えぬ（展開に依る、読めぬ命の管）
+    Opaque,
 }
 
 #[derive(Default)]
@@ -187,8 +203,16 @@ fn walk_list(list: &ast::CompoundList, out: &mut Extract, opts: &brush_parser::P
 }
 
 fn walk_pipeline(p: &ast::Pipeline, out: &mut Extract, opts: &brush_parser::ParserOptions) {
-    for cmd in &p.seq {
+    for (i, cmd) in p.seq.iter().enumerate() {
+        let before = out.cmds.len();
         walk_command(cmd, out, opts);
+        // 単純命令は、中の置換の命より後に積まれる。管の段の命は最後の一つである
+        if i > 0 && matches!(cmd, ast::Command::Simple(_)) && out.cmds.len() > before {
+            let last = out.cmds.len() - 1;
+            if matches!(out.cmds[last].stdin, Stdin::None) {
+                out.cmds[last].stdin = pipe_source(&p.seq[i - 1], opts);
+            }
+        }
     }
     shell_stdin(p, out, opts);
 }
@@ -222,7 +246,11 @@ fn handle_redirect(r: &ast::IoRedirect, out: &mut Extract, opts: &brush_parser::
 /// shell の名か（`/bin/bash` のように道が付いてもよい）。
 fn is_shell(name: &str) -> bool {
     let base = name.rsplit('/').next().unwrap_or(name);
-    matches!(base, "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash" | "mksh" | "busybox")
+    matches!(
+        base,
+        "sh" | "bash" | "zsh" | "dash" | "ksh" | "ash" | "mksh" | "busybox" | "csh" | "tcsh" | "fish"
+            | "posh" | "yash" | "rbash" | "pdksh" | "oksh"
+    )
 }
 
 /// 単純命令が「標準入力から命を読む shell」か。
@@ -255,7 +283,11 @@ fn reads_stdin_script(argv: &[WordFacts]) -> bool {
         if v.len() <= 5 && v.starts_with('-') && !v.starts_with("--") && (v[1..].contains('c') || v[1..].contains('n')) {
             return false;
         }
-        if v == "-o" || v == "+o" || v == "-O" || v == "+O" || v == "--rcfile" || v == "--init-file" {
+        // 値を取る旗。`-euo pipefail` のように束の中に `o` が在れば、次の語は値である
+        // （script の file ではない）。束の後ろの名を file と読むと、標準入力へ流す形を
+        // 通してしまう
+        let short = (v.starts_with('-') || v.starts_with('+')) && !v.starts_with("--") && v.len() > 1;
+        if (short && (v[1..].contains('o') || v[1..].contains('O'))) || v == "--rcfile" || v == "--init-file" {
             i += 2;
             continue;
         }
@@ -314,7 +346,9 @@ fn literal_output(argv: &[WordFacts]) -> Option<String> {
                 .map(|w| w.value.as_str())
                 .skip_while(|v| matches!(*v, "-n" | "-e" | "-E" | "-ne" | "-en"))
                 .collect();
-            Some(args.join(" "))
+            // `echo -e` は `\n` を改行に直す。dash の echo は旗が無くても直す。直さずに
+            // 一行と読むと、改行の後ろの命が通る。直す側へ倒す
+            Some(args.join(" ").replace("\\n", "\n"))
         }
         "printf" => {
             let fmt = argv.get(1)?;
@@ -354,23 +388,231 @@ fn simple_argv(c: &ast::Command, opts: &brush_parser::ParserOptions) -> Option<V
     Some(argv)
 }
 
-/// 単純命令の向き替えのうち、標準入力へ字を入れる物（here-string・`<` の file）。
-fn stdin_redirects(c: &ast::Command) -> Vec<&ast::IoRedirect> {
-    let ast::Command::Simple(sc) = c else { return Vec::new() };
-    let items = sc.prefix.iter().flat_map(|p| p.0.iter()).chain(sc.suffix.iter().flat_map(|s| s.0.iter()));
-    items
-        .filter_map(|item| match item {
-            ast::CommandPrefixOrSuffixItem::IoRedirect(r) => match r {
-                ast::IoRedirect::HereString(fd, _) | ast::IoRedirect::File(fd, ast::IoFileRedirectKind::Read, _)
-                    if fd.map_or(true, |f| f == 0) =>
-                {
-                    Some(r)
-                }
-                _ => None,
-            },
-            _ => None,
-        })
+fn base(v: &str) -> &str {
+    v.rsplit('/').next().unwrap_or(v)
+}
+
+/// 命を包む命を剥がし、中の命の argv を返す（`timeout 5 sh` の `sh`）。
+///
+/// 包みごとに値を取る旗と、命の前の位置引数の数を書く（src/parse.ts の WRAP と同じ流儀）。
+/// 包みの後に命が無ければ空を返す。`command -v` のように命を走らせぬ形も空を返す。
+fn peel(mut argv: &[WordFacts]) -> &[WordFacts] {
+    loop {
+        let Some(h) = argv.first() else { return argv };
+        let name = base(&h.value);
+        let (vals, pos): (&[&str], usize) = match name {
+            "env" => (&["-u", "--unset", "-C", "--chdir", "-S", "--split-string"], 0),
+            "exec" => (&["-a"], 0),
+            "nice" => (&["-n", "--adjustment"], 0),
+            "ionice" => (&["-c", "-n", "-p", "-P", "-u"], 0),
+            "timeout" => (&["-s", "--signal", "-k", "--kill-after"], 1),
+            "command" | "nohup" | "setsid" | "unbuffer" | "builtin" => (&[], 0),
+            "stdbuf" => (&["-i", "-o", "-e"], 0),
+            "time" => (&["-f", "--format", "-o", "--output"], 0),
+            "chrt" | "taskset" => (&[], 1),
+            "flock" => (&["-w", "--timeout", "-E", "--conflict-exit-code"], 1),
+            "doas" => (&["-u"], 0),
+            _ => return argv,
+        };
+        if name == "command" && argv[1..].iter().any(|w| w.value == "-v" || w.value == "-V") {
+            return &[];
+        }
+        let mut i = 1;
+        let mut pos = pos;
+        while i < argv.len() {
+            let v = argv[i].value.as_str();
+            if v == "--" {
+                i += 1;
+                break;
+            }
+            if name == "env" && !v.starts_with('-') && v.contains('=') {
+                i += 1;
+                continue;
+            }
+            if v.starts_with('-') && v.len() > 1 {
+                i += if vals.contains(&v) { 2 } else { 1 };
+                continue;
+            }
+            if pos > 0 {
+                pos -= 1;
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if i >= argv.len() {
+            return &[];
+        }
+        argv = &argv[i..];
+    }
+}
+
+/// 一つの語に空白で繋がれた命（`ssh h 'bash -s'`）を、語の列に開く。
+fn split_words(w: &WordFacts) -> Vec<WordFacts> {
+    w.value
+        .split_whitespace()
+        .map(|t| WordFacts { text: t.to_string(), value: t.to_string(), ..Default::default() })
         .collect()
+}
+
+/// 遠方・箱の中で走る命の argv（ssh・docker/podman exec・kubectl exec）。標準入力を中へ
+/// 渡す形の時だけ返す（docker と podman は `-i`、kubectl は `-i` か `--stdin`）。
+fn remote_inner(argv: &[WordFacts]) -> Option<Vec<WordFacts>> {
+    let name = base(&argv.first()?.value);
+    let vals_ssh = ["-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w"];
+    let vals_docker = ["-e", "--env", "-u", "--user", "-w", "--workdir", "--env-file", "--detach-keys"];
+    let vals_kube = ["-c", "--container", "-n", "--namespace", "--context", "--kubeconfig", "-f", "--filename"];
+    let (start, vals, interactive_needed): (usize, &[&str], bool) = match name {
+        "ssh" => (1, &vals_ssh, false),
+        "docker" | "podman" if argv.get(1).map(|w| w.value.as_str()) == Some("exec") => (2, &vals_docker, true),
+        "kubectl" if argv.get(1).map(|w| w.value.as_str()) == Some("exec") => (2, &vals_kube, true),
+        _ => return None,
+    };
+    let mut interactive = false;
+    let mut i = start;
+    while i < argv.len() {
+        let v = argv[i].value.as_str();
+        if v == "--" {
+            break;
+        }
+        if v.starts_with('-') && v.len() > 1 {
+            if v == "--interactive" || v == "--stdin" || (!v.starts_with("--") && v[1..].contains('i') && name != "ssh") {
+                interactive = true;
+            }
+            i += if vals.contains(&v) { 2 } else { 1 };
+            continue;
+        }
+        break;
+    }
+    // ここに箱・pod・host の名が在る
+    i += 1;
+    if argv.get(i).map(|w| w.value.as_str()) == Some("--") {
+        i += 1;
+    }
+    if interactive_needed && !interactive {
+        return None;
+    }
+    let rest = argv.get(i..)?;
+    if rest.len() == 1 {
+        return Some(split_words(&rest[0]));
+    }
+    Some(rest.iter().map(|w| WordFacts { text: w.text.clone(), value: w.value.clone(), ..Default::default() }).collect())
+}
+
+/// 標準入力から命を読む shell が、この argv の中で走るか。走るなら shell の名を返す。
+/// `xargs sh` は流した字が shell の引数になり、何が走るか字では見えぬ。`Err` で返す。
+fn stdin_shell(argv: &[WordFacts]) -> Option<Result<String, String>> {
+    let head = base(&argv.first()?.value);
+    if head == "xargs" {
+        let found = argv[1..].iter().any(|w| is_shell(&w.value));
+        return if found { Some(Err("xargs で shell へ流す字が見えぬ".to_string())) } else { None };
+    }
+    let inner = peel(argv);
+    if let Some(remote) = remote_inner(inner) {
+        let r = peel(&remote);
+        return if reads_stdin_script(r) { Some(Ok(format!("{} の中の {}", base(&inner[0].value), r[0].value))) } else { None };
+    }
+    if reads_stdin_script(inner) {
+        return Some(Ok(inner[0].value.clone()));
+    }
+    None
+}
+
+/// 管の一段の中で、管から標準入力を受けうる単純命令を集める。
+/// 単純命令ならそれ自身。`{ …; }`・`( … )`・if・while・for の中なら、各々の連なりの
+/// 頭の段（管の頭）を集める。中で自ら向き替えを持つ物は、管の字を受けぬ。
+fn stdin_receivers<'a>(c: &'a ast::Command, out: &mut Vec<&'a ast::Command>) {
+    match c {
+        ast::Command::Simple(_) => out.push(c),
+        ast::Command::Compound(cc, redirs) => {
+            if redirs.as_ref().is_some_and(|r| !r.0.is_empty()) {
+                return;
+            }
+            let mut lists: Vec<&ast::CompoundList> = Vec::new();
+            match cc {
+                ast::CompoundCommand::BraceGroup(bg) => lists.push(&bg.list),
+                ast::CompoundCommand::Subshell(ss) => lists.push(&ss.list),
+                ast::CompoundCommand::ForClause(f) => lists.push(&f.body.list),
+                ast::CompoundCommand::WhileClause(w) | ast::CompoundCommand::UntilClause(w) => {
+                    lists.push(&w.0);
+                    lists.push(&w.1.list);
+                }
+                ast::CompoundCommand::IfClause(i) => {
+                    lists.push(&i.condition);
+                    lists.push(&i.then);
+                    if let Some(elses) = &i.elses {
+                        for e in elses {
+                            if let Some(cond) = &e.condition {
+                                lists.push(cond);
+                            }
+                            lists.push(&e.body);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            for l in lists {
+                for item in &l.0 {
+                    let mut pipes = vec![&item.0.first];
+                    for a in &item.0.additional {
+                        match a {
+                            ast::AndOr::And(p) | ast::AndOr::Or(p) => pipes.push(p),
+                        }
+                    }
+                    for p in pipes {
+                        if let Some(first) = p.seq.first() {
+                            stdin_receivers(first, out);
+                        }
+                    }
+                }
+            }
+        }
+        ast::Command::Function(_) => {}
+    }
+}
+
+/// 管の前の段が書き出す字の出所。
+fn pipe_source(prev: &ast::Command, opts: &brush_parser::ParserOptions) -> Stdin {
+    if let Some(argv) = simple_argv(prev, opts) {
+        if let Some(t) = literal_output(&argv) {
+            return Stdin::Text(t);
+        }
+        // `cat file |`。file の道を渡す（門が patch を読むため）
+        if argv.len() == 2 && base(&argv[0].value) == "cat" && !argv[1].var && !argv[1].cmdsubst && !argv[1].value.starts_with('-') {
+            return Stdin::File(argv[1].value.clone());
+        }
+    }
+    match cat_input(prev, opts) {
+        Some(t) => Stdin::Text(t),
+        None => Stdin::Opaque,
+    }
+}
+
+/// 単純命令が自ら持つ標準入力の向き替え（`<` の file・heredoc・here-string）。
+fn own_stdin(c: &ast::Command, opts: &brush_parser::ParserOptions) -> Stdin {
+    let ast::Command::Simple(sc) = c else { return Stdin::None };
+    let items = sc.prefix.iter().flat_map(|p| p.0.iter()).chain(sc.suffix.iter().flat_map(|s| s.0.iter()));
+    let mut got = Stdin::None;
+    for item in items {
+        if let ast::CommandPrefixOrSuffixItem::IoRedirect(r) = item {
+            got = match r {
+                ast::IoRedirect::HereDocument(fd, hd) if fd.map_or(true, |f| f == 0) => Stdin::Text(hd.doc.value.clone()),
+                ast::IoRedirect::HereString(fd, w) if fd.map_or(true, |f| f == 0) => match facts_quiet(&w.value, opts) {
+                    Ok(f) if !f.var && !f.cmdsubst => Stdin::Text(f.value),
+                    _ => Stdin::Opaque,
+                },
+                ast::IoRedirect::File(fd, ast::IoFileRedirectKind::Read, target) if fd.map_or(true, |f| f == 0) => match target {
+                    ast::IoFileRedirectTarget::Filename(w) => match facts_quiet(&w.value, opts) {
+                        Ok(f) if !f.var && !f.cmdsubst => Stdin::File(f.value),
+                        _ => Stdin::Opaque,
+                    },
+                    _ => Stdin::Opaque,
+                },
+                _ => continue,
+            };
+        }
+    }
+    got
 }
 
 /// shell が標準入力から読む命を、字どおり読めれば置換と同じ群れへ渡し、読めねば
@@ -379,30 +621,30 @@ fn stdin_redirects(c: &ast::Command) -> Vec<&ast::IoRedirect> {
 /// 門は置換の中身を命として解いて判ずる。`echo kill | sh` の `kill`、
 /// `sh <<<"kill 1"` の `kill 1` は、置換と同じく後で走る命である。
 fn shell_stdin(p: &ast::Pipeline, out: &mut Extract, opts: &brush_parser::ParserOptions) {
-    for (i, cmd) in p.seq.iter().enumerate() {
-        let Some(argv) = simple_argv(cmd, opts) else { continue };
-        if !reads_stdin_script(&argv) {
-            continue;
-        }
-        let shell = argv[0].value.clone();
-        let mut fed = false;
-        for r in stdin_redirects(cmd) {
-            fed = true;
-            match r {
-                ast::IoRedirect::HereString(_, w) => match facts_quiet(&w.value, opts) {
-                    Ok(f) if !f.var && !f.cmdsubst => f_push_subst(&f.value),
-                    _ => out.opaque.push(format!("{shell} <<< の字が展開に依る")),
-                },
-                _ => out.opaque.push(format!("{shell} < file の中身は見えぬ")),
+    for (i, stage) in p.seq.iter().enumerate() {
+        let mut receivers = Vec::new();
+        stdin_receivers(stage, &mut receivers);
+        for cmd in receivers {
+            let Some(argv) = simple_argv(cmd, opts) else { continue };
+            let shell = match stdin_shell(&argv) {
+                None => continue,
+                Some(Err(why)) => {
+                    out.opaque.push(why);
+                    continue;
+                }
+                Some(Ok(shell)) => shell,
+            };
+            let src = match own_stdin(cmd, opts) {
+                Stdin::None if i == 0 => continue,
+                Stdin::None => pipe_source(&p.seq[i - 1], opts),
+                other => other,
+            };
+            match src {
+                Stdin::Text(t) => f_push_subst(&t),
+                Stdin::File(_) => out.opaque.push(format!("{shell} が file から読む命は見えぬ")),
+                Stdin::Opaque => out.opaque.push(format!("{shell} へ流す字が見えぬ")),
+                Stdin::None => {}
             }
-        }
-        if fed || i == 0 {
-            continue;
-        }
-        let prev = &p.seq[i - 1];
-        match simple_argv(prev, opts).as_deref().and_then(literal_output).or_else(|| cat_input(prev, opts)) {
-            Some(text) => f_push_subst(&text),
-            None => out.opaque.push(format!("{shell} へ管で流す字が見えぬ")),
         }
     }
 }
@@ -462,7 +704,8 @@ fn walk_command(c: &ast::Command, out: &mut Extract, opts: &brush_parser::Parser
                     handle_item(item, &mut argv, &mut assigns, out, opts);
                 }
             }
-            out.cmds.push(SimpleCmd { argv, assigns });
+            let stdin = own_stdin(c, opts);
+            out.cmds.push(SimpleCmd { argv, assigns, stdin });
         }
         ast::Command::Compound(cc, redirs) => {
             if let Some(rs) = redirs {
@@ -633,10 +876,17 @@ fn main() {
                     )
                 })
                 .collect();
+            let stdin = match &c.stdin {
+                Stdin::None => "null".to_string(),
+                Stdin::File(f) => format!("{{\"file\":\"{}\"}}", esc(f)),
+                Stdin::Text(t) => format!("{{\"text\":\"{}\"}}", esc(t)),
+                Stdin::Opaque => "{\"opaque\":true}".to_string(),
+            };
             format!(
-                "{{\"argv\":[{}],\"assigns\":{}}}",
+                "{{\"argv\":[{}],\"assigns\":{},\"stdin\":{}}}",
                 words.join(","),
-                arr(&c.assigns)
+                arr(&c.assigns),
+                stdin
             )
         })
         .collect();
