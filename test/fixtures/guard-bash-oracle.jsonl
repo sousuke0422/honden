@@ -1,0 +1,57 @@
+{"class":"解き手の読み違い","impact":true,"why":"$'…' の中の \\x と 8 進の escape を解かぬ（命の名と道が字のまま残る）","cmd":"$'\\162m' -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[["\\162m","-rf","/"]]}
+{"class":"解き手の読み違い","impact":true,"why":"$'…' の中の \\x と 8 進の escape を解かぬ（命の名と道が字のまま残る）","cmd":"$'\\x72m' -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[["\\x72m","-rf","/"]]}
+{"class":"解き手の読み違い","impact":true,"why":"引用の外の \\ を剥がぬ（\\rm・r\\m・\\/・s\\udo が字のまま残る）","cmd":"\\rm -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[["\\rm","-rf","/"]]}
+{"class":"解き手の読み違い","impact":true,"why":"引用せぬ heredoc の本文の命令置換を取り出さぬ（bash は走らせる）","cmd":"cat <<'A' <<B\nx\nA\n$(kill 1)\nB","onlyBash":[["kill","1"]],"onlySolver":[]}
+{"class":"解き手の読み違い","impact":true,"why":"引用せぬ heredoc の本文の命令置換を取り出さぬ（bash は走らせる）","cmd":"cat <<EOF\n$(rm -rf /)\nEOF","onlyBash":[["rm","-rf","/"]],"onlySolver":[]}
+{"class":"解き手の読み違い","impact":true,"why":"引用せぬ heredoc の本文の命令置換を取り出さぬ（bash は走らせる）","cmd":"cat <<EOF\n`kill 1`\nEOF","onlyBash":[["kill","1"]],"onlySolver":[]}
+{"class":"解き手の読み違い","impact":true,"why":"命の名より後の NAME=値 の語を代入と取り、argv から落とす","cmd":"dd bs=1M of=/dev/sda if=/dev/zero","onlyBash":[["dd","bs=1M","of=/dev/sda","if=/dev/zero"]],"onlySolver":[["dd"]]}
+{"class":"解き手の読み違い","impact":false,"why":"命の名より後の NAME=値 の語を代入と取り、argv から落とす（判じには効かぬ）","cmd":"dd if=/dev/zero of=/dev/sda","onlyBash":[["dd","if=/dev/zero","of=/dev/sda"]],"onlySolver":[["dd"]]}
+{"class":"解き手の読み違い","impact":true,"why":"命の名より後の NAME=値 の語を代入と取り、argv から落とす","cmd":"dd of=/dev/sda if=/dev/zero","onlyBash":[["dd","of=/dev/sda","if=/dev/zero"]],"onlySolver":[["dd"]]}
+{"class":"解き手の読み違い","impact":false,"why":"二重引用の中の \\\" を \" に戻さず、字を落とす","cmd":"echo \"a\\\"b\"; rm -rf /","onlyBash":[["echo","a\"b"]],"onlySolver":[["echo","ab"]]}
+{"class":"解き手の読み違い","impact":false,"why":"$'…' の中の \\' を ' に戻さぬ","cmd":"echo $'a\\'b'; rm -rf /","onlyBash":[["echo","a'b"]],"onlySolver":[["echo","a\\'b"]]}
+{"class":"解き手の読み違い","impact":false,"why":"引用の外の \\ を剥がぬ（\\; と \\' が字のまま残る）","cmd":"echo 'a'\\''b'; rm -rf /","onlyBash":[["echo","a'b"]],"onlySolver":[["echo","a\\'b"]]}
+{"class":"解き手の読み違い","impact":false,"why":"命の名より後の NAME=値 の語を代入と取り、argv から落とす（判じには効かぬ）","cmd":"export A=1 && echo $A","onlyBash":[["export","A=1"],["echo","1"]],"onlySolver":[["export"],["echo","$A"]]}
+{"class":"解き手の読み違い","impact":false,"why":"引用の外の \\ を剥がぬ（\\; と \\' が字のまま残る）","cmd":"find . -exec kill {} \\;","onlyBash":[["find",".","-exec","kill","{}",";"]],"onlySolver":[["find",".","-exec","kill","{}","\\;"]]}
+{"class":"解き手の読み違い","impact":false,"why":"引用の外の \\ を剥がぬ（\\; と \\' が字のまま残る）","cmd":"find . -exec sh -c 'rm -rf /' \\;","onlyBash":[["find",".","-exec","sh","-c","rm -rf /",";"]],"onlySolver":[["find",".","-exec","sh","-c","rm -rf /","\\;"]]}
+{"class":"解き手の読み違い","impact":false,"why":"引用の外の \\ を剥がぬ（\\; と \\' が字のまま残る）","cmd":"find . -name '*.log' -exec grep -l kill {} \\;","onlyBash":[["find",".","-name","*.log","-exec","grep","-l","kill","{}",";"]],"onlySolver":[["find",".","-name","*.log","-exec","grep","-l","kill","{}","\\;"]]}
+{"class":"解き手の読み違い","impact":true,"why":"引用の外の \\ を剥がぬ（\\rm・r\\m・\\/・s\\udo が字のまま残る）","cmd":"r\\m -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[["r\\m","-rf","/"]]}
+{"class":"解き手の読み違い","impact":true,"why":"$'…' の中の \\x と 8 進の escape を解かぬ（命の名と道が字のまま残る）","cmd":"rm -rf $'\\x2f'","onlyBash":[["rm","-rf","/"]],"onlySolver":[["rm","-rf","\\x2f"]]}
+{"class":"解き手の読み違い","impact":true,"why":"引用の外の \\ を剥がぬ（\\rm・r\\m・\\/・s\\udo が字のまま残る）","cmd":"rm -rf \\/","onlyBash":[["rm","-rf","/"]],"onlySolver":[["rm","-rf","\\/"]]}
+{"class":"解き手の読み違い","impact":true,"why":"引用の外の \\ を剥がぬ（\\rm・r\\m・\\/・s\\udo が字のまま残る）","cmd":"s\\udo id","onlyBash":[["sudo","id"]],"onlySolver":[["s\\udo","id"]]}
+{"class":"解き手の読み違い","impact":false,"why":"$( … ) の中の case の ) で解けぬ（門は拒みに倒す）","cmd":"x=$(case a in a) rm -rf /;; esac)","onlyBash":[["rm","-rf","/"]],"onlySolver":[],"solverError":true}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"$(echo rm) -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[["$(echo rm)","-rf","/"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"$CMD -rf /","onlyBash":[["-rf","/"]],"onlySolver":[["$CMD","-rf","/"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"${RM:-rm} -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[["${RM:-rm}","-rf","/"]]}
+{"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は空の値で返す）","cmd":"C='ssh host sudo bash /tmp/x.sh'; echo \"$C\" > /tmp/work/c.txt; honden guard check --cmd \"$C\"","onlyBash":[["echo","ssh host sudo bash /tmp/x.sh"],["honden","guard","check","--cmd","ssh host sudo bash /tmp/x.sh"]],"onlySolver":[["echo",""],["honden","guard","check","--cmd",""]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"[[ -n \"$X\" ]] && echo ok","onlyBash":[],"onlySolver":[["echo","ok"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"a || mkfs.ext4 /dev/sda1","onlyBash":[],"onlySolver":[["mkfs.ext4","/dev/sda1"]]}
+{"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は空の値で返す）","cmd":"bash -c \"$(echo kill 1)\"","onlyBash":[["bash","-c","kill 1"]],"onlySolver":[["bash","-c",""]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"case \"$1\" in kill) echo word;; esac","onlyBash":[],"onlySolver":[["echo","word"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"cat ~/.config/app.pem","onlyBash":[["cat","/tmp/.config/app.pem"]],"onlySolver":[["cat","~/.config/app.pem"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd /tmp/work && ls | head","onlyBash":[],"onlySolver":[["ls"],["head"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"echo $((1 + 2))","onlyBash":[["echo","3"]],"onlySolver":[["echo","$((1 + 2))"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"echo `sudo id`","onlyBash":[["echo"]],"onlySolver":[["echo","`sudo id`"]]}
+{"class":"物差しの限り","impact":false,"why":"定めただけで呼ばぬ関数の中の命は bash が走らせようとせぬ","cmd":"f() [[ -n $(kill 1) ]]","onlyBash":[],"onlySolver":[["kill","1"]]}
+{"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は空の値で返す）","cmd":"for f in a b c; do echo \"$f\"; done","onlyBash":[["echo","a"],["echo","b"],["echo","c"]],"onlySolver":[["echo",""]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"if [ -f a ]; then echo yes; else echo no; fi","onlyBash":[],"onlySolver":[["echo","yes"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"rm -rf /*","onlyBash":[["rm","-rf","/dev","/lib64","/oracle","/proc","/tmp","/usr"]],"onlySolver":[["rm","-rf","/*"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"rm -rf ~","onlyBash":[["rm","-rf","/tmp"]],"onlySolver":[["rm","-rf","~"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"rm$IFS-rf$IFS/","onlyBash":[["rm","-rf","/"]],"onlySolver":[["rm$IFS-rf$IFS/"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"source ~/.bashrc","onlyBash":[["source","/tmp/.bashrc"]],"onlySolver":[["source","~/.bashrc"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"tmux has-session -t x 2>/dev/null || tmux new-session -d -s x","onlyBash":[],"onlySolver":[["tmux","new-session","-d","-s","x"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"true || mkfs.ext4 /dev/sda1","onlyBash":[],"onlySolver":[["mkfs.ext4","/dev/sda1"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"while read -r l; do echo \"$l\"; done < /tmp/work/list","onlyBash":[],"onlySolver":[["read","-r","l"],["echo",""]]}
+{"class":"物差しの限り","impact":false,"why":"終わらぬ繰り返しは時限で殺す（記録は途中まで）","cmd":"while true; do sudo x; done","onlyBash":[],"onlySolver":[],"timedOut":true}
+{"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は空の値で返す）","cmd":"x=$(echo \"$(echo ')')\"; kill 1)","onlyBash":[],"onlySolver":[["echo",""]]}
+{"class":"比べの形の違い","impact":false,"why":"命令置換そのものの語は、bash は走らせた後の値、解き手は書かれたまま（中の命は両方が取る）","cmd":"`kill 1`","onlyBash":[],"onlySolver":[["`kill 1`"]]}
+{"class":"比べの形の違い","impact":false,"why":"<( … ) は bash が /dev/fd/N の道に替え、解き手は語を落とす（中の命は両方が取る）","cmd":"cat <(sh -c 'a; kill 1')","onlyBash":[["cat","/dev/fd/63"]],"onlySolver":[["cat"]]}
+{"class":"比べの形の違い","impact":false,"why":"<( … ) は bash が /dev/fd/N の道に替え、解き手は語を落とす（中の命は両方が取る）","cmd":"cat <(sudo id)","onlyBash":[["cat","/dev/fd/63"]],"onlySolver":[["cat"]]}
+{"class":"比べの形の違い","impact":false,"why":"<( … ) は bash が /dev/fd/N の道に替え、解き手は語を落とす（中の命は両方が取る）","cmd":"comm -12 <(rm -rf /) <(ls)","onlyBash":[["comm","-12","/dev/fd/63","/dev/fd/62"]],"onlySolver":[["comm","-12"]]}
+{"class":"比べの形の違い","impact":false,"why":"<( … ) は bash が /dev/fd/N の道に替え、解き手は語を落とす（中の命は両方が取る）","cmd":"comm -12 <(sort a) <(sort b)","onlyBash":[["comm","-12","/dev/fd/63","/dev/fd/62"]],"onlySolver":[["comm","-12"]]}
+{"class":"比べの形の違い","impact":false,"why":"<( … ) は bash が /dev/fd/N の道に替え、解き手は語を落とす（中の命は両方が取る）","cmd":"diff <(ls x) <(ls y)","onlyBash":[["diff","/dev/fd/63","/dev/fd/62"]],"onlySolver":[["diff"]]}
+{"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"echo \"$(eval 'a; kill 1')\"","onlyBash":[["a"],["kill","1"]],"onlySolver":[]}
+{"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval \"kill 1\"","onlyBash":[["kill","1"]],"onlySolver":[]}
+{"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval 'rm -rf /'","onlyBash":[["rm","-rf","/"]],"onlySolver":[]}
+{"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval 'x; rm -rf /'","onlyBash":[["x"],["rm","-rf","/"]],"onlySolver":[]}
+{"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval kill 1","onlyBash":[["kill","1"]],"onlySolver":[]}
+{"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval rm -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[]}
