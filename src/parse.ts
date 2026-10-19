@@ -57,6 +57,11 @@ export type Parsed =
       heredocs: string[];
       /** 命令置換の中身。要れば再帰して解ける */
       substitutions: string[];
+      /**
+       * shell が標準入力から命として読むのに、その字が観測できぬ物
+       * （`… | base64 -d | sh`・`sh < file`・`sh <<<"$X"`）。**在れば拒む**
+       */
+      opaque: string[];
     }
   | { ok: false; reason: string };
 
@@ -93,6 +98,7 @@ interface Raw {
   heredocs?: string[];
   substitutions?: string[];
   unhandled?: string[];
+  opaque?: string[];
 }
 
 /** 語の素性は**欠けたら真**に倒す——「印が無い」を「安全」と読まぬため。 */
@@ -139,6 +145,7 @@ export function interpret(ok: boolean, stdout: string): Parsed {
     })),
     heredocs: Array.isArray(raw.heredocs) ? raw.heredocs : [],
     substitutions: Array.isArray(raw.substitutions) ? raw.substitutions : [],
+    opaque: Array.isArray(raw.opaque) ? raw.opaque : [],
   };
 }
 
@@ -616,6 +623,13 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
 export function execUnits(p: Parsed, run: Runner, depth = 4): ExecScan {
   const out: ExecScan = { units: [] };
   if (!p.ok) return { units: [], unresolved: p.reason };
+  // shell へ流す字が見えねば、何が走るか解けぬ。**拒む**（直訴はできる）。
+  // 手元の命の履歴 13,918 件で、これに当たる無害な命は 0 件だった（2026-10-20 に
+  // 測った）。字が見える時（echo・printf・here-string）は解き手が置換と同じ
+  // 群れへ渡し、門はその字を命として判ずる
+  if (p.opaque.length > 0) {
+    out.unresolved = `shell へ流す字が見えぬ（${p.opaque.join(' / ')}）`;
+  }
   for (const c of p.commands) resolveArgv(c.argv, run, depth, out);
   return out;
 }
