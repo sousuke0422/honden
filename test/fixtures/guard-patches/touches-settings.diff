@@ -1,0 +1,6 @@
+試験の土台。門の試験が「hook の設定を書き換える patch」として読む。当てても意味を成さぬ。
+--- a/.claude/settings.json
++++ b/.claude/settings.json
+@@ -1 +1 @@
+-{}
++{"x": 1}

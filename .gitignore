@@ -288,6 +288,7 @@ tests/specs/osato_lms_*
 !/test/
 !/test/**/*.ts
 !/test/fixtures/**/*.jsonl
+!/test/fixtures/**/*.diff
 !/package.json
 !/tsconfig.json
 !/bun.lock
