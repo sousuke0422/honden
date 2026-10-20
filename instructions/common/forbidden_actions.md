@@ -112,6 +112,8 @@ cursor の細部は `instructions/cli/cursor.md` に在る。
 D011（意図で判ずるもの・分解や難読化）は**紋様では捕まらぬ**。門は「明白な違反を確実に止める」ことだけを引き受け、
 取りこぼしはこの訓戒と将軍の検めが拾う。多層防御の一枚である。
 
+**字を組んで門をかいくぐる形も禁ずる。** 命の名・道・旗を連結や変数の連ねで組み立てる形、紋様を避けるためだけの字替え、一つの命を分けて門の目をかいくぐる形（分解の意図は D011-AT と同じ。表に在る）を禁ずる。門は字を見るゆえ、組まれると何が走るか判じられぬ。正当な用があるなら `honden guard appeal` で直訴せよ。
+
 **Tier 2 (STOP-and-REPORT):** Toolchain/runtime/global package install needed (D011-AT) → STOP.
 Report what / why / version / method / source URL. Wait for approval before installing.
 Record package, version, URL, command, and install path in report if approved.
