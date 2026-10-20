@@ -3,6 +3,7 @@
 {"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"$CMD -rf /","onlyBash":[["-rf","/"]],"onlySolver":[["$CMD","-rf","/"]]}
 {"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"${RM:-rm} -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[["${RM:-rm}","-rf","/"]]}
 {"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は書かれたまま返し、bash は箱の中の値で展開する）","cmd":"C='ssh host sudo bash /tmp/x.sh'; echo \"$C\" > /tmp/work/c.txt; honden guard check --cmd \"$C\"","onlyBash":[["echo","ssh host sudo bash /tmp/x.sh"],["honden","guard","check","--cmd","ssh host sudo bash /tmp/x.sh"]],"onlySolver":[["echo","$C"],["honden","guard","check","--cmd","$C"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"P=test/fixtures/guard-patches/touches-gate.diff; git apply \"$P\"","onlyBash":[["git","apply","test/fixtures/guard-patches/touches-gate.diff"]],"onlySolver":[["git","apply","$P"]]}
 {"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"[[ -n \"$X\" ]] && echo ok","onlyBash":[],"onlySolver":[["echo","ok"]]}
 {"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"a || mkfs.ext4 /dev/sda1","onlyBash":[],"onlySolver":[["mkfs.ext4","/dev/sda1"]]}
 {"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は書かれたまま返し、bash は箱の中の値で展開する）","cmd":"bash -c \"$(echo kill 1)\"","onlyBash":[["bash","-c","kill 1"]],"onlySolver":[["bash","-c","$(echo kill 1)"]]}
@@ -16,6 +17,10 @@
 {"class":"物差しの限り","impact":false,"why":"別の shell に渡す字の中の命（解き手は字を命として取り出すが、箱に shell が無く bash の側は字のまま）","cmd":"cat <<EOF | sh\nrm -rf /\nEOF","onlyBash":[],"onlySolver":[["rm","-rf","/"]]}
 {"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"cat ~/.config/app.pem","onlyBash":[["cat","/tmp/.config/app.pem"]],"onlySolver":[["cat","~/.config/app.pem"]]}
 {"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd /tmp/work && ls | head","onlyBash":[],"onlySolver":[["ls"],["head"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd test/fixtures/guard-patches && git apply plain.diff","onlyBash":[],"onlySolver":[["git","apply","plain.diff"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd test/fixtures/guard-patches && git apply touches-gate.diff","onlyBash":[],"onlySolver":[["git","apply","touches-gate.diff"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd test/fixtures/guard-scripts && bash < benign.sh","onlyBash":[],"onlySolver":[["bash"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd test/fixtures/guard-scripts && bash < kill.sh","onlyBash":[],"onlySolver":[["bash"]]}
 {"class":"物差しの限り","impact":false,"why":"glob は箱の中の file で展開する（解き手は書かれたまま返す）","cmd":"chmod -fR 777 /*","onlyBash":[["chmod","-fR","777","/dev","/lib64","/oracle","/proc","/tmp"]],"onlySolver":[["chmod","-fR","777","/*"]]}
 {"class":"物差しの限り","impact":false,"why":"glob は箱の中の file で展開する（解き手は書かれたまま返す）","cmd":"chown -R nobody:nogroup /*","onlyBash":[["chown","-R","nobody:nogroup","/dev","/lib64","/oracle","/proc","/tmp"]],"onlySolver":[["chown","-R","nobody:nogroup","/*"]]}
 {"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は書かれたまま返し、bash は箱の中の値で展開する）","cmd":"docker exec c sh -c \"$CMD\"","onlyBash":[["docker","exec","c","sh","-c",""]],"onlySolver":[["docker","exec","c","sh","-c","$CMD"]]}
@@ -59,7 +64,11 @@
 {"class":"物差しの限り","impact":false,"why":"変数の値は走らせるまで判らぬ（`export A=1` の後の `$A`。解き手は書かれたまま返す）","cmd":"export A=1 && echo $A","onlyBash":[["echo","1"]],"onlySolver":[["echo","$A"]]}
 {"class":"物差しの限り","impact":false,"why":"定めただけで呼ばぬ関数の中の命は bash が走らせようとせぬ","cmd":"f() [[ -n $(kill 1) ]]","onlyBash":[],"onlySolver":[["kill","1"]]}
 {"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は書かれたまま返し、bash は箱の中の値で展開する）","cmd":"for f in a b c; do echo \"$f\"; done","onlyBash":[["echo","a"],["echo","b"],["echo","c"]],"onlySolver":[["echo","$f"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"git -C \"$D\" am \"$D/x.patch\"","onlyBash":[["git","-C","","am","/x.patch"]],"onlySolver":[["git","-C","$D","am","$D/x.patch"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"git apply \"$P\"","onlyBash":[["git","apply",""]],"onlySolver":[["git","apply","$P"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"git apply --check \"$P\"","onlyBash":[["git","apply","--check",""]],"onlySolver":[["git","apply","--check","$P"]]}
 {"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"if [ -f a ]; then echo yes; else echo no; fi","onlyBash":[],"onlySolver":[["echo","yes"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"patch -p1 -i \"$P\"","onlyBash":[["patch","-p1","-i",""]],"onlySolver":[["patch","-p1","-i","$P"]]}
 {"class":"物差しの限り","impact":false,"why":"別の shell に渡す字の中の命（解き手は字を命として取り出すが、箱に shell が無く bash の側は字のまま）","cmd":"printf 'ls\\nkill 1\\n' | sh","onlyBash":[],"onlySolver":[["ls"],["kill","1"]]}
 {"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"rm -rf /*","onlyBash":[["rm","-rf","/dev","/lib64","/oracle","/proc","/tmp"]],"onlySolver":[["rm","-rf","/*"]]}
 {"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"rm -rf ~","onlyBash":[["rm","-rf","/tmp"]],"onlySolver":[["rm","-rf","~"]]}
@@ -67,6 +76,8 @@
 {"class":"物差しの限り","impact":false,"why":"二重引用の中の展開の値は走らせるまで判らぬ（解き手は書かれたまま返し、bash は箱の中の値で展開する）","cmd":"sh -c \"$X\"","onlyBash":[["sh","-c",""]],"onlySolver":[["sh","-c","$X"]]}
 {"class":"物差しの限り","impact":false,"why":"別の shell に渡す字の中の命（解き手は字を命として取り出すが、箱に shell が無く bash の側は字のまま）","cmd":"sh <<<\"kill 1\"","onlyBash":[],"onlySolver":[["kill","1"]]}
 {"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"source ~/.bashrc","onlyBash":[["source","/tmp/.bashrc"]],"onlySolver":[["source","~/.bashrc"]]}
+{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"ssh -o BatchMode=yes h \"cat > /tmp/work/$f\"","onlyBash":[["ssh","-o","BatchMode=yes","h","cat > /tmp/work/"]],"onlySolver":[["ssh","-o","BatchMode=yes","h","cat > /tmp/work/$f"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"test -f test/fixtures/guard-scripts/benign.sh && bash < test/fixtures/guard-scripts/benign.sh","onlyBash":[],"onlySolver":[["bash"]]}
 {"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"tmux has-session -t x 2>/dev/null || tmux new-session -d -s x","onlyBash":[],"onlySolver":[["tmux","new-session","-d","-s","x"]]}
 {"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"true || mkfs.ext4 /dev/sda1","onlyBash":[],"onlySolver":[["mkfs.ext4","/dev/sda1"]]}
 {"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"while read -r l; do echo \"$l\"; done < /tmp/work/list","onlyBash":[],"onlySolver":[["read","-r","l"],["echo","$l"]]}
@@ -84,4 +95,5 @@
 {"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval 'x; rm -rf /'","onlyBash":[["x"],["rm","-rf","/"]],"onlySolver":[]}
 {"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval kill 1","onlyBash":[["kill","1"]],"onlySolver":[]}
 {"class":"比べの形の違い","impact":false,"why":"eval の中身は bash が走らせ、解き手は語のまま返す（降りるのは門の後の層）","cmd":"eval rm -rf /","onlyBash":[["rm","-rf","/"]],"onlySolver":[]}
-{"class":"物差しの限り","impact":false,"why":"変数・命令置換・既定値・$IFS・算術・~・glob の値は、箱の中で走らせた時の値（実の環境とは違う）","cmd":"ssh -o BatchMode=yes h \"cat > /tmp/work/$f\"","onlyBash":[["ssh","-o","BatchMode=yes","h","cat > /tmp/work/"]],"onlySolver":[["ssh","-o","BatchMode=yes","h","cat > /tmp/work/$f"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd test/fixtures/guard-scripts && ls -la && bash < benign.sh","onlyBash":[],"onlySolver":[["ls","-la"],["bash"]]}
+{"class":"物差しの限り","impact":false,"why":"箱の中では通らぬ枝（条件の真偽・cd の失敗・|| と && の先）の命は bash が走らせようとせぬ","cmd":"cd test/fixtures/guard-scripts && python3 -c \"open('benign.sh','a').write('kill 1')\" && bash < benign.sh","onlyBash":[],"onlySolver":[["python3","-c","open('benign.sh','a').write('kill 1')"],["bash"]]}
