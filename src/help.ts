@@ -37,6 +37,7 @@ export const HELP: Record<string, Help> = {
     notes: [
       '将軍のみ。布陣の中から叩くこと（外から役職は名乗れぬ）',
       '要る項目: north_star / purpose / acceptance_criteria / command',
+      '任意の bloom（L1〜L6）は、家老が任を振る時の既定になる',
       'acceptance_criteria は検証できる形で並べよ。「良くする」は条件にならぬ',
     ],
     examples: [
@@ -48,6 +49,7 @@ acceptance_criteria:
 command: |
   家老への指示本文
 project: honden
+bloom: L4  # 任意。家老が振る時の既定
 EOF`,
     ],
   },
@@ -79,6 +81,8 @@ EOF`,
       ['--workspace', '持ち場（明示すれば重なりを型が弾く）'],
       ['--branch', '枝（同上）'],
       ['--bloom', '難度 L1〜L6'],
+      ['--ack-unknown-model', '能力表に無い模型へ振る前の確認済みを台帳へ残す'],
+      ['--ack-no-bloom', '難度なしで振る前の確認済みを台帳へ残す（strict / enforce 時）'],
       ['--bypass --reason', '将軍が家老を通さず振る。理由が要り、別の名で台帳に残る'],
     ],
     notes: [

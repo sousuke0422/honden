@@ -11,6 +11,7 @@ import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openStore, tx } from '../src/store';
+import { trustRosterModels } from './model-limits';
 import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
 import {
@@ -36,6 +37,7 @@ function seeded(path = ':memory:') {
       { id: 'ashigaru9', role: 'worker', cli: 'codex', model: null },
     ]);
   });
+  trustRosterModels(db);
   const cmdId = createCmd(db, 'shogun', CMD).id!;
   const assigned = assignTask(db, 'karo', {
     agent: 'ashigaru9', cmd_id: cmdId, title: '詰まり試料', workspace: `/w/.worktrees/${cmdId}`,

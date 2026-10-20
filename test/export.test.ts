@@ -10,6 +10,7 @@ import { exportAll } from '../src/export';
 import { importTree } from '../src/import';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { deliver } from '../src/inbox';
 import { createCmd, assignTask } from '../src/dispatch';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -27,7 +28,8 @@ const seeded = () => {
       { id: 'ashigaru1', role: 'worker', cli: 'codex', model: null },
     ]);
   });
-  createCmd(db, 'shogun', {
+    trustRosterModels(db);
+    createCmd(db, 'shogun', {
     north_star: '北極星である',
     purpose: '目的である',
     acceptance_criteria: ['条件その一', '条件その二'],

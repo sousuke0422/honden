@@ -14,6 +14,11 @@ import { syncRoster, roleOf } from '../src/roster';
 import { syncLimits } from '../src/routing';
 import { createCmd, assignTask, nextCmdId } from '../src/dispatch';
 import { leaseState } from '../src/lease';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setSetting } from '../src/settings';
+import { SETTINGS_PATH_KEY } from '../src/config';
 
 const FLEET = ['shogun', 'karo', 'gunshi', 'ashigaru1', 'ashigaru2'];
 
@@ -27,7 +32,13 @@ const seeded = () => {
       { id: 'ashigaru1', role: 'worker', cli: 'claude', model: 'claude-fable-5' },
       { id: 'ashigaru2', role: 'worker', cli: 'cursor', model: 'composer-2.5' },
     ]);
-    syncLimits(db, [{ model: 'composer-2.5', maxBloom: 4, costGroup: 'cursor' }]);
+    syncLimits(db, [
+      { model: 'claude-opus-5', maxBloom: 6, costGroup: 'claude_max' },
+      { model: 'auto', maxBloom: 6, costGroup: 'cursor' },
+      { model: 'claude-sonnet-5', maxBloom: 4, costGroup: 'claude_max' },
+      { model: 'claude-fable-5', maxBloom: 3, costGroup: 'claude_max' },
+      { model: 'composer-2.5', maxBloom: 4, costGroup: 'cursor' },
+    ]);
   });
   return db;
 };
@@ -41,9 +52,9 @@ const CMD = {
   priority: 'high',
 };
 
-const withCmd = () => {
+const withCmd = (extra: Record<string, unknown> = {}) => {
   const db = seeded();
-  const r = createCmd(db, 'shogun', CMD);
+  const r = createCmd(db, 'shogun', { ...CMD, ...extra });
   return { db, cmdId: r.id! };
 };
 
@@ -218,14 +229,73 @@ describe('難度と能力', () => {
     expect(assign(db, cmdId, { agent: 'ashigaru2', bloom: 'L4' }).ok).toBe(true);
   });
 
-  test('制限の無いモデルなら通る', () => {
+  test('表に無いモデルは止め、明示の確認だけを台帳に残す', () => {
     const { db, cmdId } = withCmd();
-    expect(assign(db, cmdId, { agent: 'ashigaru1', bloom: 'L6' }).ok).toBe(true);
+    db.run("UPDATE roster SET model = 'new-model' WHERE id = 'ashigaru1'");
+    const denied = assign(db, cmdId, { agent: 'ashigaru1', bloom: 'L6' });
+    expect(denied.ok).toBe(false);
+    expect(denied.message).toContain('capability_tiers.new-model.max_bloom');
+    expect(denied.message).toContain('--ack-unknown-model');
+
+    const accepted = assign(db, cmdId, {
+      agent: 'ashigaru1',
+      bloom: 'L6',
+      'ack-unknown-model': true,
+    });
+    expect(accepted.ok).toBe(true);
+    const actions = (db.query('SELECT action FROM ledger').all() as { action: string }[]).map((x) => x.action);
+    expect(actions).toContain('task.assign.ack_unknown_model');
   });
 
-  test('難度を宣言せねば能力は見ない（現行踏襲）', () => {
+  test('既定は難度なしを警告して通す', () => {
     const { db, cmdId } = withCmd();
-    expect(assign(db, cmdId, { agent: 'ashigaru2' }).ok).toBe(true);
+    const r = assign(db, cmdId, { agent: 'ashigaru2' });
+    expect(r.ok).toBe(true);
+    expect(r.message).toContain('既定の警告運用');
+  });
+
+  test('strict は難度なしを止め、明示の確認だけを台帳に残す', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'honden-bloom-strict-'));
+    try {
+      const settings = join(dir, 'settings.yaml');
+      writeFileSync(settings, 'bloom_routing: strict\n');
+      const { db, cmdId } = withCmd();
+      tx(db, () => setSetting(db, SETTINGS_PATH_KEY, settings, 'test'));
+      const denied = assign(db, cmdId, { agent: 'ashigaru2' });
+      expect(denied.ok).toBe(false);
+      expect(denied.message).toContain('--ack-no-bloom');
+      expect(assign(db, cmdId, { agent: 'ashigaru2', 'ack-no-bloom': true }).ok).toBe(true);
+      const actions = (db.query('SELECT action FROM ledger').all() as { action: string }[]).map((x) => x.action);
+      expect(actions).toContain('task.assign.ack_no_bloom');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('司令の難度を既定にし、任の難度で上書きする', () => {
+    const inherited = withCmd({ bloom: 'L4' });
+    const inheritedResult = assign(inherited.db, inherited.cmdId, { agent: 'ashigaru2' });
+    expect(inheritedResult.ok).toBe(true);
+    const inheritedRaw = inherited.db.query("SELECT raw FROM task WHERE agent = 'ashigaru2'").get() as { raw: string };
+    expect(JSON.parse(inheritedRaw.raw).bloom).toBe(4);
+    expect((inherited.db.query("SELECT body FROM inbox WHERE agent = 'ashigaru2'").get() as { body: string }).body).toContain(
+      '難度: L4',
+    );
+    expect(
+      (inherited.db.query("SELECT detail FROM ledger WHERE action = 'task.assign'").get() as { detail: string }).detail,
+    ).toContain('bloom=L4');
+
+    const overridden = withCmd({ bloom: 'L4' });
+    expect(assign(overridden.db, overridden.cmdId, { agent: 'ashigaru1', bloom: 'L3' }).ok).toBe(true);
+    const overriddenRaw = overridden.db.query("SELECT raw FROM task WHERE agent = 'ashigaru1'").get() as { raw: string };
+    expect(JSON.parse(overriddenRaw.raw).bloom).toBe(3);
+  });
+
+  test('司令の既定難度にも能力の門が効く', () => {
+    const { db, cmdId } = withCmd({ bloom: 'L4' });
+    const result = assign(db, cmdId, { agent: 'ashigaru1' });
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('L3 まで');
   });
 
   test('難度が範囲の外なら弾く', () => {

@@ -10,6 +10,7 @@
 
 import { expect, test, describe } from 'bun:test';
 import { openStore, tx } from '../src/store';
+import { trustRosterModels } from './model-limits';
 import { syncRoster } from '../src/roster';
 import { createCmd, assignTask } from '../src/dispatch';
 import { syncProjects, workRootOf, readProjectsFromFile } from '../src/projects';
@@ -51,6 +52,7 @@ function seeded(project = 'vrt') {
     ]);
     syncProjects(db, PROJECTS);
   });
+  trustRosterModels(db);
   const c = createCmd(db, 'shogun', {
     north_star: '場所を書かずに振られた時に補う',
     purpose: '所在から補う',
@@ -134,7 +136,7 @@ describe('場所を書かずに振る', () => {
     const a = assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: cmdId, title: '一' });
     expect(a.ok).toBe(true);
     expect(live(db).length).toBe(0);
-    expect(a.message).toBeUndefined();
+    expect(a.message).toContain('既定の警告運用');
   });
 
   test('先に居る約束が、後から補う見立てを断らせぬ', () => {

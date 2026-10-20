@@ -12,6 +12,7 @@
 import { expect, test, describe } from 'bun:test';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf } from '../src/report';
 import { amendCmd, workersOn } from '../src/amend';
@@ -36,6 +37,7 @@ function seeded() {
       { id: 'ashigaru2', role: 'worker', cli: 'claude', model: null },
     ]),
   );
+  trustRosterModels(db);
   return { db, cmdId: createCmd(db, 'shogun', CMD).id! };
 }
 const unread = (db: ReturnType<typeof openStore>, a: string) =>

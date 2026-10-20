@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf, listPendingReviews } from '../src/report';
 import { runCmdShow } from '../src/main';
@@ -41,6 +42,7 @@ function seeded(path = ':memory:') {
       { id: 'ashigaru2', role: 'worker', cli: 'claude', model: 'm' },
     ]);
   });
+  trustRosterModels(db);
   const c = createCmd(db, 'shogun', CMD);
   const a = assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: c.id!, title: '実装せよ' });
   return { db, cmdId: c.id!, taskId: a.id! };

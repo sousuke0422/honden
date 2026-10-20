@@ -83,6 +83,7 @@ EOF
 - **command**: Required. 家老への指示本文。
 - **project**: Required. どの案件か。
 - **priority**: `high` / `medium` / `low`。既定は `medium`。
+- **bloom**: 任意で L1〜L6 を添えてよい。家老が振る時の既定になるだけで、難度を決めるのは家老である。
 - **depends_on**: 任意。先に済ませるべき司令の番号の一覧（下の「司令の依存」）。
 
 番号（`cmd_NNN`）は honden が採る。`id` も `timestamp` も `status` も書くな。

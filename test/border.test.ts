@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { borderText, borderPlans } from '../src/border';
 import type { TmuxRunner } from '../src/pane';
@@ -19,6 +20,7 @@ function camp() {
       { id: 'ashigaru1', role: 'worker', cli: 'claude', model: 'x' },
     ]);
   });
+  trustRosterModels(db);
   return db;
 }
 
