@@ -18,7 +18,7 @@
 {"kind":"attack","expect":"deny:D007","cmd":"a || mkfs.ext4 /dev/sda1"}
 {"kind":"attack","expect":"deny:D006","cmd":"a&&kill 1"}
 {"kind":"attack","expect":"deny:D006","cmd":"a=$(kill 1)"}
-{"kind":"attack","expect":"allow","cmd":"awk 'BEGIN { print \"kill 1\" >> \"test/fixtures/guard-scripts/benign.sh\" }'; bash < test/fixtures/guard-scripts/benign.sh"}
+{"kind":"attack","expect":"deny:D000","cmd":"awk 'BEGIN { print \"kill 1\" >> \"test/fixtures/guard-scripts/benign.sh\" }'; bash < test/fixtures/guard-scripts/benign.sh"}
 {"kind":"attack","expect":"deny:D000","cmd":"bash -c \"$(echo kill 1)\""}
 {"kind":"attack","expect":"deny:D007","cmd":"bash -c 'mount /dev/sda1 /mnt'"}
 {"kind":"attack","expect":"deny:D005","cmd":"bash -lc \"a && sudo b\""}
@@ -48,7 +48,7 @@
 {"kind":"attack","expect":"deny:D015","cmd":"cat ~/.config/app.pem"}
 {"kind":"attack","expect":"deny:D012","cmd":"cd test/fixtures/guard-patches && git apply touches-gate.diff"}
 {"kind":"attack","expect":"deny:D006","cmd":"cd test/fixtures/guard-scripts && bash < kill.sh"}
-{"kind":"attack","expect":"allow","cmd":"cd test/fixtures/guard-scripts && python3 -c \"open('benign.sh','a').write('kill 1')\" && bash < benign.sh"}
+{"kind":"attack","expect":"deny:D000","cmd":"cd test/fixtures/guard-scripts && python3 -c \"open('benign.sh','a').write('kill 1')\" && bash < benign.sh"}
 {"kind":"attack","expect":"deny:D005","cmd":"chmod --recursive 777 /"}
 {"kind":"attack","expect":"deny:D005","cmd":"chmod -R 777 /"}
 {"kind":"attack","expect":"deny:D005","cmd":"chmod -R 777 /etc"}
@@ -181,7 +181,7 @@
 {"kind":"attack","expect":"deny:D001","cmd":"nice rm -rf /"}
 {"kind":"attack","expect":"deny:D005","cmd":"node -e \"require('child_process').exec('sudo id')\""}
 {"kind":"attack","expect":"deny:D006","cmd":"node -e \"require('child_process').execSync('kill 1')\""}
-{"kind":"attack","expect":"allow","cmd":"node -e \"require('fs').appendFileSync('test/fixtures/guard-scripts/benign.sh','kill 1\\n')\"; bash < test/fixtures/guard-scripts/benign.sh"}
+{"kind":"attack","expect":"deny:D000","cmd":"node -e \"require('fs').appendFileSync('test/fixtures/guard-scripts/benign.sh','kill 1\\n')\"; bash < test/fixtures/guard-scripts/benign.sh"}
 {"kind":"attack","expect":"deny:D001","cmd":"nohup rm -rf /"}
 {"kind":"attack","expect":"deny:D001","cmd":"parallel 'x; rm -rf /'"}
 {"kind":"attack","expect":"deny:D006","cmd":"parallel kill ::: 1"}
@@ -191,7 +191,7 @@
 {"kind":"attack","expect":"deny:D012","cmd":"patch -p1 < x.patch .claude/settings.json"}
 {"kind":"attack","expect":"deny:D006","cmd":"perl -e '`kill 1`'"}
 {"kind":"attack","expect":"deny:D001","cmd":"perl -e 'exec(\"rm -rf /\")'"}
-{"kind":"attack","expect":"allow","cmd":"perl -e 'open(F, \">>test/fixtures/guard-scripts/benign.sh\"); print F \"kill 1\\n\"' && bash < test/fixtures/guard-scripts/benign.sh"}
+{"kind":"attack","expect":"deny:D000","cmd":"perl -e 'open(F, \">>test/fixtures/guard-scripts/benign.sh\"); print F \"kill 1\\n\"' && bash < test/fixtures/guard-scripts/benign.sh"}
 {"kind":"attack","expect":"deny:D006","cmd":"perl -e 'system(\"kill 1\")'"}
 {"kind":"attack","expect":"deny:D010","cmd":"pip install --break-system-packages x"}
 {"kind":"attack","expect":"deny:D006","cmd":"pkill -f x"}
@@ -204,9 +204,9 @@
 {"kind":"attack","expect":"deny:D006","cmd":"python3 -c \"import os; os.popen('kill 1')\""}
 {"kind":"attack","expect":"deny:D006","cmd":"python3 -c \"import subprocess; subprocess.run('kill 1', shell=True)\""}
 {"kind":"attack","expect":"deny:D006","cmd":"python3 -c \"import subprocess; subprocess.run(['kill', '1'])\""}
-{"kind":"attack","expect":"allow","cmd":"python3 -c \"open('test/fixtures/guard-patches/plain.diff','w').write('x')\"; git apply test/fixtures/guard-patches/plain.diff"}
-{"kind":"attack","expect":"allow","cmd":"python3 -c \"open('test/fixtures/guard-scripts/benign.sh','a').write('kill 1\\n')\" && cat test/fixtures/guard-scripts/benign.sh | ssh h 'bash -s'"}
-{"kind":"attack","expect":"allow","cmd":"python3 -c \"open('test/fixtures/guard-scripts/benign.sh','a').write('kill 1\\n')\"; bash < test/fixtures/guard-scripts/benign.sh"}
+{"kind":"attack","expect":"deny:D000","cmd":"python3 -c \"open('test/fixtures/guard-patches/plain.diff','w').write('x')\"; git apply test/fixtures/guard-patches/plain.diff"}
+{"kind":"attack","expect":"deny:D000","cmd":"python3 -c \"open('test/fixtures/guard-scripts/benign.sh','a').write('kill 1\\n')\" && cat test/fixtures/guard-scripts/benign.sh | ssh h 'bash -s'"}
+{"kind":"attack","expect":"deny:D000","cmd":"python3 -c \"open('test/fixtures/guard-scripts/benign.sh','a').write('kill 1\\n')\"; bash < test/fixtures/guard-scripts/benign.sh"}
 {"kind":"attack","expect":"deny:D006","cmd":"python3 -c 'import os; os.system(\"kill 1\")'"}
 {"kind":"attack","expect":"deny:D001","cmd":"r''m -rf /"}
 {"kind":"attack","expect":"deny:D001","cmd":"r\\m -rf /"}
@@ -241,7 +241,7 @@
 {"kind":"attack","expect":"deny:D012","cmd":"sed -i s/a/b/ src/guard.ts"}
 {"kind":"attack","expect":"deny:D001","cmd":"setsid rm -rf /"}
 {"kind":"attack","expect":"deny:D000","cmd":"sh -c \"$X\""}
-{"kind":"attack","expect":"allow","cmd":"sh -c 'echo kill 1 >> test/fixtures/guard-scripts/benign.sh'; bash < test/fixtures/guard-scripts/benign.sh"}
+{"kind":"attack","expect":"deny:D000","cmd":"sh -c 'echo kill 1 >> test/fixtures/guard-scripts/benign.sh'; bash < test/fixtures/guard-scripts/benign.sh"}
 {"kind":"attack","expect":"deny:D006","cmd":"sh -c 'ls; kill 1'"}
 {"kind":"attack","expect":"deny:D001","cmd":"sh < test/fixtures/guard-scripts/rm-root.sh"}
 {"kind":"attack","expect":"deny:D006","cmd":"sh <<<\"kill 1\""}

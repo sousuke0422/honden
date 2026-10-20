@@ -1088,6 +1088,8 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
  * - commands: 書かぬ命（READERS）を除いた命の数。在らぬ file を、他に命が在る時は作られうると見る
  * - bases: 相対の道を読む先の候補。`cd` の先を足す。字面で決まらぬ cd が在れば undefined
  * - current: いま辿っておる命（file を読む命そのものの語は、書く語に数えぬ）
+ * - ancestors: いま辿っておる字を中に持つ外の命（`sh -c '…'` の sh）。外の命の字には中の命の字が
+ *   丸ごと在り、道の名も出る。中身は内の解きが一つずつ検めるゆえ、書く語に数えぬ
  */
 interface ReadCtx {
   writes: string[];
@@ -1095,9 +1097,10 @@ interface ReadCtx {
   commands: number;
   bases: string[] | undefined;
   current: Cmd | undefined;
+  ancestors: Cmd[];
 }
 
-let ctx: ReadCtx = { writes: [], mentions: [], commands: 0, bases: undefined, current: undefined };
+let ctx: ReadCtx = { writes: [], mentions: [], commands: 0, bases: undefined, current: undefined, ancestors: [] };
 
 /** 書かぬ命。語に道が出ても、その file を書き換えぬ */
 const READERS = new Set([
@@ -1143,10 +1146,18 @@ function touchedInCommand(path: string, fulls: string[], self: Cmd | undefined):
     return bases.some((b) => fulls.includes(isAbsolute(w) ? w : join(b, w)));
   };
   if (ctx.writes.some(same)) return true;
+  // 語の一語が道そのものでなくとも、字の中に道の末の名を持てば書かれうると見る。
+  // `python3 -c "open('f.sh','a')…"`・`sh -c 'echo … >> f.sh'`・`awk '{ print … >> "f.sh" }'` の
+  // 類は、書く先を引用の中の字に持つ（軍師の検め #1205 が見つけた穴）。道そのものでなく末の名で
+  // 当てるのは、`os.path.join('d', 'f.sh')` のように道を組む形と、cd の後に名だけで書く形も
+  // 拾うためである。誤って止めるのは、同じ命の中で読むだけでない命がその名を字に持つ形に限られ、
+  // 拒みに倒す側で直訴もできる
+  const name = baseName(path);
   return ctx.mentions.some(
     (m) =>
       m.cmd !== self &&
-      m.words.some((w) => same(w) || (w.startsWith('-') && w.endsWith(path)) || w.endsWith(`=${path}`)),
+      !ctx.ancestors.includes(m.cmd) &&
+      m.words.some((w) => same(w) || (name !== '' && w.includes(name))),
   );
 }
 
@@ -1174,6 +1185,7 @@ function withCtx<T>(p: Parsed & { ok: true }, fn: () => T): T {
       p.substitutions.length,
     bases: basesOf(p, outer ? [process.cwd()] : saved.bases),
     current: saved.current,
+    ancestors: saved.current ? [...saved.ancestors, saved.current] : saved.ancestors,
   };
   try {
     return fn();

@@ -110,6 +110,17 @@ describe('同じ命の中で作ってから渡す形は D000', () => {
     `echo 'kill 1' >> ${S}/benign.sh; bash < ${S}/benign.sh`,
     `sed -i 's/ls/kill 1/' ${S}/benign.sh && cat ${S}/benign.sh | bash`,
     `chmod +w ${S}/benign.sh; bash < ${S}/benign.sh`,
+    // 引用の中の字に道を持つ命で書き換えてから流す（軍師の検め #1205）
+    `python3 -c "open('${S}/benign.sh','a').write('kill 1\\n')"; bash < ${S}/benign.sh`,
+    `python3 -c "import os; open(os.path.join('${S}', 'benign.sh'),'a')" && cat ${S}/benign.sh | ssh h 'bash -s'`,
+    `sh -c 'echo kill 1 >> ${S}/benign.sh'; bash < ${S}/benign.sh`,
+    `perl -e 'open(F, ">>${S}/benign.sh"); print F "kill 1\\n"' && bash < ${S}/benign.sh`,
+    `awk 'BEGIN { print "kill 1" >> "${S}/benign.sh" }'; bash < ${S}/benign.sh`,
+    `cd ${S} && python3 -c "open('benign.sh','a')" && bash < benign.sh`,
+    `python3 -c "open('test/fixtures/guard-patches/plain.diff','w')"; git apply test/fixtures/guard-patches/plain.diff`,
+    // 外の包みは数えぬが、包みの中で書く命は内の解きが見る
+    `sh -c 'python3 -c "open(\\"${S}/benign.sh\\",\\"a\\")"; bash < ${S}/benign.sh'`,
+    `ssh h 'perl -e "open(F, q(>>${S}/benign.sh))"; bash -s < ${S}/benign.sh'`,
     // 中で作って中で流す
     "ssh h 'printf kill > /tmp/work/r.sh; bash < /tmp/work/r.sh'",
     "sh -c 'cp x /tmp/work/r.sh && bash < /tmp/work/r.sh'",
@@ -153,5 +164,8 @@ describe('同じ命の中で作ってから渡す形は D000', () => {
     expect(rule(`test -f ${S}/benign.sh && bash < ${S}/benign.sh`)).toBe('allow');
     expect(rule(`wc -l ${S}/benign.sh; cat ${S}/benign.sh | ssh h 'bash -s'`)).toBe('allow');
     expect(rule(`cd ${S} && ls && bash < benign.sh`)).toBe('allow');
+    expect(rule(`grep -n ls ${S}/benign.sh && bash < ${S}/benign.sh`)).toBe('allow');
+    // 道の名を字に持たぬ命が並ぶだけなら止めぬ
+    expect(rule(`python3 -c "print(1)"; bash < ${S}/benign.sh`)).toBe('allow');
   });
 });
