@@ -109,7 +109,6 @@ describe('同じ命の中で作ってから渡す形は D000', () => {
     // 在る file に書き足す・書き換えてから流す
     `echo 'kill 1' >> ${S}/benign.sh; bash < ${S}/benign.sh`,
     `sed -i 's/ls/kill 1/' ${S}/benign.sh && cat ${S}/benign.sh | bash`,
-    `chmod +w ${S}/benign.sh; bash < ${S}/benign.sh`,
     // 引用の中の字に道を持つ命で書き換えてから流す（軍師の検め #1205）
     `python3 -c "open('${S}/benign.sh','a').write('kill 1\\n')"; bash < ${S}/benign.sh`,
     `python3 -c "import os; open(os.path.join('${S}', 'benign.sh'),'a')" && cat ${S}/benign.sh | ssh h 'bash -s'`,
@@ -165,6 +164,8 @@ describe('同じ命の中で作ってから渡す形は D000', () => {
     expect(rule(`wc -l ${S}/benign.sh; cat ${S}/benign.sh | ssh h 'bash -s'`)).toBe('allow');
     expect(rule(`cd ${S} && ls && bash < benign.sh`)).toBe('allow');
     expect(rule(`grep -n ls ${S}/benign.sh && bash < ${S}/benign.sh`)).toBe('allow');
+    // chmod・chown・touch は中身を書き換えぬ（cmd_305 の手元の履歴で `chmod +x x.sh && bash x.sh` が止まっておった）
+    expect(rule(`chmod +w ${S}/benign.sh; bash < ${S}/benign.sh`)).toBe('allow');
     // 道の名を字に持たぬ命が並ぶだけなら止めぬ
     expect(rule(`python3 -c "print(1)"; bash < ${S}/benign.sh`)).toBe('allow');
   });

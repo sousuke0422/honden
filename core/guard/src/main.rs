@@ -32,7 +32,7 @@
 use brush_parser::ast;
 
 /// 語ひとつの素性。**引用されておるか**が最も重い——引用の中の `rm` は命ではない。
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct WordFacts {
     /// 書かれたままの姿（引用も含む）
     text: String,
@@ -56,6 +56,144 @@ struct SimpleCmd {
     assigns: Vec<String>,
     /// 標準入力の出所。門が git apply・patch の patch を読むのに使う
     stdin: Stdin,
+    /// この命が script として走らせる file（`bash x.sh`・`source x.sh`・`. x.sh`・`bash <(cat x.sh)`）。
+    /// 門が file を読み、中身を命として判ずる
+    script: Option<Script>,
+}
+
+/// script の file の道。道に展開が在れば dynamic（門は `$HOME` の類だけを解き、他は拒む）。
+struct Script {
+    path: String,
+    dynamic: bool,
+    /// `source`・`.` で読み込む（`/` の無い道は PATH の上からも探される）
+    sourced: bool,
+    /// process 置換（`<(cat f)`）から読む。中身は標準入力で流すのと同じく、門が必ず判ずる
+    proc: bool,
+    /// 門が中身を shell の命として解ける shell か（csh・tcsh・fish は否）
+    posix: bool,
+}
+
+/// 命の語の並び。process 置換（`<(…)`）は argv から落ちるゆえ、script の位置を見るために残す。
+enum Op<'a> {
+    Word(WordFacts),
+    Proc(&'a ast::CompoundList),
+}
+
+/// 門が中身を shell の命として解ける shell。csh・tcsh・fish は書きざまが違い、解けぬ
+fn is_posix_shell(name: &str) -> bool {
+    is_shell(name) && !matches!(name.rsplit('/').next().unwrap_or(name), "csh" | "tcsh" | "fish" | "busybox")
+}
+
+/// script を走らせる命なら、script の語の位置を返す。
+///
+/// `source f`・`. f` は一つ目の引数。shell は旗の後ろの、旗でない一つ目の引数。`-c` の束は引数の
+/// 字を走らせ（門は別の道で降りる）、`-n` の束は読むだけで走らせず、`-s` は標準入力を読む。
+/// 値を取る旗（`-o pipefail`・`-O extglob`・`--rcfile f`・`--init-file f`）の値は file ではない。
+/// script の後ろの語（`bash x.sh --flag`）は script への引数である。
+fn script_index(ops: &[WordFacts]) -> Option<usize> {
+    let head = ops.first()?;
+    let name = base(&head.value);
+    if name == "source" || name == "." {
+        let mut i = 1;
+        if ops.get(i).map(|w| w.value.as_str()) == Some("--") {
+            i += 1;
+        }
+        return if i < ops.len() { Some(i) } else { None };
+    }
+    if !is_shell(&head.value) {
+        return None;
+    }
+    let mut i = 1;
+    if name == "busybox" {
+        match ops.get(1) {
+            Some(w) if is_shell(&w.value) && w.value != "busybox" => i = 2,
+            _ => return None,
+        }
+    }
+    while i < ops.len() {
+        let v = ops[i].value.as_str();
+        if v == "--" {
+            i += 1;
+            break;
+        }
+        if v == "-s" {
+            return None;
+        }
+        if v.len() <= 5 && v.starts_with('-') && !v.starts_with("--") && (v[1..].contains('c') || v[1..].contains('n') || v[1..].contains('s')) {
+            return None;
+        }
+        let short = (v.starts_with('-') || v.starts_with('+')) && !v.starts_with("--") && v.len() > 1;
+        if (short && (v[1..].contains('o') || v[1..].contains('O'))) || v == "--rcfile" || v == "--init-file" {
+            i += 2;
+            continue;
+        }
+        if v.starts_with('-') || v.starts_with('+') {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    if i < ops.len() { Some(i) } else { None }
+}
+
+/// `<(…)` の中身が書き出す字の出所。命が一つだけなら管の前の段と同じに読む。
+fn proc_source(list: &ast::CompoundList, opts: &brush_parser::ParserOptions) -> Stdin {
+    if list.0.len() != 1 {
+        return Stdin::Opaque;
+    }
+    let and_or = &list.0[0].0;
+    if !and_or.additional.is_empty() || and_or.first.seq.len() != 1 {
+        return Stdin::Opaque;
+    }
+    pipe_source(&and_or.first.seq[0], opts)
+}
+
+/// script を走らせる命の script を見る。file なら道を返し、字が見えれば置換と同じ群れへ渡し、
+/// 見えねば opaque に挙げる。
+fn script_of(ops: &[Op], out: &mut Extract, opts: &brush_parser::ParserOptions) -> Option<Script> {
+    // process 置換は印の語に替えて、包み（timeout・env の類）を剥がす。印の値は命の字に出ぬ
+    let marks: Vec<WordFacts> = ops
+        .iter()
+        .enumerate()
+        .map(|(n, o)| match o {
+            Op::Word(w) => w.clone(),
+            Op::Proc(_) => WordFacts {
+                text: String::new(),
+                value: format!("\u{1}proc{n}"),
+                quoted: false,
+                glob: false,
+                var: false,
+                cmdsubst: false,
+            },
+        })
+        .collect();
+    let inner = peel(&marks);
+    let k = script_index(inner)?;
+    // `busybox sh x.sh` は二つ目の語が shell の名である
+    let shell = if base(&inner[0].value) == "busybox" { &inner[1] } else { &inner[0] };
+    let name = base(&shell.value).to_string();
+    let posix = name == "source" || name == "." || is_posix_shell(&shell.value);
+    let w = &inner[k];
+    if let Some(n) = w.value.strip_prefix("\u{1}proc").and_then(|n| n.parse::<usize>().ok()) {
+        let Some(Op::Proc(list)) = ops.get(n) else { return None };
+        if !posix {
+            out.opaque.push(format!("{name} が process 置換から読む script は門が解けぬ"));
+            return None;
+        }
+        match proc_source(list, opts) {
+            Stdin::Text(t) => f_push_subst(&t),
+            Stdin::File(f) => return Some(Script { path: f, dynamic: false, sourced: name == "source" || name == ".", proc: true, posix }),
+            _ => out.opaque.push(format!("{name} が process 置換から読む script の字が見えぬ")),
+        }
+        return None;
+    }
+    Some(Script {
+        path: w.value.clone(),
+        dynamic: w.var || w.cmdsubst,
+        sourced: name == "source" || name == ".",
+        proc: false,
+        posix,
+    })
 }
 
 /// 単純命令の標準入力の出所。
@@ -90,6 +228,9 @@ struct Extract {
     /// shell が標準入力から命として読む file の道（`bash < f`・`cat f | sh`・`ssh h 'bash -s' < f`）。
     /// 門が file を読んで中身を命として判ずる。読めねば門が拒む
     shell_files: Vec<String>,
+    /// heredoc の本文を `cat > f` で書く file と、その本文（`cat > f <<'EOF' … EOF`）。
+    /// 同じ命の中で書いてから走らせる script の中身を、門がこの本文で判ずるため
+    written_texts: Vec<(String, String)>,
 }
 
 /// 語を解いて素性を得る。
@@ -707,6 +848,37 @@ fn pipe_source(prev: &ast::Command, opts: &brush_parser::ParserOptions) -> Stdin
     }
 }
 
+/// `cat > f <<'EOF' … EOF` の形なら、書く先と本文を返す。`cat` に引数が無く、標準入力が heredoc か
+/// here-string で、標準出力の向き替えが `>`（`>>` でない）の一つだけの時に限る。
+fn heredoc_write(c: &ast::Command, argv: &[WordFacts], stdin: &Stdin, opts: &brush_parser::ParserOptions) -> Option<(String, String)> {
+    if argv.len() != 1 || base(&argv[0].value) != "cat" {
+        return None;
+    }
+    let Stdin::Text(text) = stdin else { return None };
+    let ast::Command::Simple(sc) = c else { return None };
+    let items = sc.prefix.iter().flat_map(|p| p.0.iter()).chain(sc.suffix.iter().flat_map(|s| s.0.iter()));
+    let mut target = None;
+    for item in items {
+        if let ast::CommandPrefixOrSuffixItem::IoRedirect(ast::IoRedirect::File(fd, kind, t)) = item {
+            if fd.is_some_and(|f| f != 1) {
+                continue;
+            }
+            match (kind, t) {
+                (ast::IoFileRedirectKind::Write | ast::IoFileRedirectKind::Clobber, ast::IoFileRedirectTarget::Filename(w)) if target.is_none() => {
+                    let f = facts_quiet(&w.value, opts).ok()?;
+                    if f.var || f.cmdsubst {
+                        return None;
+                    }
+                    target = Some(f.value);
+                }
+                (ast::IoFileRedirectKind::Read, _) => {}
+                _ => return None,
+            }
+        }
+    }
+    Some((target?, text.clone()))
+}
+
 /// 単純命令が自ら持つ標準入力の向き替え（`<` の file・heredoc・here-string）。
 fn own_stdin(c: &ast::Command, opts: &brush_parser::ParserOptions) -> Stdin {
     let ast::Command::Simple(sc) = c else { return Stdin::None };
@@ -826,13 +998,26 @@ fn walk_command(c: &ast::Command, out: &mut Extract, opts: &brush_parser::Parser
                     Err(e) => out.unhandled.push(e),
                 }
             }
+            // script の位置を見るための語の並び。process 置換は argv から落ちるゆえ別に持つ
+            let mut ops: Vec<Op> = argv.iter().cloned().map(Op::Word).collect();
             if let Some(suffix) = &sc.suffix {
                 for item in &suffix.0 {
+                    let before = argv.len();
                     handle_item(item, &mut argv, &mut assigns, out, opts, true);
+                    if let ast::CommandPrefixOrSuffixItem::ProcessSubstitution(_, sub) = item {
+                        ops.push(Op::Proc(&sub.list));
+                    }
+                    for w in &argv[before..] {
+                        ops.push(Op::Word(w.clone()));
+                    }
                 }
             }
             let stdin = own_stdin(c, opts);
-            out.cmds.push(SimpleCmd { argv, assigns, stdin });
+            if let Some(w) = heredoc_write(c, &argv, &stdin, opts) {
+                out.written_texts.push(w);
+            }
+            let script = script_of(&ops, out, opts);
+            out.cmds.push(SimpleCmd { argv, assigns, stdin, script });
         }
         ast::Command::Compound(cc, redirs) => {
             if let Some(rs) = redirs {
@@ -1009,17 +1194,29 @@ fn main() {
                 Stdin::Text(t) => format!("{{\"text\":\"{}\"}}", esc(t)),
                 Stdin::Opaque => "{\"opaque\":true}".to_string(),
             };
+            let script = match &c.script {
+                None => "null".to_string(),
+                Some(s) => format!(
+                    "{{\"path\":\"{}\",\"dynamic\":{},\"sourced\":{},\"proc\":{},\"posix\":{}}}",
+                    esc(&s.path),
+                    s.dynamic,
+                    s.sourced,
+                    s.proc,
+                    s.posix
+                ),
+            };
             format!(
-                "{{\"argv\":[{}],\"assigns\":{},\"stdin\":{}}}",
+                "{{\"argv\":[{}],\"assigns\":{},\"stdin\":{},\"script\":{}}}",
                 words.join(","),
                 arr(&c.assigns),
-                stdin
+                stdin,
+                script
             )
         })
         .collect();
 
     println!(
-        "{{\"ok\":true,\"complete\":{},\"commands\":[{}],\"heredocs\":{},\"substitutions\":{},\"unhandled\":{},\"opaque\":{},\"writes\":{},\"shell_files\":{}}}",
+        "{{\"ok\":true,\"complete\":{},\"commands\":[{}],\"heredocs\":{},\"substitutions\":{},\"unhandled\":{},\"opaque\":{},\"writes\":{},\"shell_files\":{},\"written_texts\":[{}]}}",
         out.unhandled.is_empty(),
         cmds.join(","),
         arr(&out.heredocs),
@@ -1027,6 +1224,11 @@ fn main() {
         arr(&out.unhandled),
         arr(&out.opaque),
         arr(&out.writes),
-        arr(&out.shell_files)
+        arr(&out.shell_files),
+        out.written_texts
+            .iter()
+            .map(|(p, t)| format!("{{\"path\":\"{}\",\"text\":\"{}\"}}", esc(p), esc(t)))
+            .collect::<Vec<_>>()
+            .join(",")
     );
 }
