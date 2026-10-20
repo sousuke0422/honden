@@ -85,6 +85,8 @@ struct Extract {
     /// （`… | base64 -d | sh`・`curl … | bash`・`sh < file`・`sh <<<"$X"`）。
     /// 掟は TS 側が判ずる。ここは見えなんだことだけを言う
     opaque: Vec<String>,
+    /// 向き替えで書く先（`>`・`>>`・`>|`・`<>`）。同じ命の中で作られる file を門が知るため
+    writes: Vec<String>,
 }
 
 /// 語を解いて素性を得る。
@@ -98,6 +100,95 @@ struct Extract {
 /// （`$X` / `$(…)`）は走らせるまで値が判らぬゆえ、書かれたままを値とする。
 fn src<'a>(raw: &'a str, pw: &brush_parser::word::WordPieceWithSource) -> &'a str {
     raw.get(pw.start_index..pw.end_index).unwrap_or("")
+}
+
+/// `$'…'` の中身の逃がしを、bash と同じく解く。
+///
+/// `\a \b \e \E \f \n \r \t \v \\ \' \" \?`、8 進（`\NNN` の一〜三字）、16 進（`\xHH` の一〜二字）、
+/// `\uHHHH`・`\UHHHHHHHH`、`\cX`（制御の字）。知らぬ逃がしは逆斜線ごと残す（bash と同じ）。
+fn decode_ansi_c(t: &str) -> String {
+    let cs: Vec<char> = t.chars().collect();
+    let mut out = String::with_capacity(t.len());
+    let mut i = 0;
+    let digits = |cs: &[char], from: usize, max: usize, radix: u32| -> (u32, usize) {
+        let mut v = 0u32;
+        let mut n = 0;
+        while n < max && from + n < cs.len() {
+            match cs[from + n].to_digit(radix) {
+                Some(d) => {
+                    v = v * radix + d;
+                    n += 1;
+                }
+                None => break,
+            }
+        }
+        (v, n)
+    };
+    while i < cs.len() {
+        let c = cs[i];
+        if c != '\\' || i + 1 >= cs.len() {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let e = cs[i + 1];
+        i += 2;
+        let simple = match e {
+            'a' => Some('\u{7}'),
+            'b' => Some('\u{8}'),
+            'e' | 'E' => Some('\u{1b}'),
+            'f' => Some('\u{c}'),
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            'v' => Some('\u{b}'),
+            '\\' => Some('\\'),
+            '\'' => Some('\''),
+            '"' => Some('"'),
+            '?' => Some('?'),
+            _ => None,
+        };
+        if let Some(ch) = simple {
+            out.push(ch);
+            continue;
+        }
+        match e {
+            '0'..='7' => {
+                let (v, n) = digits(&cs, i - 1, 3, 8);
+                i = i - 1 + n;
+                out.push(char::from_u32(v & 0xff).unwrap_or('\u{fffd}'));
+            }
+            'x' => {
+                let (v, n) = digits(&cs, i, 2, 16);
+                if n == 0 {
+                    out.push_str("\\x");
+                } else {
+                    i += n;
+                    out.push(char::from_u32(v).unwrap_or('\u{fffd}'));
+                }
+            }
+            'u' | 'U' => {
+                let (v, n) = digits(&cs, i, if e == 'u' { 4 } else { 8 }, 16);
+                if n == 0 {
+                    out.push('\\');
+                    out.push(e);
+                } else {
+                    i += n;
+                    out.push(char::from_u32(v).unwrap_or('\u{fffd}'));
+                }
+            }
+            'c' if i < cs.len() => {
+                let x = cs[i];
+                i += 1;
+                out.push(char::from_u32((x.to_ascii_uppercase() as u32) ^ 0x40).unwrap_or('\u{fffd}'));
+            }
+            _ => {
+                out.push('\\');
+                out.push(e);
+            }
+        }
+    }
+    out
 }
 
 /// 逃がしの片（`\x`）から、逃がした字を取り出す。行の継ぎ（`\` と改行）は空になる。
@@ -119,20 +210,29 @@ fn word_facts(raw: &str, opts: &brush_parser::ParserOptions) -> Result<WordFacts
         match &pw.piece {
             // 引用された中身。**命ではないが、値ではある。**
             // `rm -rf "/"` の `/` は引用されておっても根を指す。
-            P::SingleQuotedText(t) | P::AnsiCQuotedText(t) => value.push_str(t),
+            P::SingleQuotedText(t) => value.push_str(t),
+            // `$'…'` の中の逃がしは、bash が解いた字が値である。`$'\162m'` は `rm`、
+            // `$'\x2f'` は `/`。解かずに残すと、命の名と道が字のまま残る
+            P::AnsiCQuotedText(t) => value.push_str(&decode_ansi_c(t)),
             P::DoubleQuotedSequence(inner) => {
                 for ipw in inner {
                     match &ipw.piece {
                         P::Text(t) => value.push_str(t),
                         P::CommandSubstitution(s) | P::BackquotedCommandSubstitution(s) => {
                             // 引用の中でも置換は走る。中身を渡し、印も立てる。
+                            // 値には書かれたまま残す（引用の外と同じ）。落とすと、字を解き
+                            // 直した時に頭の展開が見えず、`sh -c "$(…)"` を命の無い字と読む
                             f.cmdsubst = true;
                             f_push_subst(s);
+                            value.push_str(src(raw, ipw));
                         }
-                        P::ParameterExpansion(_) => f.var = true,
+                        P::ParameterExpansion(_) => {
+                            f.var = true;
+                            value.push_str(src(raw, ipw));
+                        }
                         // 二重引用の中の `\$` `\"` 等。逃がした字そのものが値である
                         P::EscapeSequence(e) => value.push_str(unescape(e)),
-                        _ => {}
+                        _ => value.push_str(src(raw, ipw)),
                     }
                 }
             }
@@ -231,6 +331,19 @@ fn handle_redirect(r: &ast::IoRedirect, out: &mut Extract, opts: &brush_parser::
                 if let Err(e) = word_facts(&wrapped, opts) {
                     out.unhandled.push(format!("heredoc の本文の展開を解けぬ: {e}"));
                 }
+            }
+        }
+        // 書く先を控える（同じ命の中で patch の file を作って当てる形を、門が見分けるため）
+        ast::IoRedirect::File(
+            _,
+            ast::IoFileRedirectKind::Write
+            | ast::IoFileRedirectKind::Append
+            | ast::IoFileRedirectKind::Clobber
+            | ast::IoFileRedirectKind::ReadAndWrite,
+            ast::IoFileRedirectTarget::Filename(w),
+        ) => {
+            if let Ok(f) = facts_quiet(&w.value, opts) {
+                out.writes.push(f.value);
             }
         }
         // here-string の語の中の置換も走る（`cat <<<"$(…)"`）
@@ -380,8 +493,11 @@ fn simple_argv(c: &ast::Command, opts: &brush_parser::ParserOptions) -> Option<V
     }
     if let Some(suffix) = &sc.suffix {
         for item in &suffix.0 {
-            if let ast::CommandPrefixOrSuffixItem::Word(w) = item {
-                argv.push(facts_quiet(&w.value, opts).ok()?);
+            match item {
+                ast::CommandPrefixOrSuffixItem::Word(w) | ast::CommandPrefixOrSuffixItem::AssignmentWord(_, w) => {
+                    argv.push(facts_quiet(&w.value, opts).ok()?);
+                }
+                _ => {}
             }
         }
     }
@@ -655,8 +771,16 @@ fn handle_item(
     assigns: &mut Vec<String>,
     out: &mut Extract,
     opts: &brush_parser::ParserOptions,
+    after_name: bool,
 ) {
     match item {
+        // **命の名より後の `NAME=値` は、代入ではなく引数である。** `dd of=/dev/sda`・
+        // `export A=1` の `of=…`・`A=1` は命へ渡る。代入と取って argv から落とすと、
+        // 掟が見る字から消える（bash の物差しが見つけた読み違い）
+        ast::CommandPrefixOrSuffixItem::AssignmentWord(_, w) if after_name => match word_facts(&w.value, opts) {
+            Ok(f) => argv.push(f),
+            Err(e) => out.unhandled.push(e),
+        },
         // 代入語も**解く**。`x=$(rm -rf /)` の置換を拾わねば、代入に隠れた命が
         // 門の外を素通りする（実測 2026-08-30）。argv には入れぬ——代入は
         // 命令位置ではない——が、置換の中身は集める。
@@ -690,7 +814,7 @@ fn walk_command(c: &ast::Command, out: &mut Extract, opts: &brush_parser::Parser
             let mut assigns = Vec::new();
             if let Some(prefix) = &sc.prefix {
                 for item in &prefix.0 {
-                    handle_item(item, &mut argv, &mut assigns, out, opts);
+                    handle_item(item, &mut argv, &mut assigns, out, opts, false);
                 }
             }
             if let Some(w) = &sc.word_or_name {
@@ -701,7 +825,7 @@ fn walk_command(c: &ast::Command, out: &mut Extract, opts: &brush_parser::Parser
             }
             if let Some(suffix) = &sc.suffix {
                 for item in &suffix.0 {
-                    handle_item(item, &mut argv, &mut assigns, out, opts);
+                    handle_item(item, &mut argv, &mut assigns, out, opts, true);
                 }
             }
             let stdin = own_stdin(c, opts);
@@ -892,12 +1016,13 @@ fn main() {
         .collect();
 
     println!(
-        "{{\"ok\":true,\"complete\":{},\"commands\":[{}],\"heredocs\":{},\"substitutions\":{},\"unhandled\":{},\"opaque\":{}}}",
+        "{{\"ok\":true,\"complete\":{},\"commands\":[{}],\"heredocs\":{},\"substitutions\":{},\"unhandled\":{},\"opaque\":{},\"writes\":{}}}",
         out.unhandled.is_empty(),
         cmds.join(","),
         arr(&out.heredocs),
         arr(&out.substs),
         arr(&out.unhandled),
-        arr(&out.opaque)
+        arr(&out.opaque),
+        arr(&out.writes)
     );
 }

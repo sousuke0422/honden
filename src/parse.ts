@@ -67,6 +67,8 @@ export type Parsed =
        * （`… | base64 -d | sh`・`sh < file`・`sh <<<"$X"`）。**在れば拒む**
        */
       opaque: string[];
+      /** 向き替えで書く先（`>`・`>>`）。同じ命の中で作られる file を見分けるため */
+      writes: string[];
     }
   | { ok: false; reason: string };
 
@@ -104,6 +106,7 @@ interface Raw {
   substitutions?: string[];
   unhandled?: string[];
   opaque?: string[];
+  writes?: string[];
 }
 
 /** 語の素性は**欠けたら真**に倒す——「印が無い」を「安全」と読まぬため。 */
@@ -152,6 +155,7 @@ export function interpret(ok: boolean, stdout: string): Parsed {
     heredocs: Array.isArray(raw.heredocs) ? raw.heredocs : [],
     substitutions: Array.isArray(raw.substitutions) ? raw.substitutions : [],
     opaque: Array.isArray(raw.opaque) ? raw.opaque : [],
+    writes: Array.isArray(raw.writes) ? raw.writes : [],
   };
 }
 
@@ -394,10 +398,12 @@ const MAX_UNITS = 64;
 
 /** 文字列で渡された命を解き直して降りる。 */
 function descendScript(w: Word, run: Runner, depth: number, out: ExecScan): void {
-  if (w.var || w.cmdsubst) {
-    out.unresolved = out.unresolved ?? '走らせる文字列が展開に依っておる';
-    return;
-  }
+  // 字に展開が在っても、書かれた字のまま解いて降りる。命の名そのものが展開に依れば
+  // （`sh -c "$X"`・`sh -c "$(…) …"`）、resolveArgv が「命の名が展開に依っておる」として
+  // 拒む。引数に変数が在るだけの形（`ssh h "cat > /tmp/$f"`）は、直に打った時と同じ判じに
+  // なる。前は字に展開が在るだけで丸ごと拒んでおったが、`ssh -o K=V host …` の `K=V` を
+  // 代入と取る読み違いで遠方の命を host と読み、偶々通っておった形が、読み違いを直すと
+  // 止まるようになった
   const inner = parseCommand(w.value, run);
   if (!inner.ok) {
     out.unresolved = out.unresolved ?? `走らせる文字列を解けぬ（${inner.reason}）`;
@@ -805,14 +811,24 @@ function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { t
     return undefined;
   };
   for (const f of files) {
-    const bad = add(readPatch(f, base));
+    const r = readPatch(f, base);
+    // 在らぬ file でも、同じ命の中で書かれるなら、当てる時には在る。門が読む時にはまだ
+    // 無いゆえ、中身が見えぬ（`printf … > late.diff; git apply late.diff`）
+    if ('missing' in r && writtenInCommand(f, base)) {
+      return { unreadable: `${f} は同じ命の中で作られ、門が読む時にはまだ無い` };
+    }
+    const bad = add(r);
     if (bad) return { unreadable: bad };
   }
   if (fromStdin && stdin) {
     if ('opaque' in stdin) return { unreadable: '標準入力から読む patch の中身が見えぬ' };
     if ('text' in stdin) targets.push(...patchTargets(stdin.text));
     if ('file' in stdin) {
-      const bad = add(readPatch(stdin.file, base));
+      const r = readPatch(stdin.file, base);
+      if ('missing' in r && writtenInCommand(stdin.file, base)) {
+        return { unreadable: `${stdin.file} は同じ命の中で作られ、門が読む時にはまだ無い` };
+      }
+      const bad = add(r);
       if (bad) return { unreadable: bad };
     }
   }
@@ -884,7 +900,7 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
       found = true;
       const rest = argv.slice(k + 1);
       const e = rest.findIndex((w) => END.has(w.value));
-      resolveArgv(e >= 0 ? rest.slice(0, e) : rest, run, depth - 1, out);
+      resolveArgv(e >= 0 ? rest.slice(0, e) : rest, run, depth, out);
       if (e >= 0) k += e + 1;
       else break;
     }
@@ -908,7 +924,7 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
   // ── 箱の中の命。ssh と同じく照らす ──
   const box = boxInner(name, argv);
   if (box !== undefined) {
-    resolveLoose(box, run, depth - 1, out);
+    resolveLoose(box, run, depth, out);
     emit();
     return;
   }
@@ -985,13 +1001,49 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
     descendScript(rest[0]!, run, depth, out);
     return;
   }
-  resolveArgv(rest, run, depth - 1, out);
+  // 包みを剥がす降り方は argv が必ず縮むゆえ、深さを使わぬ。深さを使うのは、文字列を
+  // 解き直して降りる時（descendScript・descendLoose）だけ。`timeout 5 ssh -o K=V h '…
+  // setsid nohup …'` のように包みが重なると、深さの上限で「解けぬ」に落ちておった
+  resolveArgv(rest, run, depth, out);
+}
+
+/**
+ * いま辿っておる命の中で書かれる file の道。向き替えの先（解き手が返す）と、`tee` の引数、
+ * `cp`・`mv`・`install`・`ln` の行き先。execUnits が入れ子で呼ばれるゆえ、積んでは戻す。
+ */
+let writtenPaths: string[] = [];
+
+function writesOf(p: Parsed & { ok: true }): string[] {
+  const out = [...p.writes];
+  for (const c of p.commands) {
+    const name = c.argv[0] ? baseName(c.argv[0].value) : '';
+    const args = c.argv.slice(1).map((w) => w.value).filter((v) => !v.startsWith('-'));
+    if (name === 'tee') out.push(...args);
+    if (['cp', 'mv', 'install', 'ln'].includes(name) && args.length >= 2) out.push(args[args.length - 1]!);
+  }
+  return out;
+}
+
+function writtenInCommand(path: string, base: string): boolean {
+  const full = isAbsolute(path) ? path : join(base, path);
+  const cwd = process.cwd();
+  return writtenPaths.some((w) => w === path || (isAbsolute(w) ? w : join(cwd, w)) === full);
 }
 
 /** 実際に走る命を、包みと文字列越しの入れ子まで辿って集める。 */
 export function execUnits(p: Parsed, run: Runner, depth = 4): ExecScan {
   const out: ExecScan = { units: [] };
   if (!p.ok) return { units: [], unresolved: p.reason };
+  const saved = writtenPaths;
+  writtenPaths = [...saved, ...writesOf(p)];
+  try {
+    return execUnitsInner(p, run, depth, out);
+  } finally {
+    writtenPaths = saved;
+  }
+}
+
+function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, out: ExecScan): ExecScan {
   // shell へ流す字が見えねば、何が走るか解けぬ。**拒む**（直訴はできる）。
   // 手元の命の履歴 13,918 件で、これに当たる無害な命は 0 件だった（2026-10-20 に
   // 測った）。字が見える時（echo・printf・here-string）は解き手が置換と同じ

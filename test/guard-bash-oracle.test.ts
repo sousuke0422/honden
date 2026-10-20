@@ -33,8 +33,8 @@ describe('記録の形（箱を要さぬ）', () => {
 
   test('判じに効く読み違いは、#56 の群れに入っておる', () => {
     const corpus = new Set(loadCases(CORPUS).map((c) => c.cmd));
+    // 判じに効く読み違いは直して 0 件になりうる。在る時だけ、群れに入っておることを見る
     const impact = entries.filter((e) => e.impact);
-    expect(impact.length).toBeGreaterThan(0);
     expect(impact.every((e) => e.class === '解き手の読み違い')).toBe(true);
     expect(impact.filter((e) => !corpus.has(e.cmd)).map((e) => e.cmd)).toEqual([]);
   });
