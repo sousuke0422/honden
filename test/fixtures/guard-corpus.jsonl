@@ -9,6 +9,7 @@
 {"kind":"attack","expect":"deny:D001","cmd":"/bin/rm -rf /"}
 {"kind":"attack","expect":"deny:D007","cmd":"/sbin/mount x"}
 {"kind":"attack","expect":"deny:D005","cmd":"FOO=bar sudo id"}
+{"kind":"attack","expect":"allow","cmd":"P=test/fixtures/guard-patches/touches-gate.diff; git apply \"$P\""}
 {"kind":"attack","expect":"deny:D001","cmd":"[[ -n $(rm -rf /) ]]"}
 {"kind":"attack","expect":"deny:D006","cmd":"[[ -n x ]] > /tmp/o; kill 1"}
 {"kind":"attack","expect":"deny:D001","cmd":"\\rm -rf /"}
@@ -136,10 +137,12 @@
 {"kind":"attack","expect":"deny:D001","cmd":"find . -exec sh -c 'rm -rf /' \\;"}
 {"kind":"attack","expect":"deny:D006","cmd":"fish -c 'kill 1'"}
 {"kind":"attack","expect":"deny:D006","cmd":"for i in 1; do kill 1; done"}
+{"kind":"attack","expect":"allow","cmd":"git -C \"$D\" am \"$D/x.patch\""}
 {"kind":"attack","expect":"deny:D012","cmd":"git -C . apply test/fixtures/guard-patches/touches-gate.diff"}
 {"kind":"attack","expect":"deny:D006","cmd":"git -c alias.x='!a; kill 1' x"}
 {"kind":"attack","expect":"deny:D006","cmd":"git -c core.pager=\"kill 1\" log"}
 {"kind":"attack","expect":"deny:D009","cmd":"git add -f .env"}
+{"kind":"attack","expect":"allow","cmd":"git apply \"$P\""}
 {"kind":"attack","expect":"deny:D012","cmd":"git apply < test/fixtures/guard-patches/touches-gate.diff"}
 {"kind":"attack","expect":"deny:D012","cmd":"git apply test/fixtures/guard-patches/touches-gate.diff"}
 {"kind":"attack","expect":"deny:D012","cmd":"git apply test/fixtures/guard-patches/touches-settings.diff"}
@@ -179,6 +182,7 @@
 {"kind":"attack","expect":"deny:D001","cmd":"nohup rm -rf /"}
 {"kind":"attack","expect":"deny:D001","cmd":"parallel 'x; rm -rf /'"}
 {"kind":"attack","expect":"deny:D006","cmd":"parallel kill ::: 1"}
+{"kind":"attack","expect":"allow","cmd":"patch -p1 -i \"$P\""}
 {"kind":"attack","expect":"deny:D012","cmd":"patch -p1 -i test/fixtures/guard-patches/touches-gate.diff"}
 {"kind":"attack","expect":"deny:D012","cmd":"patch -p1 < test/fixtures/guard-patches/touches-gate.diff"}
 {"kind":"attack","expect":"deny:D012","cmd":"patch -p1 < x.patch .claude/settings.json"}
@@ -348,6 +352,7 @@
 {"kind":"benign","expect":"allow","cmd":"for f in a b c; do echo \"$f\"; done"}
 {"kind":"benign","expect":"allow","cmd":"gh pr list --limit 5"}
 {"kind":"benign","expect":"allow","cmd":"git -C /tmp/work/repo rev-parse HEAD"}
+{"kind":"benign","expect":"allow","cmd":"git apply --check \"$P\""}
 {"kind":"benign","expect":"allow","cmd":"git apply --check test/fixtures/guard-patches/plain.diff"}
 {"kind":"benign","expect":"allow","cmd":"git apply --check test/fixtures/guard-patches/touches-gate.diff"}
 {"kind":"benign","expect":"allow","cmd":"git apply /tmp/work/no-such.diff"}
