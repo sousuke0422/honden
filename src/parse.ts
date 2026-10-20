@@ -20,6 +20,7 @@
  * ——本日そう四度書いた。型で塞ぐのが最も確かである。
  */
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
 /** 語ひとつの素性。**引用されておるか**が最も重い。 */
@@ -69,6 +70,11 @@ export type Parsed =
       opaque: string[];
       /** 向き替えで書く先（`>`・`>>`）。同じ命の中で作られる file を見分けるため */
       writes: string[];
+      /**
+       * shell が標準入力から命として読む file の道（`bash < f`・`cat f | sh`・
+       * `ssh h 'bash -s' < f`）。門が読んで、中身を命として判ずる
+       */
+      shellFiles: string[];
     }
   | { ok: false; reason: string };
 
@@ -107,6 +113,7 @@ interface Raw {
   unhandled?: string[];
   opaque?: string[];
   writes?: string[];
+  shell_files?: string[];
 }
 
 /** 語の素性は**欠けたら真**に倒す——「印が無い」を「安全」と読まぬため。 */
@@ -156,6 +163,7 @@ export function interpret(ok: boolean, stdout: string): Parsed {
     substitutions: Array.isArray(raw.substitutions) ? raw.substitutions : [],
     opaque: Array.isArray(raw.opaque) ? raw.opaque : [],
     writes: Array.isArray(raw.writes) ? raw.writes : [],
+    shellFiles: Array.isArray(raw.shell_files) ? raw.shell_files : [],
   };
 }
 
@@ -222,10 +230,12 @@ export function units(p: Parsed): string[] {
 export function substUnits(p: Parsed, run: Runner, depth = 2): string[] {
   if (!p.ok || depth <= 0) return [];
   const out: string[] = [];
-  for (const s of p.substitutions) {
-    const inner = parseCommand(s, run);
-    out.push(...units(inner), ...looseExecUnits(inner, run), ...substUnits(inner, run, depth - 1));
-  }
+  withCtx(p, () => {
+    for (const s of p.substitutions) {
+      const inner = parseCommand(s, run);
+      out.push(...units(inner), ...looseExecUnits(inner, run), ...substUnits(inner, run, depth - 1));
+    }
+  });
   return out;
 }
 
@@ -267,10 +277,12 @@ export function heredocUnits(p: Parsed, run: Runner): string[] {
   });
   if (!toShell) return [];
   const out: string[] = [];
-  for (const h of p.heredocs) {
-    const inner = parseCommand(h, run);
-    out.push(...units(inner), ...looseExecUnits(inner, run));
-  }
+  withCtx(p, () => {
+    for (const h of p.heredocs) {
+      const inner = parseCommand(h, run);
+      out.push(...units(inner), ...looseExecUnits(inner, run));
+    }
+  });
   return out;
 }
 
@@ -315,6 +327,11 @@ export interface ExecScan {
   units: string[];
   /** 解けなんだ理由。**在れば拒む** */
   unresolved?: string;
+  /**
+   * file（shell へ流す file・当てる patch）を読めなんだ理由。unresolved にも入る。命令置換の
+   * 中身は解けぬ所を拒まずに照らすが、file を読めぬ形だけは拒む（execUnitsInner が拾う）
+   */
+  fileUnresolved?: string;
 }
 
 /** 名から道を落とす。`/bin/rm` → `rm`。 */
@@ -409,7 +426,11 @@ function descendScript(w: Word, run: Runner, depth: number, out: ExecScan): void
     out.unresolved = out.unresolved ?? `走らせる文字列を解けぬ（${inner.reason}）`;
     return;
   }
-  for (const c of inner.commands) resolveArgv(c.argv, run, depth - 1, out);
+  // 中で読む file と、中で書く file も見る（`ssh h 'printf … > f.sh; bash < f.sh'`）
+  withCtx(inner, () => {
+    for (const c of inner.commands) resolveArgv(c.argv, run, depth - 1, out);
+    for (const f of inner.shellFiles) descendShellFile(f, run, depth - 1, out);
+  });
 }
 
 /**
@@ -446,9 +467,12 @@ function descendLoose(
   // 読むか判じきれぬ語（script へ渡す引数・coder ssh の命）に使う。今の門はこれらの字の
   // 頭の命を通し、切れ目の後ろの命だけを（引用の中の `;` に錨が当たって）止めておった。
   // 頭まで照らすと、遠方で打つ `kill` の類が新たに止まり、絶対域ゆえ直訴もできぬ
-  for (const c of afterFirst ? inner.commands.slice(1) : inner.commands) {
-    resolveArgv(c.argv, run, depth - 1, sub);
-  }
+  withCtx(inner, () => {
+    for (const c of afterFirst ? inner.commands.slice(1) : inner.commands) {
+      resolveArgv(c.argv, run, depth - 1, sub);
+    }
+    if (!afterFirst) for (const f of inner.shellFiles) descendShellFile(f, run, depth - 1, sub);
+  });
   out.units.push(...sub.units);
 }
 
@@ -709,8 +733,14 @@ function shellCallsIn(lang: string, src: string): { cmds: string[]; opaque: numb
 
 // ── patch を当てる命（git apply・git am・patch） ──
 
-/** 門が読む patch の大きさの上限。超えれば読まずに「解けぬ」へ倒す。 */
-const MAX_PATCH_BYTES = 1 << 20;
+/**
+ * 門が読む file（patch と、shell へ流す file）の大きさの上限。超えれば読まずに「解けぬ」へ倒す。
+ *
+ * patch と同じ 1 MiB にしてある。shell へ流す file は手で書く短い手順が常で、patch より
+ * 大きくなる筋は薄い。門は命ごとに file を読むゆえ、上限は待ちの長さの上限でもある。
+ * 二つに分けると、片方だけを大きな file で溢れさせる道が残るゆえ、一つの値で持つ
+ */
+const MAX_READ_BYTES = 1 << 20;
 
 /** patch が書き換える file の道。`--- a/x`・`+++ b/x`・`diff --git a/x b/y`・rename・copy。 */
 export function patchTargets(text: string): string[] {
@@ -730,14 +760,13 @@ export function patchTargets(text: string): string[] {
 }
 
 /**
- * patch の file を読む。**辿らず、待たず、溢れさせぬ。**
+ * 門が中身を判ずる file を読む。**辿らず、待たず、溢れさせぬ。**
  *
- * - 在らぬ: missing（当てる命も落ちるゆえ、通す）
+ * - 在らぬ: missing（読む命も落ちる。ただし同じ命の中で作られうるかは readSource が見る）
  * - symlink・並の file でない（FIFO や dev）・上限を超える・読めぬ: unreadable（拒む）。
  *   lstat で見るゆえ symlink を辿らず、FIFO を開かぬ（開けば門が待ちに落ちる）
  */
-function readPatch(path: string, base: string): { text: string } | { missing: true } | { unreadable: string } {
-  const full = isAbsolute(path) ? path : join(base, path);
+function readGuarded(path: string, full: string): { text: string } | { missing: true } | { unreadable: string } {
   let st;
   try {
     st = lstatSync(full);
@@ -746,7 +775,7 @@ function readPatch(path: string, base: string): { text: string } | { missing: tr
   }
   if (st.isSymbolicLink()) return { unreadable: `${path} は symlink` };
   if (!st.isFile()) return { unreadable: `${path} は並の file でない` };
-  if (st.size > MAX_PATCH_BYTES) return { unreadable: `${path} が大きすぎる（${st.size} byte）` };
+  if (st.size > MAX_READ_BYTES) return { unreadable: `${path} が大きすぎる（${st.size} byte）` };
   try {
     return { text: readFileSync(full, 'utf8') };
   } catch {
@@ -755,12 +784,56 @@ function readPatch(path: string, base: string): { text: string } | { missing: tr
 }
 
 /**
+ * 命が読む file の中身を、門が判ずる時の姿で返す。
+ *
+ * **判ずる時の姿と、走る時の姿が割れる形を拒む。** 門は命が走る前に file を読む。同じ命の
+ * 中で file を作る・書き換える・link を張る命が在れば、走る時の中身は門が読んだ物と違う。
+ *
+ * - 同じ命の中で書かれうる（向き替えの先・`tee`・`cp` の類の行き先・読むだけでない命の語に
+ *   その道が出る）: 拒む。在っても在らずとも拒む——在る file に書き足してから流す形も同じ罪である
+ * - 在らぬ: 命が一つだけなら通す（読む命が落ちるだけ。打ち間違いを止めぬ）。書かぬ命
+ *   （`ls`・`test`・`cd` の類）は数えぬ。他に命が在れば拒む。`curl -o`・`tar -x`・`git checkout` の類まで書く命の名を数え切れぬゆえ、名ではなく
+ *   「他に命が在るか」で決める
+ * - 相対の道は、`cd` の先の候補の全てで読む。一つでも読めねば拒み、在る物は全て判ずる。
+ *   `cd` の先が字面で決まらぬ（`cd "$D"`・`cd -`）なら拒む
+ *
+ * `self` は file を読む命そのもの（`git apply x.diff` の `x.diff` は、書く語ではない）。
+ */
+function readSource(path: string, self: Cmd | undefined, extraBase?: string): { texts: string[] } | { unreadable: string } {
+  let fulls: string[];
+  if (isAbsolute(path)) fulls = [path];
+  else if (extraBase && isAbsolute(extraBase)) fulls = [join(extraBase, path)];
+  else if (ctx.bases === undefined) return { unreadable: `${path} は cd の先が字面で決まらぬ道にある` };
+  else fulls = [...new Set(ctx.bases.map((b) => join(extraBase ? join(b, extraBase) : b, path)))];
+  if (touchedInCommand(path, fulls, self)) return { unreadable: `${path} は同じ命の中で書かれうる` };
+  const texts: string[] = [];
+  for (const full of fulls) {
+    const r = readGuarded(path, full);
+    if ('unreadable' in r) return r;
+    if ('text' in r) texts.push(r.text);
+  }
+  if (texts.length === 0 && ctx.commands > 1) {
+    return { unreadable: `${path} は門が読む時に無く、同じ命の中で作られうる` };
+  }
+  return { texts };
+}
+
+/**
  * patch を当てる命なら、patch が書き換える file の道を返す（門の D012 が当たるよう、
  * emit の字に足す）。patch の出所は引数の file か、標準入力。
  */
 function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { targets: string[] } | { unreadable: string } | undefined {
-  let base = process.cwd();
+  // `git -C <dir>`・`patch -d <dir>` の道。cd の先の候補の下に足す
+  let base = '';
   const files: string[] = [];
+  // 道が展開に依る patch（`git apply "$P"`）は、門には何を当てるか読めぬ。前は在らぬ道と読んで
+  // 通しておった——中身が門の本体を書き換える patch でも素通りする
+  let dynamic: string | undefined;
+  const take = (w: Word | undefined) => {
+    if (!w) return;
+    if (w.var || w.cmdsubst) dynamic = dynamic ?? w.text;
+    files.push(w.value);
+  };
   let fromStdin = false;
   if (name === 'git') {
     let i = 1;
@@ -780,55 +853,52 @@ function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { t
     if (subc === 'apply' && opts.some((v) => ['--check', '--stat', '--numstat', '--summary'].includes(v)) && !opts.includes('--apply')) {
       return { targets: [] };
     }
-    for (const w of argv.slice(i + 1)) if (!w.value.startsWith('-')) files.push(w.value);
+    for (const w of argv.slice(i + 1)) if (!w.value.startsWith('-')) take(w);
     fromStdin = files.length === 0;
   } else if (name === 'patch') {
-    const pos: string[] = [];
+    const pos: Word[] = [];
     const VALUES = ['-p', '-d', '-o', '-r', '-B', '-V', '-z', '-D', '-F', '-g', '-Y', '--directory', '--output', '--reject-file'];
     // `--dry-run` は当てずに見るだけ
     if (argv.some((w) => w.value === '--dry-run')) return { targets: [] };
     for (let i = 1; i < argv.length; i++) {
       const v = argv[i]!.value;
       if (v === '-i' || v === '--input') {
-        if (argv[i + 1]) files.push(argv[i + 1]!.value);
+        take(argv[i + 1]);
         i++;
-      } else if (v.startsWith('--input=')) files.push(v.slice('--input='.length));
+      } else if (v.startsWith('--input=')) {
+        if (argv[i]!.var || argv[i]!.cmdsubst) dynamic = dynamic ?? argv[i]!.text;
+        files.push(v.slice('--input='.length));
+      }
       else if (v === '-d' || v === '--directory') {
         if (argv[i + 1]) base = join(base, argv[i + 1]!.value);
         i++;
       } else if (VALUES.includes(v)) i++;
-      else if (!v.startsWith('-')) pos.push(v);
+      else if (!v.startsWith('-')) pos.push(argv[i]!);
     }
-    if (files.length === 0 && pos.length >= 2) files.push(pos[1]!);
+    if (files.length === 0 && pos.length >= 2) take(pos[1]);
     fromStdin = files.length === 0;
   } else {
     return undefined;
   }
+  if (dynamic !== undefined) return { unreadable: `${dynamic} は道が展開に依る` };
   const targets: string[] = [];
-  const add = (r: ReturnType<typeof readPatch>) => {
+  // 同じ命の中で作ってから当てる形（`printf … > late.diff; git apply late.diff`）は、
+  // 門が読む時にはまだ無いか、読んだ物と当てる物が違う。readSource が拒む
+  const add = (f: string) => {
+    const r = readSource(f, ctx.current, base || undefined);
     if ('unreadable' in r) return r.unreadable;
-    if ('text' in r) targets.push(...patchTargets(r.text));
+    for (const t of r.texts) targets.push(...patchTargets(t));
     return undefined;
   };
   for (const f of files) {
-    const r = readPatch(f, base);
-    // 在らぬ file でも、同じ命の中で書かれるなら、当てる時には在る。門が読む時にはまだ
-    // 無いゆえ、中身が見えぬ（`printf … > late.diff; git apply late.diff`）
-    if ('missing' in r && writtenInCommand(f, base)) {
-      return { unreadable: `${f} は同じ命の中で作られ、門が読む時にはまだ無い` };
-    }
-    const bad = add(r);
+    const bad = add(f);
     if (bad) return { unreadable: bad };
   }
   if (fromStdin && stdin) {
     if ('opaque' in stdin) return { unreadable: '標準入力から読む patch の中身が見えぬ' };
     if ('text' in stdin) targets.push(...patchTargets(stdin.text));
     if ('file' in stdin) {
-      const r = readPatch(stdin.file, base);
-      if ('missing' in r && writtenInCommand(stdin.file, base)) {
-        return { unreadable: `${stdin.file} は同じ命の中で作られ、門が読む時にはまだ無い` };
-      }
-      const bad = add(r);
+      const bad = add(stdin.file);
       if (bad) return { unreadable: bad };
     }
   }
@@ -949,6 +1019,7 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
     const pc = patchCommand(name, argv, stdin);
     if (pc && 'unreadable' in pc) {
       out.unresolved = out.unresolved ?? `当てる patch を読めぬ（${pc.unreadable}）`;
+      out.fileUnresolved = out.fileUnresolved ?? out.unresolved;
       return;
     }
     if (pc && pc.targets.length > 0) {
@@ -1008,10 +1079,31 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
 }
 
 /**
- * いま辿っておる命の中で書かれる file の道。向き替えの先（解き手が返す）と、`tee` の引数、
- * `cp`・`mv`・`install`・`ln` の行き先。execUnits が入れ子で呼ばれるゆえ、積んでは戻す。
+ * いま辿っておる命の、file を読む時に要る周り。execUnits が入れ子で呼ばれる（`sh -c '…'`・
+ * 流す file の中身）ゆえ、外の命の分を引き継いで積み、出る時に戻す。
+ *
+ * - writes: 書く先。向き替えの先（解き手が返す）と、`tee` の引数、`cp`・`mv`・`install`・`ln` の行き先
+ * - mentions: 読むだけでない命の語。`curl -o x`・`sed -i … x` のように、書く命の名と旗を
+ *   数え切れぬゆえ、語にその道が出れば書かれうると見る
+ * - commands: 書かぬ命（READERS）を除いた命の数。在らぬ file を、他に命が在る時は作られうると見る
+ * - bases: 相対の道を読む先の候補。`cd` の先を足す。字面で決まらぬ cd が在れば undefined
+ * - current: いま辿っておる命（file を読む命そのものの語は、書く語に数えぬ）
  */
-let writtenPaths: string[] = [];
+interface ReadCtx {
+  writes: string[];
+  mentions: { cmd: Cmd; words: string[] }[];
+  commands: number;
+  bases: string[] | undefined;
+  current: Cmd | undefined;
+}
+
+let ctx: ReadCtx = { writes: [], mentions: [], commands: 0, bases: undefined, current: undefined };
+
+/** 書かぬ命。語に道が出ても、その file を書き換えぬ */
+const READERS = new Set([
+  'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'test', '[', 'ls', 'stat', 'file',
+  'sha256sum', 'sha1sum', 'md5sum', 'diff', 'cmp', 'echo', 'printf', 'cd', 'pushd',
+]);
 
 function writesOf(p: Parsed & { ok: true }): string[] {
   const out = [...p.writes];
@@ -1024,22 +1116,110 @@ function writesOf(p: Parsed & { ok: true }): string[] {
   return out;
 }
 
-function writtenInCommand(path: string, base: string): boolean {
-  const full = isAbsolute(path) ? path : join(base, path);
-  const cwd = process.cwd();
-  return writtenPaths.some((w) => w === path || (isAbsolute(w) ? w : join(cwd, w)) === full);
+/** cd の先の候補。字面で決まらぬ cd（`cd "$D"`・`cd -`・置換）が在れば undefined。 */
+function basesOf(p: Parsed & { ok: true }, inherited: string[] | undefined): string[] | undefined {
+  if (inherited === undefined) return undefined;
+  const out = [...inherited];
+  let cur = out[out.length - 1]!;
+  for (const c of p.commands) {
+    const name = c.argv[0] ? baseName(c.argv[0].value) : '';
+    if (name !== 'cd' && name !== 'pushd' && name !== 'popd') continue;
+    const args = c.argv.slice(1).filter((w) => w.value !== '--' && !/^-[LPe@]+$/.test(w.value));
+    if (name === 'popd' || args.length > 1) return undefined;
+    const a = args[0];
+    if (a === undefined) cur = homedir();
+    else if (a.var || a.cmdsubst || a.value === '-') return undefined;
+    else if (a.value === '~' || a.value.startsWith('~/')) cur = join(homedir(), a.value.slice(1));
+    else cur = isAbsolute(a.value) ? a.value : join(cur, a.value);
+    out.push(cur);
+  }
+  return [...new Set(out)];
+}
+
+function touchedInCommand(path: string, fulls: string[], self: Cmd | undefined): boolean {
+  const same = (w: string) => {
+    if (w === path) return true;
+    const bases = ctx.bases ?? [process.cwd()];
+    return bases.some((b) => fulls.includes(isAbsolute(w) ? w : join(b, w)));
+  };
+  if (ctx.writes.some(same)) return true;
+  return ctx.mentions.some(
+    (m) =>
+      m.cmd !== self &&
+      m.words.some((w) => same(w) || (w.startsWith('-') && w.endsWith(path)) || w.endsWith(`=${path}`)),
+  );
+}
+
+/**
+ * p の命の周りを積んで fn を走らせ、出る時に戻す。execUnits と、門が後で別に解く命令置換と
+ * heredoc の中身（substUnits・heredocUnits）が通る。後者が外の命の周りを引き継がねば、
+ * `printf … > f.sh; echo "$(bash < f.sh)"` の中の `bash < f.sh` を、命が一つだけの形と読む
+ */
+function withCtx<T>(p: Parsed & { ok: true }, fn: () => T): T {
+  const saved = ctx;
+  const outer = saved.bases === undefined && saved.commands === 0;
+  ctx = {
+    writes: [...saved.writes, ...writesOf(p)],
+    mentions: [
+      ...saved.mentions,
+      ...p.commands
+        .filter((c) => !READERS.has(c.argv[0] ? baseName(c.argv[0].value) : ''))
+        .map((cmd) => ({ cmd, words: cmd.argv.slice(1).map((w) => w.value) })),
+    ],
+    // 書かぬ命（READERS）は数えぬ。命令置換の中身は命である（shell へ流す heredoc と字も、解き手が
+    // 置換と同じ群れへ渡す）。外で一つと数えると、中で作る形を見落とす
+    commands:
+      saved.commands +
+      p.commands.filter((c) => !READERS.has(c.argv[0] ? baseName(c.argv[0].value) : '')).length +
+      p.substitutions.length,
+    bases: basesOf(p, outer ? [process.cwd()] : saved.bases),
+    current: saved.current,
+  };
+  try {
+    return fn();
+  } finally {
+    ctx = saved;
+  }
 }
 
 /** 実際に走る命を、包みと文字列越しの入れ子まで辿って集める。 */
 export function execUnits(p: Parsed, run: Runner, depth = 4): ExecScan {
   const out: ExecScan = { units: [] };
   if (!p.ok) return { units: [], unresolved: p.reason };
-  const saved = writtenPaths;
-  writtenPaths = [...saved, ...writesOf(p)];
-  try {
-    return execUnitsInner(p, run, depth, out);
-  } finally {
-    writtenPaths = saved;
+  return withCtx(p, () => execUnitsInner(p, run, depth, out));
+}
+
+/**
+ * shell が標準入力から読む file の中身を、命として辿る。heredoc で同じ中身を流した時と同じく、
+ * 中身の命・命令置換・heredoc を集める。
+ *
+ * **中身の解けぬ所は拒む**（heredoc と違う所）。heredoc の中身は命の生の字に含まれ、門の
+ * 紋様の層（`curl … | sh` の D008 など）が字面で照らす。file の中身は生の字に無いゆえ、
+ * 紋様の層が見ぬ。解けた命だけを照らして通すと、管で shell へ流す形が抜ける
+ */
+function descendShellFile(f: string, run: Runner, depth: number, out: ExecScan): void {
+  const r = readSource(f, undefined);
+  if ('unreadable' in r) {
+    out.unresolved = out.unresolved ?? `shell へ流す file を読めぬ（${r.unreadable}）`;
+    out.fileUnresolved = out.fileUnresolved ?? out.unresolved;
+    return;
+  }
+  for (const text of r.texts) {
+    if (depth - 1 <= 0) {
+      out.unresolved = out.unresolved ?? '入れ子が深すぎる、または命が多すぎる';
+      return;
+    }
+    const inner = parseCommand(text, run);
+    if (!inner.ok) {
+      out.unresolved = out.unresolved ?? `shell へ流す file を解けぬ（${f}: ${inner.reason}）`;
+      return;
+    }
+    const scan = execUnits(inner, run, depth - 1);
+    if (scan.unresolved !== undefined) {
+      out.unresolved = out.unresolved ?? `shell へ流す file の中身（${f}）: ${scan.unresolved}`;
+    }
+    if (scan.fileUnresolved !== undefined) out.fileUnresolved = out.fileUnresolved ?? scan.fileUnresolved;
+    out.units.push(...units(inner), ...scan.units, ...substUnits(inner, run), ...heredocUnits(inner, run));
   }
 }
 
@@ -1051,6 +1231,26 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
   if (p.opaque.length > 0) {
     out.unresolved = `shell へ流す字が見えぬ（${p.opaque.join(' / ')}）`;
   }
-  for (const c of p.commands) resolveArgv(c.argv, run, depth, out, c.stdin);
+  for (const c of p.commands) {
+    ctx.current = c;
+    resolveArgv(c.argv, run, depth, out, c.stdin);
+  }
+  ctx.current = undefined;
+  for (const f of p.shellFiles) descendShellFile(f, run, depth, out);
+  // 命令置換と、shell へ流す heredoc の中で file を読む形（shell へ流す heredoc と字は、解き手が
+  // 置換と同じ群れへ渡す。shell でない命へ渡す heredoc は字であって命ではない）。門はこれらの中身を後で解くが、
+  // 解けぬ所を拒まぬ（substUnits）。file を読めぬ形だけはここで拒む
+  // （`echo "$(printf … > f.sh; bash < f.sh)"`）
+  if (depth - 1 > 0) {
+    for (const s of p.substitutions) {
+      const inner = parseCommand(s, run);
+      if (!inner.ok) continue;
+      const scan = execUnits(inner, run, depth - 1);
+      if (scan.fileUnresolved !== undefined) {
+        out.unresolved = out.unresolved ?? scan.fileUnresolved;
+        out.fileUnresolved = out.fileUnresolved ?? scan.fileUnresolved;
+      }
+    }
+  }
   return out;
 }

@@ -87,6 +87,9 @@ struct Extract {
     opaque: Vec<String>,
     /// 向き替えで書く先（`>`・`>>`・`>|`・`<>`）。同じ命の中で作られる file を門が知るため
     writes: Vec<String>,
+    /// shell が標準入力から命として読む file の道（`bash < f`・`cat f | sh`・`ssh h 'bash -s' < f`）。
+    /// 門が file を読んで中身を命として判ずる。読めねば門が拒む
+    shell_files: Vec<String>,
 }
 
 /// 語を解いて素性を得る。
@@ -757,7 +760,7 @@ fn shell_stdin(p: &ast::Pipeline, out: &mut Extract, opts: &brush_parser::Parser
             };
             match src {
                 Stdin::Text(t) => f_push_subst(&t),
-                Stdin::File(_) => out.opaque.push(format!("{shell} が file から読む命は見えぬ")),
+                Stdin::File(f) => out.shell_files.push(f),
                 Stdin::Opaque => out.opaque.push(format!("{shell} へ流す字が見えぬ")),
                 Stdin::None => {}
             }
@@ -1016,13 +1019,14 @@ fn main() {
         .collect();
 
     println!(
-        "{{\"ok\":true,\"complete\":{},\"commands\":[{}],\"heredocs\":{},\"substitutions\":{},\"unhandled\":{},\"opaque\":{},\"writes\":{}}}",
+        "{{\"ok\":true,\"complete\":{},\"commands\":[{}],\"heredocs\":{},\"substitutions\":{},\"unhandled\":{},\"opaque\":{},\"writes\":{},\"shell_files\":{}}}",
         out.unhandled.is_empty(),
         cmds.join(","),
         arr(&out.heredocs),
         arr(&out.substs),
         arr(&out.unhandled),
         arr(&out.opaque),
-        arr(&out.writes)
+        arr(&out.writes),
+        arr(&out.shell_files)
     );
 }
