@@ -50,6 +50,11 @@ export interface Cmd {
   assigns: string[];
   /** 標準入力の出所（解き手が返す）。無ければ端末か、何も繋がっておらぬ */
   stdin?: Stdin;
+  /**
+   * この命が script として走らせる file（`bash x.sh`・`source x.sh`・`. x.sh`・`bash <(cat x.sh)`）。
+   * 道に展開が在れば dynamic。門が読んで、中身を命として判ずる
+   */
+  script?: { path: string; dynamic: boolean; sourced: boolean; proc: boolean; posix: boolean };
 }
 
 /** 標準入力の出所。`< file`・`cat file |` は file、heredoc や字どおりの管は text。 */
@@ -75,6 +80,8 @@ export type Parsed =
        * `ssh h 'bash -s' < f`）。門が読んで、中身を命として判ずる
        */
       shellFiles: string[];
+      /** `cat > f <<'EOF' … EOF` で書く file と本文。書いてから走らせる script を、門が本文で判ずる */
+      writtenTexts: { path: string; text: string }[];
     }
   | { ok: false; reason: string };
 
@@ -107,13 +114,14 @@ interface Raw {
   ok: boolean;
   error?: string;
   complete?: boolean;
-  commands?: { argv?: Partial<Word>[]; assigns?: string[]; stdin?: unknown }[];
+  commands?: { argv?: Partial<Word>[]; assigns?: string[]; stdin?: unknown; script?: unknown }[];
   heredocs?: string[];
   substitutions?: string[];
   unhandled?: string[];
   opaque?: string[];
   writes?: string[];
   shell_files?: string[];
+  written_texts?: { path?: unknown; text?: unknown }[];
 }
 
 /** 語の素性は**欠けたら真**に倒す——「印が無い」を「安全」と読まぬため。 */
@@ -158,12 +166,32 @@ export function interpret(ok: boolean, stdout: string): Parsed {
       argv: (c.argv ?? []).map(word),
       assigns: Array.isArray(c.assigns) ? c.assigns : [],
       stdin: stdinOf(c.stdin),
+      script: scriptOf(c.script),
     })),
     heredocs: Array.isArray(raw.heredocs) ? raw.heredocs : [],
     substitutions: Array.isArray(raw.substitutions) ? raw.substitutions : [],
     opaque: Array.isArray(raw.opaque) ? raw.opaque : [],
     writes: Array.isArray(raw.writes) ? raw.writes : [],
     shellFiles: Array.isArray(raw.shell_files) ? raw.shell_files : [],
+    writtenTexts: Array.isArray(raw.written_texts)
+      ? raw.written_texts.flatMap((w) =>
+          typeof w?.path === 'string' && typeof w?.text === 'string' ? [{ path: w.path, text: w.text }] : [],
+        )
+      : [],
+  };
+}
+
+/** 返事の script を型へ畳む。道が字でなければ無いと読まず、展開に依ると倒す。 */
+function scriptOf(v: unknown): Cmd['script'] {
+  if (v === null || v === undefined || typeof v !== 'object') return undefined;
+  const o = v as { path?: unknown; dynamic?: unknown; sourced?: unknown; proc?: unknown; posix?: unknown };
+  if (typeof o.path !== 'string') return { path: '', dynamic: true, sourced: false, proc: false, posix: false };
+  return {
+    path: o.path,
+    dynamic: o.dynamic !== false,
+    sourced: o.sourced === true,
+    proc: o.proc === true,
+    posix: o.posix !== false,
   };
 }
 
@@ -332,6 +360,11 @@ export interface ExecScan {
    * 中身は解けぬ所を拒まずに照らすが、file を読めぬ形だけは拒む（execUnitsInner が拾う）
    */
   fileUnresolved?: string;
+  /**
+   * 門が読んだ file の中身の命。命の数の上限（MAX_UNITS）に数えぬよう units とは別に積み、
+   * execUnits の終わりに units へ足す。大きな script の中身で、後ろの命が「多すぎる」に落ちぬため
+   */
+  fromFiles?: string[];
 }
 
 /** 名から道を落とす。`/bin/rm` → `rm`。 */
@@ -473,7 +506,7 @@ function descendLoose(
     }
     if (!afterFirst) for (const f of inner.shellFiles) descendShellFile(f, run, depth - 1, sub);
   });
-  out.units.push(...sub.units);
+  out.units.push(...sub.units, ...(sub.fromFiles ?? []));
 }
 
 /** 語がすべて字面のままか（変数も命令置換も含まぬ）。 */
@@ -799,12 +832,26 @@ function readGuarded(path: string, full: string): { text: string } | { missing: 
  *
  * `self` は file を読む命そのもの（`git apply x.diff` の `x.diff` は、書く語ではない）。
  */
-function readSource(path: string, self: Cmd | undefined, extraBase?: string): { texts: string[] } | { unreadable: string } {
+function readSource(
+  path: string,
+  self: Cmd | undefined,
+  extraBase?: string,
+  searchPath = false,
+): { texts: string[] } | { unreadable: string } {
+  // `~` は shell が家に替える（`source ~/.bashrc`・`bash < ~/x.sh`）
+  if (path === '~' || path.startsWith('~/')) path = join(homedir(), path.slice(1));
   let fulls: string[];
   if (isAbsolute(path)) fulls = [path];
   else if (extraBase && isAbsolute(extraBase)) fulls = [join(extraBase, path)];
   else if (ctx.bases === undefined) return { unreadable: `${path} は cd の先が字面で決まらぬ道にある` };
   else fulls = [...new Set(ctx.bases.map((b) => join(extraBase ? join(b, extraBase) : b, path)))];
+  // `source f` の f に `/` が無ければ、bash は PATH の上から先に探す。PATH の上の物も読む
+  if (searchPath && !path.includes('/')) {
+    for (const d of (process.env.PATH ?? '').split(':')) if (d !== '' && isAbsolute(d)) fulls.push(join(d, path));
+  }
+  // `cat > f <<'EOF' … EOF` で書き、他に書く命も道の名を持つ命も無ければ、本文がその file の中身である
+  const written = writtenText(path, fulls, self);
+  if (written !== undefined) return { texts: [written] };
   if (touchedInCommand(path, fulls, self)) return { unreadable: `${path} は同じ命の中で書かれうる` };
   const texts: string[] = [];
   for (const full of fulls) {
@@ -812,7 +859,7 @@ function readSource(path: string, self: Cmd | undefined, extraBase?: string): { 
     if ('unreadable' in r) return r;
     if ('text' in r) texts.push(r.text);
   }
-  if (texts.length === 0 && ctx.commands > 1) {
+  if (texts.length === 0 && ctx.commands > 1 && !ctx.inFile) {
     return { unreadable: `${path} は門が読む時に無く、同じ命の中で作られうる` };
   }
   return { texts };
@@ -1093,20 +1140,48 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
  */
 interface ReadCtx {
   writes: string[];
-  mentions: { cmd: Cmd; words: string[] }[];
+  mentions: { cmd: Cmd; words: Word[] }[];
   commands: number;
   bases: string[] | undefined;
   current: Cmd | undefined;
   ancestors: Cmd[];
+  /**
+   * 門が読んだ file の中身を辿っておる。rc の類は在らぬ file を条件つきで読む
+   * （`[ -f ~/.bash_aliases ] && . ~/.bash_aliases`）。中身の中では、在らず書かれもせぬ file を通す
+   */
+  inFile: boolean;
+  /** `cat > f <<'EOF' … EOF` で書く file と本文 */
+  writtenTexts: { path: string; text: string }[];
+  /** 字どおりの代入（`S=/tmp/x` だけの命）。`bash $S/run.sh` の道を解くため */
+  vars: Map<string, string>;
 }
 
-let ctx: ReadCtx = { writes: [], mentions: [], commands: 0, bases: undefined, current: undefined, ancestors: [] };
+let ctx: ReadCtx = {
+  writes: [],
+  mentions: [],
+  commands: 0,
+  bases: undefined,
+  current: undefined,
+  ancestors: [],
+  inFile: false,
+  writtenTexts: [],
+  vars: new Map(),
+};
 
 /** 書かぬ命。語に道が出ても、その file を書き換えぬ */
 const READERS = new Set([
   'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'test', '[', 'ls', 'stat', 'file',
   'sha256sum', 'sha1sum', 'md5sum', 'diff', 'cmp', 'echo', 'printf', 'cd', 'pushd',
 ]);
+
+/**
+ * 語に道が出ても、その file の中身を書かぬ命。READERS に、読み込むだけの `source`・`.` と、中身を
+ * 変えぬ `chmod`・`chown`・`touch`、消すだけの `rm` の類を足す（cmd_305 の手元の履歴で、走らせた後に
+ * 片付ける `rm … x.sh` と、`chmod +x x.sh && bash x.sh` が止まっておった）。
+ * 読み込む file の中で書く命は、門がその file を辿る時に見る。命の数（READERS で数える）には
+ * 足さぬ——読み込む script が file を作りうるゆえ
+ */
+const MENTION_READERS = new Set([...READERS, 'source', '.', 'chmod', 'chown', 'touch', 'rm', 'rmdir', 'unlink']);
 
 function writesOf(p: Parsed & { ok: true }): string[] {
   const out = [...p.writes];
@@ -1146,6 +1221,56 @@ function touchedInCommand(path: string, fulls: string[], self: Cmd | undefined):
     return bases.some((b) => fulls.includes(isAbsolute(w) ? w : join(b, w)));
   };
   if (ctx.writes.some(same)) return true;
+  return mentionedInCommand(path, fulls, self);
+}
+
+/** 道が、その道を指す語か。相対の道は cd の先の候補で解く。 */
+function samePath(w: string, path: string, fulls: string[]): boolean {
+  if (w === path) return true;
+  const bases = ctx.bases ?? [process.cwd()];
+  return bases.some((b) => fulls.includes(isAbsolute(w) ? w : join(b, w)));
+}
+
+/**
+ * `cat > f <<'EOF' … EOF` で書く本文。書く命がそれ一つだけで（向き替えの先にも一度だけ出る）、
+ * 読むだけでない命の語に道の名が出ぬ時に限り返す。他に書く命が在れば、走る時の中身は本文と違いうる
+ */
+function writtenText(path: string, fulls: string[], self: Cmd | undefined): string | undefined {
+  const hits = ctx.writtenTexts.filter((w) => samePath(w.path, path, fulls));
+  if (hits.length !== 1) return undefined;
+  if (ctx.writes.filter((w) => samePath(w, path, fulls)).length !== 1) return undefined;
+  if (mentionedInCommand(path, fulls, self)) return undefined;
+  return hits[0]!.text;
+}
+
+/**
+ * 字どおりの代入だけの命（`S=/tmp/x`・`S="/tmp/x"`）を集める。値に展開が在る物と、後で別の値を
+ * 置く物は解かぬ（どちらが効くか、門には決められぬ）
+ */
+function varsOf(p: Parsed & { ok: true }, inherited: Map<string, string>): Map<string, string> {
+  const out = new Map(inherited);
+  const seen = new Set<string>();
+  for (const c of p.commands) {
+    if (c.argv.length > 0) continue;
+    for (const a of c.assigns) {
+      const m = /^([A-Za-z_]\w*)=(.*)$/s.exec(a);
+      if (!m) continue;
+      const [, name, raw] = m as unknown as [string, string, string];
+      const v = /^"([^"$`\\]*)"$|^'([^']*)'$|^([^"'$`\\\s;&|<>()]*)$/.exec(raw);
+      if (!v || seen.has(name)) {
+        out.delete(name);
+        seen.add(name);
+        continue;
+      }
+      seen.add(name);
+      out.set(name, v[1] ?? v[2] ?? v[3] ?? '');
+    }
+  }
+  return out;
+}
+
+function mentionedInCommand(path: string, fulls: string[], self: Cmd | undefined): boolean {
+  const same = (w: string) => samePath(w, path, fulls);
   // 語の一語が道そのものでなくとも、字の中に道の末の名を持てば書かれうると見る。
   // `python3 -c "open('f.sh','a')…"`・`sh -c 'echo … >> f.sh'`・`awk '{ print … >> "f.sh" }'` の
   // 類は、書く先を引用の中の字に持つ（軍師の検め #1205 が見つけた穴）。道そのものでなく末の名で
@@ -1157,7 +1282,12 @@ function touchedInCommand(path: string, fulls: string[], self: Cmd | undefined):
     (m) =>
       m.cmd !== self &&
       !ctx.ancestors.includes(m.cmd) &&
-      m.words.some((w) => same(w) || (name !== '' && w.includes(name))),
+      // 同じ file を script として走らせる命（一つの行で `bash x.sh a; bash x.sh b`）は、その file を
+      // 書く命に数えぬ。走らせる script の中で書く命は、門がその中身を辿る時に見る
+      !(m.cmd.script && !m.cmd.script.dynamic && same(m.cmd.script.path)) &&
+      // 命令置換を持つ語の中の字は、置換の中身として別に辿る（`gh -R "$(bash x.sh …)"` の x.sh は
+      // 書く先ではない）。部分文字列で当てるのは、置換を持たぬ語だけにする
+      m.words.some((w) => same(w.value) || (name !== '' && !w.cmdsubst && w.value.includes(name))),
   );
 }
 
@@ -1174,8 +1304,8 @@ function withCtx<T>(p: Parsed & { ok: true }, fn: () => T): T {
     mentions: [
       ...saved.mentions,
       ...p.commands
-        .filter((c) => !READERS.has(c.argv[0] ? baseName(c.argv[0].value) : ''))
-        .map((cmd) => ({ cmd, words: cmd.argv.slice(1).map((w) => w.value) })),
+        .filter((c) => !MENTION_READERS.has(c.argv[0] ? baseName(c.argv[0].value) : ''))
+        .map((cmd) => ({ cmd, words: cmd.argv.slice(1) })),
     ],
     // 書かぬ命（READERS）は数えぬ。命令置換の中身は命である（shell へ流す heredoc と字も、解き手が
     // 置換と同じ群れへ渡す）。外で一つと数えると、中で作る形を見落とす
@@ -1186,6 +1316,9 @@ function withCtx<T>(p: Parsed & { ok: true }, fn: () => T): T {
     bases: basesOf(p, outer ? [process.cwd()] : saved.bases),
     current: saved.current,
     ancestors: saved.current ? [...saved.ancestors, saved.current] : saved.ancestors,
+    inFile: saved.inFile,
+    writtenTexts: [...saved.writtenTexts, ...p.writtenTexts],
+    vars: varsOf(p, saved.vars),
   };
   try {
     return fn();
@@ -1209,14 +1342,19 @@ export function execUnits(p: Parsed, run: Runner, depth = 4): ExecScan {
  * 紋様の層（`curl … | sh` の D008 など）が字面で照らす。file の中身は生の字に無いゆえ、
  * 紋様の層が見ぬ。解けた命だけを照らして通すと、管で shell へ流す形が抜ける
  */
-function descendShellFile(f: string, run: Runner, depth: number, out: ExecScan): void {
-  const r = readSource(f, undefined);
+function descendShellFile(f: string, run: Runner, depth: number, out: ExecScan, self?: Cmd, searchPath = false): void {
+  const r = readSource(f, self, undefined, searchPath);
   if ('unreadable' in r) {
     out.unresolved = out.unresolved ?? `shell へ流す file を読めぬ（${r.unreadable}）`;
     out.fileUnresolved = out.fileUnresolved ?? out.unresolved;
     return;
   }
-  for (const text of r.texts) {
+  judgeTexts(f, r.texts, run, depth, out);
+}
+
+/** 門が読んだ file の中身（または書いた本文）を、命として辿る。解けぬ所は拒む。 */
+function judgeTexts(f: string, texts: string[], run: Runner, depth: number, out: ExecScan): void {
+  for (const text of texts) {
     if (depth - 1 <= 0) {
       out.unresolved = out.unresolved ?? '入れ子が深すぎる、または命が多すぎる';
       return;
@@ -1226,13 +1364,89 @@ function descendShellFile(f: string, run: Runner, depth: number, out: ExecScan):
       out.unresolved = out.unresolved ?? `shell へ流す file を解けぬ（${f}: ${inner.reason}）`;
       return;
     }
-    const scan = execUnits(inner, run, depth - 1);
+    const savedIn = ctx.inFile;
+    ctx.inFile = true;
+    let scan: ExecScan;
+    try {
+      scan = execUnits(inner, run, depth - 1);
+    } finally {
+      ctx.inFile = savedIn;
+    }
     if (scan.unresolved !== undefined) {
       out.unresolved = out.unresolved ?? `shell へ流す file の中身（${f}）: ${scan.unresolved}`;
     }
     if (scan.fileUnresolved !== undefined) out.fileUnresolved = out.fileUnresolved ?? scan.fileUnresolved;
-    out.units.push(...units(inner), ...scan.units, ...substUnits(inner, run), ...heredocUnits(inner, run));
+    (out.fromFiles ??= []).push(...units(inner), ...scan.units, ...substUnits(inner, run), ...heredocUnits(inner, run));
   }
+}
+
+/**
+ * 引数か source で渡す script の file の、判ずる時の姿。
+ *
+ * - texts: 同じ命の中で `cat > f <<'EOF'` で書く本文。門はこれを中身として判ずる
+ * - unreadable: 判ずる時と走る時の姿が割れる（同じ命の中で書かれうる・在らず他に命が在る）
+ * - skip: 既に在り、同じ命の中で書かれもせぬ。**中身は判ぜぬ**（手元の履歴で、日々の基盤の
+ *   script の中身が掟に当たる形が 52 件出た。うち 6 件は絶対域で直訴もできぬ。cmd_305 の報告）
+ */
+function scriptSource(path: string, self: Cmd, searchPath: boolean): { texts: string[] } | { unreadable: string } | 'skip' {
+  if (path === '~' || path.startsWith('~/')) path = join(homedir(), path.slice(1));
+  let fulls: string[];
+  if (isAbsolute(path)) fulls = [path];
+  else if (ctx.bases === undefined) return 'skip';
+  else fulls = [...new Set(ctx.bases.map((b) => join(b, path)))];
+  if (searchPath && !path.includes('/')) {
+    for (const d of (process.env.PATH ?? '').split(':')) if (d !== '' && isAbsolute(d)) fulls.push(join(d, path));
+  }
+  const written = writtenText(path, fulls, self);
+  if (written !== undefined) return { texts: [written] };
+  if (touchedInCommand(path, fulls, self)) return { unreadable: `${path} は同じ命の中で書かれうる` };
+  for (const full of fulls) {
+    try {
+      lstatSync(full);
+      return 'skip';
+    } catch {
+      // 在らぬ
+    }
+  }
+  if (ctx.commands > 1 && !ctx.inFile) return { unreadable: `${path} は門が読む時に無く、同じ命の中で作られうる` };
+  return 'skip';
+}
+
+/**
+ * script として走らせる file（`bash x.sh`・`source x.sh`・`. x.sh`・`bash <(cat x.sh)`）を辿る。
+ *
+ * process 置換で渡す形は、標準入力で流すのと同じく file を読んで中身を判ずる（読む守りも同じ）。
+ * 引数か source で渡す形は、判ずる時と走る時の姿が割れる形（同じ命の中で作る・書き換える）だけを
+ * 拒み、書いた本文が見えれば本文で判ずる。既に在る file の中身は判ぜぬ（scriptSource）。
+ *
+ * 道が展開に依れば、頭の一つの変数だけを解く。`$HOME` は家、他は同じ命の中の字どおりの代入
+ * （`S=/tmp/x; bash $S/run.sh`）。解けねば、既に在る file と同じく判ぜぬ
+ */
+function descendScriptFile(c: Cmd, s: NonNullable<Cmd['script']>, run: Runner, depth: number, out: ExecScan): void {
+  if (s.proc) {
+    descendShellFile(s.path, run, depth, out, c, false);
+    return;
+  }
+  let path = s.path;
+  if (s.dynamic) {
+    const m = /^\$(?:\{(\w+)\}|(\w+))(\/.*)?$/.exec(path);
+    const name = m ? (m[1] ?? m[2])! : '';
+    const value = name === 'HOME' && !ctx.vars.has('HOME') ? homedir() : ctx.vars.get(name);
+    if (!m || value === undefined || /[$`]/.test(m[3] ?? '')) return;
+    path = value + (m[3] ?? '');
+  }
+  const r = scriptSource(path, c, s.sourced);
+  if (r === 'skip') return;
+  if ('unreadable' in r) {
+    out.unresolved = out.unresolved ?? `走らせる script を判ずる時と走る時の姿が割れる（${r.unreadable}）`;
+    out.fileUnresolved = out.fileUnresolved ?? out.unresolved;
+    return;
+  }
+  if (!s.posix) {
+    out.unresolved = out.unresolved ?? `${path} の中身は門が解けぬ shell の script である`;
+    return;
+  }
+  judgeTexts(path, r.texts, run, depth, out);
 }
 
 function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, out: ExecScan): ExecScan {
@@ -1246,6 +1460,7 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
   for (const c of p.commands) {
     ctx.current = c;
     resolveArgv(c.argv, run, depth, out, c.stdin);
+    if (c.script) descendScriptFile(c, c.script, run, depth, out);
   }
   ctx.current = undefined;
   for (const f of p.shellFiles) descendShellFile(f, run, depth, out);
@@ -1263,6 +1478,11 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
         out.fileUnresolved = out.fileUnresolved ?? scan.fileUnresolved;
       }
     }
+  }
+  // 門が読んだ file の中身の命を、ここで足す（命の数の上限は、この命の字の命だけに当てる）
+  if (out.fromFiles) {
+    out.units.push(...out.fromFiles);
+    out.fromFiles = undefined;
   }
   return out;
 }
