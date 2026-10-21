@@ -112,6 +112,8 @@ cursor の細部は `instructions/cli/cursor.md` に在る。
 D011（意図で判ずるもの・分解や難読化）は**紋様では捕まらぬ**。門は「明白な違反を確実に止める」ことだけを引き受け、
 取りこぼしはこの訓戒と将軍の検めが拾う。多層防御の一枚である。
 
+**己の pane 系譜の process を止める道は `honden-kill` である。** 生の `kill`・`pkill`・`killall` は門（D006）が拒む。ここが唯一の道である。己の pane の系譜の下にある process だけ `honden-kill <pid>` で止められる（`--signal TERM|INT|HUP`）。群れを撃つ形（負の pid・0・複数）は受けぬ。pane の外は止められぬ——黙って置かず将軍へ報せよ（親から切り離して起こした見せ物 server が pane の外に居残り、殿の手で止める事態が起きた。止め方を書かなければ足軽は黙って放置する）。`nohup` や `setsid` で背後へ回す起こし方は、己で止められぬ process を作る。起こすなら止め方を先に決めよ。見せ物の server を起こす道具には止める口が在る。
+
 **Tier 2 (STOP-and-REPORT):** Toolchain/runtime/global package install needed (D011-AT) → STOP.
 Report what / why / version / method / source URL. Wait for approval before installing.
 Record package, version, URL, command, and install path in report if approved.
