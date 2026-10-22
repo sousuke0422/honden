@@ -314,6 +314,12 @@ main の tip はほぼ常に merge commit ゆえ、「`git log` で tip 確認�
 何かを「無い」「変わらぬ」「通った」と報告する前に、
 その道具が**在る物を見せられる**ことを確かめよ（陽性対照）。
 
+## `/mnt/c` の木で commit する時
+
+`/mnt/c` は Windows の file system ゆえ、source に実行権が付いているように見えることがある。`core.fileMode` が true の木では、**内容は変えていないのに `mode change` だけが commit に載る**。
+
+commit の前に `git diff --staged --summary` で `mode change` が無いか見よ。出たなら、落とす前にその file が本当に実行される script か確かめよ。実行される物でなければ `git update-index --chmod=-x <file>` で index から落とし、その木で `git config core.fileMode false` を置いて根を断つ。
+
 ## File Operation Rule
 
 **Always Read before Write/Edit.** Claude Code rejects Write/Edit on unread files.
