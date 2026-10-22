@@ -316,9 +316,9 @@ main の tip はほぼ常に merge commit ゆえ、「`git log` で tip 確認�
 
 ## `/mnt/c` の木で commit する時
 
-`/mnt/c` は Windows の file system ゆえ、source に実行権が付いているように見えることがある。`core.fileMode` が true の木では、**内容は変えていないのに `mode change` だけが commit に載る**。
+`/mnt/c` は Windows の file system ゆえ、source が実行権つきに見える。`core.fileMode` が true では**内容を変えず `mode change` だけ commit に載る**。
 
-commit の前に `git diff --staged --summary` で `mode change` が無いか見よ。出たなら、落とす前にその file が本当に実行される script か確かめよ。実行される物でなければ `git update-index --chmod=-x <file>` で index から落とし、根を断つ。`git config` は共有の `.git/config` に書かれる。`git config --worktree` は **`extensions.worktreeConfig` が有効な repo でだけ**その木に限られる——拡張が無いか確かめられぬ時は、commit の命に `git -c core.fileMode=false` を付けよ。
+commit の前に `git diff --staged --summary` で `mode change` を見よ。実行される script でなければ `git update-index --chmod=-x <file>` で落とす。**木がすべて `/mnt/c` 上の repo では**共有 `.git/config` で `core.fileMode false` を置くのが筋である（実行権は FS の産物で意図ではない）。`/mnt/c` の外の木も在る時だけ `git -c core.fileMode=false add` を使え——**commit にだけ旗を付けても index は既に焼けて効かぬ**。`git config --worktree` は `extensions.worktreeConfig` 有効時のみその木限定。
 
 ## File Operation Rule
 
