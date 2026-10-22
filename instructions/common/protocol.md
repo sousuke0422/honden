@@ -318,7 +318,7 @@ main の tip はほぼ常に merge commit ゆえ、「`git log` で tip 確認�
 
 `/mnt/c` は Windows の file system ゆえ、source に実行権が付いているように見えることがある。`core.fileMode` が true の木では、**内容は変えていないのに `mode change` だけが commit に載る**。
 
-commit の前に `git diff --staged --summary` で `mode change` が無いか見よ。出たなら、落とす前にその file が本当に実行される script か確かめよ。実行される物でなければ `git update-index --chmod=-x <file>` で index から落とし、根を断つ。`git config core.fileMode false` は **worktree では共有の `.git/config` に書かれる**——その木だけなら `git config --worktree core.fileMode false` か、commit の命に `git -c core.fileMode=false` を付けよ。
+commit の前に `git diff --staged --summary` で `mode change` が無いか見よ。出たなら、落とす前にその file が本当に実行される script か確かめよ。実行される物でなければ `git update-index --chmod=-x <file>` で index から落とし、根を断つ。`git config` は共有の `.git/config` に書かれる。`git config --worktree` は **`extensions.worktreeConfig` が有効な repo でだけ**その木に限られる——拡張が無いか確かめられぬ時は、commit の命に `git -c core.fileMode=false` を付けよ。
 
 ## File Operation Rule
 
