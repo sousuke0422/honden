@@ -314,6 +314,10 @@ main の tip はほぼ常に merge commit ゆえ、「`git log` で tip 確認�
 何かを「無い」「変わらぬ」「通った」と報告する前に、
 その道具が**在る物を見せられる**ことを確かめよ（陽性対照）。
 
+## 外の service へ送る字
+
+外の service へ送る物に、殿を示す字を入れぬ。`User-Agent` の連絡先、API の問い合わせ、hook の本文、bug 報せも同じである。名乗りが要るなら役や道具の名で足りる（`honden-shogun` など）。送った字は相手の log に残り、消せぬ——調べ物も publish も外へ送るが、個人を特定する字は載せぬ。
+
 ## File Operation Rule
 
 **Always Read before Write/Edit.** Claude Code rejects Write/Edit on unread files.
