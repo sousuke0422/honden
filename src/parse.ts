@@ -353,6 +353,8 @@ export function heredocUnits(p: Parsed, run: Runner): string[] {
 export interface ExecScan {
   /** 実際に走る命（argv を空白で繋いだ形） */
   units: string[];
+  /** Shell input that could not be structurally inspected; apply legacy patterns. */
+  legacy?: string[];
   /** 解けなんだ理由。**在れば拒む** */
   unresolved?: string;
   /**
@@ -480,8 +482,9 @@ function descendScript(w: Word, run: Runner, depth: number, out: ExecScan): void
  *
  * # 緩く、とは
  *
- * descendScript と違い、展開に依る字や解けぬ字では**拒みに倒さず、降りぬだけ**に
- * する。中身を shell が読むか判じきれぬ語（`git -c` の値・`tmux` の引数）も通るゆえ、
+ * descendScript と違い、展開に依る字や解けぬ字は legacy へ集め、旧い紋様で照らす。
+ * 構造だけを理由には拒まぬ。
+ * 中身を shell が読むか判じきれぬ語（`git -c` の値・`tmux` の引数）も通るゆえ、
  * ここで拒めば日常の往来（`eval "$(ssh-agent -s)"` など）を止める。今の門もこれらを
  * 解かずに通しておった——緩く降りるのは、偶々の守りを本物の守りへ移すためである。
  */
@@ -492,10 +495,18 @@ function descendLoose(
   out: ExecScan,
   afterFirst = false,
 ): void {
-  if (depth <= 0 || text.trim() === '') return;
+  if (text.trim() === '') return;
+  if (depth <= 0) {
+    (out.legacy ??= []).push(text);
+    return;
+  }
   const inner = parseCommand(text, run);
-  if (!inner.ok) return;
+  if (!inner.ok) {
+    (out.legacy ??= []).push(text);
+    return;
+  }
   const sub: ExecScan = { units: [] };
+  if (inner.substitutions.length > 0 || inner.opaque.length > 0) (out.legacy ??= []).push(text);
   // afterFirst: 字の頭の命は照らさず、命の切れ目の後ろの命だけを照らす。中身を shell が
   // 読むか判じきれぬ語（script へ渡す引数・coder ssh の命）に使う。今の門はこれらの字の
   // 頭の命を通し、切れ目の後ろの命だけを（引用の中の `;` に錨が当たって）止めておった。
@@ -507,6 +518,14 @@ function descendLoose(
     if (!afterFirst) for (const f of inner.shellFiles) descendShellFile(f, run, depth - 1, sub);
   });
   out.units.push(...sub.units, ...(sub.fromFiles ?? []));
+  (out.legacy ??= []).push(...(sub.legacy ?? []));
+  if (sub.unresolved) (out.legacy ??= []).push(text);
+}
+
+function descendWords(ws: Word[], run: Runner, depth: number, out: ExecScan, afterFirst = false): void {
+  const text = ws.map((w) => w.value).join(' ');
+  if (literal(ws)) descendLoose(text, run, depth, out, afterFirst);
+  else (out.legacy ??= []).push(text);
 }
 
 /** 語がすべて字面のままか（変数も命令置換も含まぬ）。 */
@@ -540,7 +559,7 @@ function descendEmbedded(name: string, argv: Word[], run: Runner, depth: number,
     if (!SHELLS.has(shell) || shell === 'eval' || shell === 'source' || shell === '.') continue;
     const ci = argv.findIndex((w, i) => i > k && isShellCFlag(w));
     const script = ci >= 0 ? argv[ci + 1] : undefined;
-    if (script && literal([script])) descendLoose(script.value, run, depth, out);
+    if (script) descendWords([script], run, depth, out);
     break;
   }
 
@@ -553,7 +572,7 @@ function descendEmbedded(name: string, argv: Word[], run: Runner, depth: number,
           if (TMUX_VALUE_FLAGS.has(v)) i++;
           continue;
         }
-        if (literal([argv[i]!])) descendLoose(v, run, depth, out);
+        descendWords([argv[i]!], run, depth, out);
       }
     }
   }
@@ -568,14 +587,18 @@ function descendEmbedded(name: string, argv: Word[], run: Runner, depth: number,
       const ws = argv.findIndex((w, i) => i > 1 && !w.value.startsWith('-'));
       rest = ws >= 0 ? argv.slice(ws + 1) : [];
     }
-    if (rest.length > 0 && literal(rest)) {
-      descendLoose(rest.map((w) => w.value).join(' '), run, depth, out, true);
+    if (rest.length > 0) {
+      descendWords(rest, run, depth, out, true);
     }
   }
 
   if (name === 'git') {
     for (let i = 1; i + 1 < argv.length; i++) {
-      if (argv[i]!.value !== '-c' || !literal([argv[i + 1]!])) continue;
+      if (argv[i]!.value !== '-c') continue;
+      if (!literal([argv[i + 1]!])) {
+        (out.legacy ??= []).push(argv[i + 1]!.value);
+        continue;
+      }
       const v = argv[i + 1]!.value;
       const eq = v.indexOf('=');
       if (eq >= 0) descendLoose(v.slice(eq + 1).replace(/^!/, ''), run, depth, out);
@@ -642,6 +665,7 @@ function resolveLoose(argv: Word[], run: Runner, depth: number, out: ExecScan): 
   const sub: ExecScan = { units: [] };
   resolveArgv(argv, run, depth, sub);
   out.units.push(...sub.units);
+  (out.legacy ??= []).push(...(sub.legacy ?? []));
 }
 
 // ── 他の言語の源の中の、shell を呼ぶ口 ──
@@ -988,14 +1012,14 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
     }
     // `eval` は引数を空白で繋いで shell が読む。`eval 'x; rm -rf /'` の中の `;` は
     // 命の切れ目である
-    if (name === 'eval' && literal(argv.slice(1))) {
-      descendLoose(argv.slice(1).map((w) => w.value).join(' '), run, depth, out);
+    if (name === 'eval') {
+      descendWords(argv.slice(1), run, depth, out);
     } else if (name !== 'eval') {
       // script の file に渡す引数は、script がそのまま走らせることが多い
       // （`bash coder_mount.sh exec ws 'a; sudo …'` は遠方で走る）。命の切れ目を
       // 含む字面の引数だけを緩く降りる
       for (const w of argv.slice(1)) {
-        if (literal([w]) && /[;&|\n]/.test(w.value)) descendLoose(w.value, run, depth, out, true);
+        if (/[;&|\n]/.test(w.value)) descendWords([w], run, depth, out, true);
       }
     }
     emit();
@@ -1031,8 +1055,8 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
     let i = 1;
     if (argv[i]?.value === '--') i++;
     const arg = argv[i];
-    if (arg && i + 1 < argv.length && arg.value !== '-' && !/^-[lp]$/.test(arg.value) && literal([arg])) {
-      descendLoose(arg.value, run, depth, out);
+    if (arg && i + 1 < argv.length && arg.value !== '-' && !/^-[lp]$/.test(arg.value)) {
+      descendWords([arg], run, depth, out);
     }
     emit();
     return;
@@ -1078,6 +1102,11 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
   // ── 包み。旗を読んで、命の位置まで進む ──
   const spec = WRAP[name];
   if (!spec) {
+    if (/\.(?:sh|bash|zsh|ksh)$/.test(name)) {
+      for (const w of argv.slice(1)) {
+        if (/[;&|\n]/.test(w.value)) descendWords([w], run, depth, out, true);
+      }
+    }
     descendEmbedded(name, argv, run, depth, out);
     emit();
     return;
@@ -1092,7 +1121,7 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
     }
     // `env -S '…'` は値を分けて命の行にする。中の命へ緩く降りる
     if (name === 'env' && (v === '-S' || v === '--split-string') && i + 1 < argv.length) {
-      if (literal([argv[i + 1]!])) descendLoose(argv[i + 1]!.value, run, depth, out);
+      descendWords([argv[i + 1]!], run, depth, out);
     }
     if (/^\w+=/.test(v)) { i++; continue; }
     if (v === '--') { i++; break; }
@@ -1112,7 +1141,7 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, st
   // ssh（二語以上）・watch・parallel は残りを空白で繋いで shell に読ませる。
   // 繋いだ字の中の `;` は命の切れ目ゆえ、緩く降りる（下の resolveArgv も残す）
   if ((spec.script === 'rest' && rest.length > 1) || name === 'watch' || name === 'parallel') {
-    if (literal(rest)) descendLoose(rest.map((w) => w.value).join(' '), run, depth, out);
+    descendWords(rest, run, depth, out);
   }
   // 残りが「一つの文字列としての命」なら、解き直す（ssh の類）
   if (spec.script === 'rest' && rest.length === 1) {
@@ -1372,6 +1401,7 @@ function judgeTexts(f: string, texts: string[], run: Runner, depth: number, out:
     } finally {
       ctx.inFile = savedIn;
     }
+    (out.legacy ??= []).push(...(scan.legacy ?? []));
     if (scan.unresolved !== undefined) {
       out.unresolved = out.unresolved ?? `shell へ流す file の中身（${f}）: ${scan.unresolved}`;
     }
@@ -1455,6 +1485,12 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
   // 測った）。字が見える時（echo・printf・here-string）は解き手が置換と同じ
   // 群れへ渡し、門はその字を命として判ずる
   if (p.opaque.length > 0) {
+    // Keep policy evidence even when the pipeline cannot be reconstructed.
+    if (p.commands.length > 1 && p.commands.some((c) =>
+      c.stdin && 'opaque' in c.stdin && !c.script && SHELLS.has(baseName(c.argv[0]?.value ?? '')),
+    )) {
+      (out.legacy ??= []).push(p.commands.map((c) => c.argv.map((w) => w.value).join(' ')).join(' | '));
+    }
     out.unresolved = `shell へ流す字が見えぬ（${p.opaque.join(' / ')}）`;
   }
   for (const c of p.commands) {
@@ -1473,6 +1509,7 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
       const inner = parseCommand(s, run);
       if (!inner.ok) continue;
       const scan = execUnits(inner, run, depth - 1);
+      (out.legacy ??= []).push(...(scan.legacy ?? []));
       if (scan.fileUnresolved !== undefined) {
         out.unresolved = out.unresolved ?? scan.fileUnresolved;
         out.fileUnresolved = out.fileUnresolved ?? scan.fileUnresolved;
