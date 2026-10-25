@@ -362,6 +362,8 @@ export interface ExecScan {
    * 中身は解けぬ所を拒まずに照らすが、file を読めぬ形だけは拒む（execUnitsInner が拾う）
    */
   fileUnresolved?: string;
+  /** Opaque shell streams remain unresolved across tolerant wrapper scans. */
+  opaqueUnresolved?: string;
   /**
    * 門が読んだ file の中身の命。命の数の上限（MAX_UNITS）に数えぬよう units とは別に積み、
    * execUnits の終わりに units へ足す。大きな script の中身で、後ろの命が「多すぎる」に落ちぬため
@@ -462,10 +464,7 @@ function descendScript(w: Word, run: Runner, depth: number, out: ExecScan): void
     return;
   }
   // 中で読む file と、中で書く file も見る（`ssh h 'printf … > f.sh; bash < f.sh'`）
-  withCtx(inner, () => {
-    for (const c of inner.commands) resolveArgv(c.argv, run, depth - 1, out);
-    for (const f of inner.shellFiles) descendShellFile(f, run, depth - 1, out);
-  });
+  withCtx(inner, () => execUnitsInner(inner, run, depth - 1, out));
 }
 
 /**
@@ -506,6 +505,7 @@ function descendLoose(
     return;
   }
   const sub: ExecScan = { units: [] };
+  checkOpaque(inner, sub);
   if (inner.substitutions.length > 0 || inner.opaque.length > 0) (out.legacy ??= []).push(text);
   // afterFirst: 字の頭の命は照らさず、命の切れ目の後ろの命だけを照らす。中身を shell が
   // 読むか判じきれぬ語（script へ渡す引数・coder ssh の命）に使う。今の門はこれらの字の
@@ -519,6 +519,7 @@ function descendLoose(
   });
   out.units.push(...sub.units, ...(sub.fromFiles ?? []));
   (out.legacy ??= []).push(...(sub.legacy ?? []));
+  propagateOpaque(sub, out);
   if (sub.unresolved) (out.legacy ??= []).push(text);
 }
 
@@ -666,6 +667,7 @@ function resolveLoose(argv: Word[], run: Runner, depth: number, out: ExecScan): 
   resolveArgv(argv, run, depth, sub);
   out.units.push(...sub.units);
   (out.legacy ??= []).push(...(sub.legacy ?? []));
+  propagateOpaque(sub, out);
 }
 
 // ── 他の言語の源の中の、shell を呼ぶ口 ──
@@ -1479,7 +1481,14 @@ function descendScriptFile(c: Cmd, s: NonNullable<Cmd['script']>, run: Runner, d
   judgeTexts(path, r.texts, run, depth, out);
 }
 
-function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, out: ExecScan): ExecScan {
+function propagateOpaque(scan: ExecScan, out: ExecScan): void {
+  if (scan.opaqueUnresolved !== undefined) {
+    out.opaqueUnresolved = out.opaqueUnresolved ?? scan.opaqueUnresolved;
+    out.unresolved = out.unresolved ?? scan.opaqueUnresolved;
+  }
+}
+
+function checkOpaque(p: Parsed & { ok: true }, out: ExecScan): void {
   // shell へ流す字が見えねば、何が走るか解けぬ。**拒む**（直訴はできる）。
   // 手元の命の履歴 13,918 件で、これに当たる無害な命は 0 件だった（2026-10-20 に
   // 測った）。字が見える時（echo・printf・here-string）は解き手が置換と同じ
@@ -1491,8 +1500,13 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
     )) {
       (out.legacy ??= []).push(p.commands.map((c) => c.argv.map((w) => w.value).join(' ')).join(' | '));
     }
-    out.unresolved = `shell へ流す字が見えぬ（${p.opaque.join(' / ')}）`;
+    out.opaqueUnresolved = `shell へ流す字が見えぬ（${p.opaque.join(' / ')}）`;
+    out.unresolved = out.unresolved ?? out.opaqueUnresolved;
   }
+}
+
+function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, out: ExecScan): ExecScan {
+  checkOpaque(p, out);
   for (const c of p.commands) {
     ctx.current = c;
     resolveArgv(c.argv, run, depth, out, c.stdin);
@@ -1502,13 +1516,16 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
   for (const f of p.shellFiles) descendShellFile(f, run, depth, out);
   // 命令置換と、shell へ流す heredoc の中で file を読む形（shell へ流す heredoc と字は、解き手が
   // 置換と同じ群れへ渡す。shell でない命へ渡す heredoc は字であって命ではない）。門はこれらの中身を後で解くが、
-  // 解けぬ所を拒まぬ（substUnits）。file を読めぬ形だけはここで拒む
+  // 展開一般は拒まぬ（substUnits）。opaque な流し込みと読めぬ file はここで拒む
   // （`echo "$(printf … > f.sh; bash < f.sh)"`）
   if (depth - 1 > 0) {
-    for (const s of p.substitutions) {
+    const shellHeredocs = p.commands.some((c) => SHELLS.has(baseName(c.argv[0]?.value ?? '')))
+      ? p.heredocs : [];
+    for (const s of [...p.substitutions, ...shellHeredocs]) {
       const inner = parseCommand(s, run);
       if (!inner.ok) continue;
       const scan = execUnits(inner, run, depth - 1);
+      propagateOpaque(scan, out);
       (out.legacy ??= []).push(...(scan.legacy ?? []));
       if (scan.fileUnresolved !== undefined) {
         out.unresolved = out.unresolved ?? scan.fileUnresolved;
