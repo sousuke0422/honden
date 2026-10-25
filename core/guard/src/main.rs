@@ -471,9 +471,18 @@ fn handle_redirect(r: &ast::IoRedirect, out: &mut Extract, opts: &brush_parser::
             // 本文の `"` は字のままゆえ逃がして包む。
             // 区切りを引用した heredoc（`<<'EOF'`）は展開されぬ。拾わぬ。
             if hd.requires_expansion {
-                let wrapped = format!("\"{}\"", hd.doc.value.replace('"', "\\\""));
-                if let Err(e) = word_facts(&wrapped, opts) {
-                    out.unhandled.push(format!("heredoc の本文の展開を解けぬ: {e}"));
+                match brush_parser::word::parse_heredoc(&hd.doc.value, opts) {
+                    Ok(pieces) => {
+                        use brush_parser::word::WordPiece;
+                        for piece in pieces {
+                            if let WordPiece::CommandSubstitution(s)
+                            | WordPiece::BackquotedCommandSubstitution(s) = piece.piece
+                            {
+                                f_push_subst(&s);
+                            }
+                        }
+                    }
+                    Err(e) => out.unhandled.push(format!("heredoc の本文の展開を解けぬ: {e}")),
                 }
             }
         }
@@ -529,16 +538,25 @@ fn reads_stdin_script(argv: &[WordFacts]) -> bool {
         }
     }
     let mut stdin = true;
+    let mut explicit_stdin = false;
+    let mut executes_stdin = true;
     let mut i = 0;
     while i < rest.len() {
         let v = rest[i].value.as_str();
+        if v == "--" {
+            stdin = explicit_stdin || i + 1 == rest.len();
+            break;
+        }
         if v == "-s" {
-            return true;
+            // 標準入力の指定を覚え、後続の停止旗も読んでから判ずる。
+            explicit_stdin = true;
+            i += 1;
+            continue;
         }
         // `-c` の束は引数の字を走らせる（門は別の道で降りる）。`-n` の束は読むだけで
         // 走らせぬ（構文の検め）。どちらも標準入力の命は走らぬ
         if v.len() <= 5 && v.starts_with('-') && !v.starts_with("--") && (v[1..].contains('c') || v[1..].contains('n')) {
-            return false;
+            executes_stdin = false;
         }
         // 値を取る旗。`-euo pipefail` のように束の中に `o` が在れば、次の語は値である
         // （script の file ではない）。束の後ろの名を file と読むと、標準入力へ流す形を
@@ -549,12 +567,12 @@ fn reads_stdin_script(argv: &[WordFacts]) -> bool {
             continue;
         }
         if !v.starts_with('-') && !v.starts_with('+') {
-            stdin = false;
+            stdin = explicit_stdin;
             break;
         }
         i += 1;
     }
-    stdin
+    stdin && executes_stdin
 }
 
 /// 引数の無い `cat` が heredoc か here-string から読む時、その字を返す。
