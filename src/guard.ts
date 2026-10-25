@@ -491,6 +491,10 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
   // `sh -c '…'` の引用の中も、`find -exec` の後ろも、包みの中も命である
   // （二度目の監査が釣った・2026-09-01）。
   const scan = execUnits(target, run);
+  for (const text of scan.legacy ?? []) {
+    const verdict = judge(text);
+    if (verdict.permission === 'deny') return verdict;
+  }
   if (scan.unresolved !== undefined) {
     // **解けぬなら通さぬ。** 一度目の直しは候補の上限に達したら通しており、
     // 無害な候補で枠を食い潰す形で素通りできた（実測）。
