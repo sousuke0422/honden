@@ -196,9 +196,21 @@ export function substUnits(p: Parsed, run: Runner, depth = 2): string[] {
   const out: string[] = [];
   for (const s of p.substitutions) {
     const inner = parseCommand(s, run);
-    out.push(...units(inner), ...substUnits(inner, run, depth - 1));
+    out.push(...units(inner), ...looseExecUnits(inner, run), ...substUnits(inner, run, depth - 1));
   }
   return out;
+}
+
+/**
+ * 解いた中身の、実際に走る命（execUnits）。**解けぬ所があっても拒まぬ。**
+ *
+ * 置換と heredoc の中身は、これまで argv を繋いだ字（units）だけを掟に照らして
+ * おった。門が錨の付く紋様を argv の頭だけに当てるなら、中の `sh -c 'a; …'` や
+ * `eval '…'` まで降りねば、偶々止まっておった形が抜ける。展開に依る中身を拒みに
+ * 倒すと、今は通る日常の形（`x=$($CMD)` 等）まで止めるゆえ、解けた分だけを足す。
+ */
+function looseExecUnits(p: Parsed, run: Runner): string[] {
+  return execUnits(p, run).units;
 }
 
 /**
@@ -224,7 +236,8 @@ export function heredocUnits(p: Parsed, run: Runner): string[] {
   if (!toShell) return [];
   const out: string[] = [];
   for (const h of p.heredocs) {
-    out.push(...units(parseCommand(h, run)));
+    const inner = parseCommand(h, run);
+    out.push(...units(inner), ...looseExecUnits(inner, run));
   }
   return out;
 }
@@ -365,6 +378,120 @@ function descendScript(w: Word, run: Runner, depth: number, out: ExecScan): void
   for (const c of inner.commands) resolveArgv(c.argv, run, depth - 1, out);
 }
 
+/**
+ * 後で shell に読まれ**うる**字を、緩く解き直して降りる。
+ *
+ * # なぜ要るか
+ *
+ * 門は錨の付く紋様を、単純命令ごとの argv の頭に当てる。引用の中の `;` `|` `&` は
+ * 命の切れ目ではないゆえ、`grep 'a|kill'` は止めぬ。だが**中身を shell が読む語**
+ * （`eval '…'`・`ssh host '…' '…'`・`docker exec c sh -c '…'`・`tmux new-window '…'`・
+ * `git -c alias.x='!…'`・`env -S '…'`）の中の `;` は、走る時に命の切れ目になる。
+ * 錨が生の字に当たっておった頃は、これらが偶々止まっておった。頭だけに当てるなら、
+ * 中身を解いて降りねば穴が開く。
+ *
+ * # 緩く、とは
+ *
+ * descendScript と違い、展開に依る字や解けぬ字では**拒みに倒さず、降りぬだけ**に
+ * する。中身を shell が読むか判じきれぬ語（`git -c` の値・`tmux` の引数）も通るゆえ、
+ * ここで拒めば日常の往来（`eval "$(ssh-agent -s)"` など）を止める。今の門もこれらを
+ * 解かずに通しておった——緩く降りるのは、偶々の守りを本物の守りへ移すためである。
+ */
+function descendLoose(
+  text: string,
+  run: Runner,
+  depth: number,
+  out: ExecScan,
+  afterFirst = false,
+): void {
+  if (depth <= 0 || text.trim() === '') return;
+  const inner = parseCommand(text, run);
+  if (!inner.ok) return;
+  const sub: ExecScan = { units: [] };
+  // afterFirst: 字の頭の命は照らさず、命の切れ目の後ろの命だけを照らす。中身を shell が
+  // 読むか判じきれぬ語（script へ渡す引数・coder ssh の命）に使う。今の門はこれらの字の
+  // 頭の命を通し、切れ目の後ろの命だけを（引用の中の `;` に錨が当たって）止めておった。
+  // 頭まで照らすと、遠方で打つ `kill` の類が新たに止まり、絶対域ゆえ直訴もできぬ
+  for (const c of afterFirst ? inner.commands.slice(1) : inner.commands) {
+    resolveArgv(c.argv, run, depth - 1, sub);
+  }
+  out.units.push(...sub.units);
+}
+
+/** 語がすべて字面のままか（変数も命令置換も含まぬ）。 */
+function literal(ws: Word[]): boolean {
+  return ws.every((w) => !w.var && !w.cmdsubst);
+}
+
+/** shell の `-c` の束（`-c` `-lc` 等）か。resolveArgv の SHELLS の判じと同じ。 */
+function isShellCFlag(w: Word): boolean {
+  return !w.quoted && /^-[a-z]{1,4}$/.test(w.value) && w.value.includes('c');
+}
+
+/** 中身を shell が読む tmux の副命令（最後の引数が shell の命）。 */
+const TMUX_SHELL_SUB = new Set([
+  'new-session', 'new', 'new-window', 'neww', 'split-window', 'splitw', 'display-popup', 'popup',
+]);
+/** その副命令で値を取る旗。値は命として降りぬ。 */
+const TMUX_VALUE_FLAGS = new Set(['-c', '-e', '-F', '-n', '-s', '-t', '-x', '-y', '-l', '-p', '-S', '-T', '-w', '-h']);
+
+/**
+ * 命の名だけでは包みと判じられぬが、argv の中に shell の文字列を抱える形を緩く降りる。
+ *
+ * - argv の中ほどに shell と `-c` の束が並ぶ（`docker exec c sh -c '…'`・
+ *   `kubectl exec p -- sh -c '…'`）
+ * - `tmux new-window '…'` の類
+ * - `git -c key=value` の値（`alias.x=!…`・`core.pager=…` は shell が読む）
+ */
+function descendEmbedded(name: string, argv: Word[], run: Runner, depth: number, out: ExecScan): void {
+  for (let k = 1; k < argv.length; k++) {
+    const shell = baseName(argv[k]!.value);
+    if (!SHELLS.has(shell) || shell === 'eval' || shell === 'source' || shell === '.') continue;
+    const ci = argv.findIndex((w, i) => i > k && isShellCFlag(w));
+    const script = ci >= 0 ? argv[ci + 1] : undefined;
+    if (script && literal([script])) descendLoose(script.value, run, depth, out);
+    break;
+  }
+
+  if (name === 'tmux') {
+    const s = argv.findIndex((w, i) => i > 0 && TMUX_SHELL_SUB.has(w.value));
+    if (s >= 0) {
+      for (let i = s + 1; i < argv.length; i++) {
+        const v = argv[i]!.value;
+        if (v.startsWith('-')) {
+          if (TMUX_VALUE_FLAGS.has(v)) i++;
+          continue;
+        }
+        if (literal([argv[i]!])) descendLoose(v, run, depth, out);
+      }
+    }
+  }
+
+  // `coder ssh <workspace> [--] '<命>'` は ssh と同じく、残りを遠方の shell が読む
+  if (name === 'coder' && argv[1]?.value === 'ssh') {
+    const dd = argv.findIndex((w, i) => i > 1 && w.value === '--');
+    let rest: Word[];
+    if (dd >= 0) {
+      rest = argv.slice(dd + 1);
+    } else {
+      const ws = argv.findIndex((w, i) => i > 1 && !w.value.startsWith('-'));
+      rest = ws >= 0 ? argv.slice(ws + 1) : [];
+    }
+    if (rest.length > 0 && literal(rest)) {
+      descendLoose(rest.map((w) => w.value).join(' '), run, depth, out, true);
+    }
+  }
+
+  if (name === 'git') {
+    for (let i = 1; i + 1 < argv.length; i++) {
+      if (argv[i]!.value !== '-c' || !literal([argv[i + 1]!])) continue;
+      const v = argv[i + 1]!.value;
+      const eq = v.indexOf('=');
+      if (eq >= 0) descendLoose(v.slice(eq + 1).replace(/^!/, ''), run, depth, out);
+    }
+  }
+}
+
 /** 一つの argv を辿り、実際に走る命へ降りる。 */
 function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): void {
   if (depth <= 0 || out.units.length >= MAX_UNITS) {
@@ -399,6 +526,18 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
       descendScript(argv[ci + 1]!, run, depth, out);
       return;
     }
+    // `eval` は引数を空白で繋いで shell が読む。`eval 'x; rm -rf /'` の中の `;` は
+    // 命の切れ目である
+    if (name === 'eval' && literal(argv.slice(1))) {
+      descendLoose(argv.slice(1).map((w) => w.value).join(' '), run, depth, out);
+    } else if (name !== 'eval') {
+      // script の file に渡す引数は、script がそのまま走らせることが多い
+      // （`bash coder_mount.sh exec ws 'a; sudo …'` は遠方で走る）。命の切れ目を
+      // 含む字面の引数だけを緩く降りる
+      for (const w of argv.slice(1)) {
+        if (literal([w]) && /[;&|\n]/.test(w.value)) descendLoose(w.value, run, depth, out, true);
+      }
+    }
     emit();
     return;
   }
@@ -429,6 +568,7 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
   // ── 包み。旗を読んで、命の位置まで進む ──
   const spec = WRAP[name];
   if (!spec) {
+    descendEmbedded(name, argv, run, depth, out);
     emit();
     return;
   }
@@ -439,6 +579,10 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
     if (spec.scriptFlag && v === spec.scriptFlag && i + 1 < argv.length) {
       descendScript(argv[i + 1]!, run, depth, out);
       return;
+    }
+    // `env -S '…'` は値を分けて命の行にする。中の命へ緩く降りる
+    if (name === 'env' && (v === '-S' || v === '--split-string') && i + 1 < argv.length) {
+      if (literal([argv[i + 1]!])) descendLoose(argv[i + 1]!.value, run, depth, out);
     }
     if (/^\w+=/.test(v)) { i++; continue; }
     if (v === '--') { i++; break; }
@@ -454,6 +598,11 @@ function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan): v
     // 包みだけで命が無い（`env` 単体など）。害は無い
     emit();
     return;
+  }
+  // ssh（二語以上）・watch・parallel は残りを空白で繋いで shell に読ませる。
+  // 繋いだ字の中の `;` は命の切れ目ゆえ、緩く降りる（下の resolveArgv も残す）
+  if ((spec.script === 'rest' && rest.length > 1) || name === 'watch' || name === 'parallel') {
+    if (literal(rest)) descendLoose(rest.map((w) => w.value).join(' '), run, depth, out);
   }
   // 残りが「一つの文字列としての命」なら、解き直す（ssh の類）
   if (spec.script === 'rest' && rest.length === 1) {
