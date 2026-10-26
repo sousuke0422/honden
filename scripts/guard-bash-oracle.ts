@@ -8,12 +8,12 @@
  * 箱の陽性対照が一つでも落ちれば、群れは箱へ渡さずに 1 で終わる。
  * 終わりの値: 0 食い違い無し（または書き換えた・箱が無く飛ばした）/ 1 食い違いあり・陽性対照の落ち / 2 旗の誤り
  */
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { realRunner } from '../src/parse';
 import { probe } from '../test/guard-bash-oracle/box';
 import { runControls } from '../test/guard-bash-oracle/controls';
-import { loadEntries, mismatch, runOracle, serializeEntries, toEntries } from '../test/guard-bash-oracle/oracle';
+import { assertReadable, loadEntries, mismatch, runOracle, toEntries, updateRecord } from '../test/guard-bash-oracle/oracle';
 import { loadCases } from '../test/guard-corpus/harness';
 
 const ROOT = join(import.meta.dir, '..');
@@ -42,6 +42,12 @@ if (!controls.every((c) => c.ok)) {
 
 const started = performance.now();
 const diffs = runOracle(loadCases(CORPUS), realRunner(ROOT));
+try {
+  assertReadable(diffs);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 const recorded = existsSync(RECORD) ? loadEntries(RECORD) : [];
 const entries = toEntries(diffs, recorded);
 const ms = Math.round(performance.now() - started);
@@ -58,7 +64,7 @@ for (const e of entries) {
 console.log(`違う件 ${entries.length}（${ms} ms）`);
 
 if (update) {
-  writeFileSync(RECORD, serializeEntries(entries));
+  updateRecord(RECORD, diffs, recorded);
   console.log(`記録を書き換えた: ${RECORD}`);
   process.exit(0);
 }

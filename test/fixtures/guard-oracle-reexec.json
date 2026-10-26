@@ -1,0 +1,12 @@
+[
+  {
+    "id": "REEXEC-ORACLE",
+    "path": "/oracle/sh",
+    "cmd": "/oracle/sh -c \"printf 'MARK\\\\n' >&8\"; printf 'END\\n' >&8"
+  },
+  {
+    "id": "REEXEC-PROC",
+    "path": "/proc/self/exe",
+    "cmd": "/proc/self/exe -c \"printf 'MARK\\\\n' >&8\"; printf 'END\\n' >&8"
+  }
+]

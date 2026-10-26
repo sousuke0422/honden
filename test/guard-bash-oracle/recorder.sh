@@ -1,6 +1,7 @@
 # 箱の中の bash に読ませる記録係。命は走らせず、展開した後の argv を xtrace で fd 9 へ出す。
 #
-# 箱（box.ts）の中には、この bash（/oracle/sh）とその共有 library の他に、走らせられる物が無い。
+# 箱（box.ts）は初回bash起動後にseccompを据え、execveとexecveatをENOENTで拒む。
+# /oracle/shと/proc/self/exeを含めて呼び直せず、命のargvだけが記録される。
 # - PATH は空の dir。名だけの命は見つからず、command_not_found_handle が何もせずに返る
 # - 道を書いた命（/bin/rm 等）は、箱の中に file が無いゆえ exec が ENOENT で落ちる（execfail で続ける）
 # - shell そのものを替える・外を読む・印を替える組み込み（exec・source・.・kill・trap・enable）は

@@ -23,7 +23,7 @@ function recorded(cmd: string): { trace: string; marks: string } {
 /** 記録係を通さず、緩めた箱の素の bash で撃つ（痕が見えることの対照） */
 function naked(cmd: string, loosen: Loosen): string {
   const script = `exec 8>&1 1>/dev/null 2>/dev/null </dev/null\neval "$(< /oracle/in/case)"\n`;
-  return runInBox({ case: cmd, 'naked.sh': script }, '/oracle/in/naked.sh', 3000, loosen).stdout;
+  return runInBox({ case: cmd, 'naked.sh': script }, '/oracle/in/naked.sh', 3000, { ...loosen, exec: true }).stdout;
 }
 
 export interface Control {
@@ -64,6 +64,16 @@ export function runControls(): Control[] {
     const boxed = recorded(cmd);
     const ok = (loosened.match(/MARK/g) ?? []).length >= 3 && !boxed.marks.includes('MARK') && boxed.marks.includes('END');
     out.push({ name: 'shell を呼び直せぬ', loosened, boxed, ok, detail: '' });
+  }
+
+  // Existing executable paths must be blocked even though the initial bash uses them.
+  const reexec: { id: string; path: string; cmd: string }[] =
+    JSON.parse(readFileSync(join(import.meta.dir, '../fixtures/guard-oracle-reexec.json'), 'utf8'));
+  for (const c of reexec) {
+    const loosened = naked(c.cmd, {});
+    const boxed = recorded(c.cmd);
+    const ok = loosened.includes('MARK') && !boxed.marks.includes('MARK') && boxed.marks.includes('END');
+    out.push({ name: c.id, loosened, boxed, ok, detail: c.path });
   }
 
   // 三、網に出られぬこと（lo の上の待ち受けへの接続。網を分けねば届く）

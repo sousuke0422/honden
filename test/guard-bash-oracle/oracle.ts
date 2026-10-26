@@ -4,7 +4,7 @@
  * 記録の一行は、違う件の命の字・違いの中身・その分け（解き手の読み違い・物差しの限り・比べの形の違い）・
  * 判じに効くか。判じに効く読み違いの件は、#56 の群れ（guard-corpus.jsonl）にも、今の門の判じのまま入れてある。
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import type { Runner } from '../../src/parse';
 import type { Case } from '../guard-corpus/harness';
 import { compare, type Compared } from './compare';
@@ -38,6 +38,22 @@ export function shape(c: Compared): Pick<Entry, 'onlyBash' | 'onlySolver' | 'sol
 
 export function differs(c: Compared): boolean {
   return c.onlyBash.length > 0 || c.onlySolver.length > 0 || c.solverError !== undefined || c.timedOut || c.unreadable.length > 0;
+}
+
+/** An undecodable trace is an invalid measurement, never a recordable difference. */
+export function assertReadable(diffs: Compared[]): void {
+  const broken = diffs.filter((d) => d.unreadable.length > 0);
+  if (broken.length > 0) {
+    throw new Error('物差しの記録を読めぬため比較も更新もしない\n' + broken.map((d) =>
+      `対象の命: ${JSON.stringify(d.cmd)}\n読めない断片: ${JSON.stringify(d.unreadable)}`,
+    ).join('\n'));
+  }
+}
+
+/** Validate the measurement before touching its record, including --update callers. */
+export function updateRecord(path: string, diffs: Compared[], recorded: Entry[]): void {
+  assertReadable(diffs);
+  writeFileSync(path, serializeEntries(toEntries(diffs, recorded)));
 }
 
 /** 群れの全件を比べ、違う件だけを返す */
@@ -77,6 +93,7 @@ export function serializeEntries(entries: Entry[]): string {
 
 /** 今の違いを、記録の分けを引き継いで記録の形にする。記録に無い件は「未分類」になる。 */
 export function toEntries(diffs: Compared[], recorded: Entry[]): Entry[] {
+  assertReadable(diffs);
   const byCmd = new Map(recorded.map((e) => [e.cmd, e]));
   return diffs.map((d) => {
     const old = byCmd.get(d.cmd);
@@ -92,6 +109,7 @@ export function toEntries(diffs: Compared[], recorded: Entry[]): Entry[] {
 
 /** 記録と今の違いの食い違い（無くなった件・増えた件・中身の替わった件） */
 export function mismatch(diffs: Compared[], recorded: Entry[]): { gone: string[]; added: string[]; changed: string[] } {
+  assertReadable(diffs);
   const now = new Map(diffs.map((d) => [d.cmd, JSON.stringify(shape(d))]));
   const was = new Map(
     recorded.map((e) => [

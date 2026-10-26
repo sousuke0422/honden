@@ -4,8 +4,8 @@
  * 箱の形:
  * - 全ての名前空間を分ける（`--unshare-all`）。網は lo だけで、外へ出られぬ
  * - 根は空の tmpfs を読み取り専用にした物（`--remount-ro /`）。手元の家・repo・/usr は見えぬ
- * - 入れるのは bash と、その共有 library だけ（どれも読み取り専用）。library は `/oracle/lib`（loader だけは元の道）、bash は `/oracle/sh` に置き、
- *   PATH の上にも `/bin` にも無い。他に走らせられる file は箱の中に無い
+ * - 入れるのは bash と、その共有 library だけ（どれも読み取り専用）。library は `/oracle/lib`（loader だけは元の道）、bash は `/oracle/sh` に置く。
+ *   初回起動のloaderがseal-exec.soを読み、execveとexecveatをENOENTで拒む。子にも継がれ、/proc経由でも呼び直せぬ。
  * - 書き込めるのは `/tmp`（捨てる tmpfs）だけ。箱が閉じれば消える
  * - 命の字は手元の一時 dir の file から、読み取り専用で `/oracle/in/case` に置く
  * - 時限（既定 3 秒）を過ぎれば bwrap ごと殺す。PID の名前空間ゆえ、中の子も道連れに消える
@@ -37,10 +37,29 @@ function libraries(): string[] {
  * 陽性対照の対照だけが使う、箱を緩めた形（物差しの本番では使わぬ）。
  * - `usr`: /usr を読み取り専用で置き、PATH を通す（走れば痕が残ることを見せるため）
  * - `net`: 網の名前空間を分けぬ（箱の網の断ちが効いておることを比べるため）
+ * - `exec`: 呼び直しの禁止を外す（陽性対照で痕が出ることを確かめるため）
  */
 export interface Loosen {
   usr?: boolean;
   net?: boolean;
+  /** Only positive controls may permit a second executable. */
+  exec?: boolean;
+}
+
+let sealLibrary: string | undefined;
+function execSeal(): string {
+  if (sealLibrary) return sealLibrary;
+  const dir = mkdtempSync(join(tmpdir(), 'guard-oracle-seal-'));
+  const output = join(dir, 'seal-exec.so');
+  const built = spawnSync('cc', ['-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
+    '-o', output, join(import.meta.dir, 'seal-exec.c')], { encoding: 'utf8' });
+  if (built.status !== 0 || built.error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw new Error(`oracle exec seal build failed: ${built.error?.message ?? built.stderr}`);
+  }
+  process.once('exit', () => rmSync(dir, { recursive: true, force: true }));
+  sealLibrary = output;
+  return output;
 }
 
 /** 箱の bwrap の argv。`inDir` を `/oracle/in` に読み取り専用で置き、`script` を箱の bash に読ませる。 */
@@ -65,6 +84,8 @@ export function boxArgv(inDir: string, script: string, loosen: Loosen = {}): str
     ...(loosen.usr ? [] : ['--setenv', 'LD_LIBRARY_PATH', '/oracle/lib']),
     ...(loosen.usr ? ['--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib64', '/lib64', '--setenv', 'PATH', '/usr/bin'] : []),
     '--ro-bind', BASH, '/oracle/sh',
+    ...(loosen.exec ? [] : ['--ro-bind', execSeal(), '/oracle/seal-exec.so',
+      '--setenv', 'LD_PRELOAD', '/oracle/seal-exec.so']),
     ...(loosen.usr ? [] : binds),
     '--ro-bind', inDir, '/oracle/in',
     '--proc', '/proc',
