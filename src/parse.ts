@@ -364,6 +364,8 @@ export interface ExecScan {
   fileUnresolved?: string;
   /** Opaque shell streams remain unresolved across tolerant wrapper scans. */
   opaqueUnresolved?: string;
+  /** Structural scan exhaustion must also survive tolerant wrappers. */
+  limitUnresolved?: string;
   /**
    * 門が読んだ file の中身の命。命の数の上限（MAX_UNITS）に数えぬよう units とは別に積み、
    * execUnits の終わりに units へ足す。大きな script の中身で、後ろの命が「多すぎる」に落ちぬため
@@ -516,8 +518,11 @@ function descendLoose(
       resolveArgv(c.argv, run, depth - 1, sub);
     }
     if (!afterFirst) for (const f of inner.shellFiles) descendShellFile(f, run, depth - 1, sub);
+    collectNested(inner, run, depth - 1, sub);
   });
-  out.units.push(...sub.units, ...(sub.fromFiles ?? []));
+  appendNestedUnits(sub.units, out);
+  if (sub.fromFiles) (out.fromFiles ??= []).push(...sub.fromFiles);
+  if (sub.limitUnresolved) scanLimit(out);
   (out.legacy ??= []).push(...(sub.legacy ?? []));
   propagateOpaque(sub, out);
   if (sub.unresolved) (out.legacy ??= []).push(text);
@@ -665,7 +670,9 @@ function resolveLoose(argv: Word[], run: Runner, depth: number, out: ExecScan): 
   if (argv.length === 0) return;
   const sub: ExecScan = { units: [] };
   resolveArgv(argv, run, depth, sub);
-  out.units.push(...sub.units);
+  appendNestedUnits(sub.units, out);
+  if (sub.fromFiles) (out.fromFiles ??= []).push(...sub.fromFiles);
+  if (sub.limitUnresolved) scanLimit(out);
   (out.legacy ??= []).push(...(sub.legacy ?? []));
   propagateOpaque(sub, out);
 }
@@ -981,7 +988,7 @@ function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { t
 /** 一つの argv を辿り、実際に走る命へ降りる。 */
 function resolveArgv(argv: Word[], run: Runner, depth: number, out: ExecScan, stdin?: Stdin): void {
   if (depth <= 0 || out.units.length >= MAX_UNITS) {
-    out.unresolved = out.unresolved ?? '入れ子が深すぎる、または命が多すぎる';
+    scanLimit(out);
     return;
   }
   if (argv.length === 0) return;
@@ -1362,7 +1369,9 @@ function withCtx<T>(p: Parsed & { ok: true }, fn: () => T): T {
 export function execUnits(p: Parsed, run: Runner, depth = 4): ExecScan {
   const out: ExecScan = { units: [] };
   if (!p.ok) return { units: [], unresolved: p.reason };
-  return withCtx(p, () => execUnitsInner(p, run, depth, out));
+  withCtx(p, () => execUnitsInner(p, run, depth, out));
+  if (out.fromFiles) out.units.push(...out.fromFiles);
+  return out;
 }
 
 /**
@@ -1481,6 +1490,53 @@ function descendScriptFile(c: Cmd, s: NonNullable<Cmd['script']>, run: Runner, d
   judgeTexts(path, r.texts, run, depth, out);
 }
 
+function scanLimit(out: ExecScan): void {
+  out.limitUnresolved = '入れ子が深すぎる、または命が多すぎる';
+  out.unresolved = out.unresolved ?? out.limitUnresolved;
+}
+
+/** Merge a recovered execution once, while preserving the ordinary-command budget. */
+function appendNestedUnits(units: string[], out: ExecScan): void {
+  const seen = new Set(out.units);
+  for (const unit of units) {
+    if (seen.has(unit)) continue;
+    if (out.units.length >= MAX_UNITS) {
+      scanLimit(out);
+      return;
+    }
+    out.units.push(unit);
+    seen.add(unit);
+  }
+}
+
+/** Recovered streams and substitutions follow the same recursive execution scan. */
+function collectNested(p: Parsed & { ok: true }, run: Runner, depth: number, out: ExecScan): void {
+  const shellHeredocs = p.commands.some((c) => SHELLS.has(baseName(c.argv[0]?.value ?? '')))
+    ? p.heredocs : [];
+  const texts = new Set([...p.substitutions, ...shellHeredocs]);
+  if (texts.size === 0) return;
+  if (depth <= 1) {
+    scanLimit(out);
+    return;
+  }
+  for (const text of texts) {
+    const inner = parseCommand(text, run);
+    if (!inner.ok) continue;
+    const scan = execUnits(inner, run, depth - 1);
+    const files = scan.fromFiles ?? [];
+    const ordinary = files.length > 0 ? scan.units.slice(0, -files.length) : scan.units;
+    appendNestedUnits(ordinary, out);
+    if (files.length > 0) (out.fromFiles ??= []).push(...files);
+    propagateOpaque(scan, out);
+    (out.legacy ??= []).push(...(scan.legacy ?? []));
+    if (scan.limitUnresolved) scanLimit(out);
+    if (scan.fileUnresolved !== undefined) {
+      out.unresolved = out.unresolved ?? scan.fileUnresolved;
+      out.fileUnresolved = out.fileUnresolved ?? scan.fileUnresolved;
+    }
+  }
+}
+
 function propagateOpaque(scan: ExecScan, out: ExecScan): void {
   if (scan.opaqueUnresolved !== undefined) {
     out.opaqueUnresolved = out.opaqueUnresolved ?? scan.opaqueUnresolved;
@@ -1514,29 +1570,6 @@ function execUnitsInner(p: Parsed & { ok: true }, run: Runner, depth: number, ou
   }
   ctx.current = undefined;
   for (const f of p.shellFiles) descendShellFile(f, run, depth, out);
-  // 命令置換と、shell へ流す heredoc の中で file を読む形（shell へ流す heredoc と字は、解き手が
-  // 置換と同じ群れへ渡す。shell でない命へ渡す heredoc は字であって命ではない）。門はこれらの中身を後で解くが、
-  // 展開一般は拒まぬ（substUnits）。opaque な流し込みと読めぬ file はここで拒む
-  // （`echo "$(printf … > f.sh; bash < f.sh)"`）
-  if (depth - 1 > 0) {
-    const shellHeredocs = p.commands.some((c) => SHELLS.has(baseName(c.argv[0]?.value ?? '')))
-      ? p.heredocs : [];
-    for (const s of [...p.substitutions, ...shellHeredocs]) {
-      const inner = parseCommand(s, run);
-      if (!inner.ok) continue;
-      const scan = execUnits(inner, run, depth - 1);
-      propagateOpaque(scan, out);
-      (out.legacy ??= []).push(...(scan.legacy ?? []));
-      if (scan.fileUnresolved !== undefined) {
-        out.unresolved = out.unresolved ?? scan.fileUnresolved;
-        out.fileUnresolved = out.fileUnresolved ?? scan.fileUnresolved;
-      }
-    }
-  }
-  // 門が読んだ file の中身の命を、ここで足す（命の数の上限は、この命の字の命だけに当てる）
-  if (out.fromFiles) {
-    out.units.push(...out.fromFiles);
-    out.fromFiles = undefined;
-  }
+  collectNested(p, run, depth, out);
   return out;
 }
