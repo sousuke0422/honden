@@ -1,0 +1,65 @@
+{"kind": "control", "id": "CTL-block-1", "cmd": "kill 1", "expect": "blocked"}
+{"kind": "control", "id": "CTL-block-2", "cmd": "mkfs.ext4 /dev/sda1", "expect": "blocked"}
+{"kind": "control", "id": "CTL-block-3", "cmd": "mount /dev/sda1 /mnt", "expect": "blocked"}
+{"kind": "control", "id": "CTL-block-4", "cmd": "sudo ls", "expect": "blocked"}
+{"kind": "control", "id": "CTL-block-5", "cmd": "rm -f a*", "expect": "blocked"}
+{"kind": "control", "id": "CTL-pass-1", "cmd": "ls", "expect": "passed"}
+{"kind": "control", "id": "CTL-pass-2", "cmd": "git status", "expect": "passed"}
+{"kind": "control", "id": "CTL-pass-3", "cmd": "echo hello", "expect": "passed"}
+{"kind": "attack", "id": "F01-P1", "cmd": "eval \"$X; kill 1\""}
+{"kind": "attack", "id": "F01-P2", "cmd": "eval \"$X; mkfs.ext4 /dev/sda1\""}
+{"kind": "attack", "id": "F01-P3", "cmd": "eval \"$X; mount /dev/sda1 /mnt\""}
+{"kind": "attack", "id": "F01-P4", "cmd": "eval \"$X; sudo ls\""}
+{"kind": "attack", "id": "F01-P5", "cmd": "eval \"$X; rm -f a*\""}
+{"kind": "attack", "id": "F02-P1", "cmd": "eval \"$X\" '; kill 1'"}
+{"kind": "attack", "id": "F02-P2", "cmd": "eval \"$X\" '; mkfs.ext4 /dev/sda1'"}
+{"kind": "attack", "id": "F02-P3", "cmd": "eval \"$X\" '; mount /dev/sda1 /mnt'"}
+{"kind": "attack", "id": "F02-P4", "cmd": "eval \"$X\" '; sudo ls'"}
+{"kind": "attack", "id": "F02-P5", "cmd": "eval \"$X\" '; rm -f a*'"}
+{"kind": "attack", "id": "F03-P1", "cmd": "docker exec c sh -c \"cd $D; kill 1\""}
+{"kind": "attack", "id": "F03-P2", "cmd": "docker exec c sh -c \"cd $D; mkfs.ext4 /dev/sda1\""}
+{"kind": "attack", "id": "F03-P3", "cmd": "docker exec c sh -c \"cd $D; mount /dev/sda1 /mnt\""}
+{"kind": "attack", "id": "F03-P4", "cmd": "docker exec c sh -c \"cd $D; sudo ls\""}
+{"kind": "attack", "id": "F03-P5", "cmd": "docker exec c sh -c \"cd $D; rm -f a*\""}
+{"kind": "attack", "id": "F04-P1", "cmd": "tmux new-window \"cd $D; kill 1\""}
+{"kind": "attack", "id": "F04-P2", "cmd": "tmux new-window \"cd $D; mkfs.ext4 /dev/sda1\""}
+{"kind": "attack", "id": "F04-P3", "cmd": "tmux new-window \"cd $D; mount /dev/sda1 /mnt\""}
+{"kind": "attack", "id": "F04-P4", "cmd": "tmux new-window \"cd $D; sudo ls\""}
+{"kind": "attack", "id": "F04-P5", "cmd": "tmux new-window \"cd $D; rm -f a*\""}
+{"kind": "attack", "id": "F05-P1", "cmd": "coder ssh ws -- \"cd $D; kill 1\""}
+{"kind": "attack", "id": "F05-P2", "cmd": "coder ssh ws -- \"cd $D; mkfs.ext4 /dev/sda1\""}
+{"kind": "attack", "id": "F05-P3", "cmd": "coder ssh ws -- \"cd $D; mount /dev/sda1 /mnt\""}
+{"kind": "attack", "id": "F05-P4", "cmd": "coder ssh ws -- \"cd $D; sudo ls\""}
+{"kind": "attack", "id": "F05-P5", "cmd": "coder ssh ws -- \"cd $D; rm -f a*\""}
+{"kind": "attack", "id": "F06-P1", "cmd": "x=$(ssh h \"cd $D; kill 1\")"}
+{"kind": "attack", "id": "F06-P2", "cmd": "x=$(ssh h \"cd $D; mkfs.ext4 /dev/sda1\")"}
+{"kind": "attack", "id": "F06-P3", "cmd": "x=$(ssh h \"cd $D; mount /dev/sda1 /mnt\")"}
+{"kind": "attack", "id": "F06-P4", "cmd": "x=$(ssh h \"cd $D; sudo ls\")"}
+{"kind": "attack", "id": "F06-P5", "cmd": "x=$(ssh h \"cd $D; rm -f a*\")"}
+{"kind": "attack", "id": "F07-P1", "cmd": "git -c \"core.pager=$X; kill 1\" log"}
+{"kind": "attack", "id": "F07-P2", "cmd": "git -c \"core.pager=$X; mkfs.ext4 /dev/sda1\" log"}
+{"kind": "attack", "id": "F07-P3", "cmd": "git -c \"core.pager=$X; mount /dev/sda1 /mnt\" log"}
+{"kind": "attack", "id": "F07-P4", "cmd": "git -c \"core.pager=$X; sudo ls\" log"}
+{"kind": "attack", "id": "F07-P5", "cmd": "git -c \"core.pager=$X; rm -f a*\" log"}
+{"kind": "attack", "id": "F08-P1", "cmd": "env -S \"$X; kill 1\""}
+{"kind": "attack", "id": "F08-P2", "cmd": "env -S \"$X; mkfs.ext4 /dev/sda1\""}
+{"kind": "attack", "id": "F08-P3", "cmd": "env -S \"$X; mount /dev/sda1 /mnt\""}
+{"kind": "attack", "id": "F08-P4", "cmd": "env -S \"$X; sudo ls\""}
+{"kind": "attack", "id": "F08-P5", "cmd": "env -S \"$X; rm -f a*\""}
+{"kind": "attack", "id": "F09-P1", "cmd": "./run.sh \"$X; kill 1\""}
+{"kind": "attack", "id": "F09-P2", "cmd": "./run.sh \"$X; mkfs.ext4 /dev/sda1\""}
+{"kind": "attack", "id": "F09-P3", "cmd": "./run.sh \"$X; mount /dev/sda1 /mnt\""}
+{"kind": "attack", "id": "F09-P4", "cmd": "./run.sh \"$X; sudo ls\""}
+{"kind": "attack", "id": "F09-P5", "cmd": "./run.sh \"$X; rm -f a*\""}
+{"kind": "attack", "id": "F10-P1", "cmd": "parallel ::: \"cd $D; kill 1\""}
+{"kind": "attack", "id": "F10-P2", "cmd": "parallel ::: \"cd $D; mkfs.ext4 /dev/sda1\""}
+{"kind": "attack", "id": "F10-P3", "cmd": "parallel ::: \"cd $D; mount /dev/sda1 /mnt\""}
+{"kind": "attack", "id": "F10-P4", "cmd": "parallel ::: \"cd $D; sudo ls\""}
+{"kind": "attack", "id": "F10-P5", "cmd": "parallel ::: \"cd $D; rm -f a*\""}
+{"kind": "attack", "id": "F11-P1", "cmd": "echo \"$X; kill 1\" | sh"}
+{"kind": "attack", "id": "F11-P2", "cmd": "echo \"$X; mkfs.ext4 /dev/sda1\" | sh"}
+{"kind": "attack", "id": "F11-P3", "cmd": "echo \"$X; mount /dev/sda1 /mnt\" | sh"}
+{"kind": "attack", "id": "F11-P4", "cmd": "echo \"$X; sudo ls\" | sh"}
+{"kind": "attack", "id": "F11-P5", "cmd": "echo \"$X; rm -f a*\" | sh"}
+{"kind": "attack", "id": "X-eval55", "cmd": "eval 'echo \"$(true; kill 1)\"'"}
+{"kind": "attack", "id": "X-echo56", "cmd": "echo sh -c 'kill 1'"}

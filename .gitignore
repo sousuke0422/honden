@@ -164,6 +164,7 @@
 !scripts/setup_global_githooks.sh
 !scripts/apply_guard_patch.sh
 !scripts/guard-corpus.ts
+!scripts/guard-bash-oracle.ts
 !scripts/agent_status.sh
 !scripts/ratelimit_check.sh
 !scripts/switch_cli.sh
@@ -288,6 +289,13 @@ tests/specs/osato_lms_*
 !/test/
 !/test/**/*.ts
 !/test/fixtures/**/*.jsonl
+!/test/fixtures/**/*.diff
+# 門が shell へ流す file として読む試料（走らせる物ではない）
+!/test/fixtures/guard-scripts/*.sh
+!/test/fixtures/guard-scripts/README.md
+# 箱の中の bash を物差しにする試験の記録係と手引き（箱に読ませる sh と、撃ち方）
+!/test/guard-bash-oracle/recorder.sh
+!/test/guard-bash-oracle/README.md
 !/package.json
 !/tsconfig.json
 !/bun.lock
