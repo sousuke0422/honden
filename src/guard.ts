@@ -218,7 +218,10 @@ const RULES: Rule[] = [
     // 置きたい。門に動を持たせれば、門の側に検めと実行の隙が生まれる。
     id: 'D006',
     pattern: /(?:^|[;&|]\s*)(?:killall|pkill|kill)(?![\w.-])|tmux\s+kill-(?:server|session)\b/,
-    head: /^(?:killall|pkill|kill)(?![\w.-])/,
+    // `kill -l`（引数が -l の一つだけ）は信号の名を並べるだけで、何も殺さぬ。
+    // 通すのはこの形だけである。`kill -l 1`（番号を名に換える）や `kill -9 -l` は
+    // 形を広げると見分けが崩れるゆえ通さぬ。`pkill -l` は名を出しつつ殺すゆえ除かぬ
+    head: /^(?:killall|pkill)(?![\w.-])|^kill(?![\w.-])(?!\s+-l\s*$)/,
     loose: /tmux\s+kill-(?:server|session)\b/,
     reason: '他エージェントや土台を殺す形である。己の下を始末するなら honden-kill <pid> を使え',
     // **絶対域とする**（殿の裁可 2026-09-01）。
