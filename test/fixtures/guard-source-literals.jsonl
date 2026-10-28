@@ -1,6 +1,6 @@
 {"id":"python-string","lang":"python3","flag":"-c","source":"print(\"os.system(cmd)\")","expect":"allow"}
 {"id":"python-comment","lang":"python3","flag":"-c","source":"# os.system(cmd)\nprint(1)","expect":"allow"}
-{"id":"python-triple","lang":"python3","flag":"-c","source":"s = '''os.system(cmd)'''; print(s)","expect":"allow"}
+{"id":"python-triple","lang":"python3","flag":"-c","source":"s = '''os.system(cmd)'''; print(s)","expect":"deny:D000","scope":"legacy-conservative-assignment"}
 {"id":"python-unicode","lang":"python3","flag":"-c","source":"print('😀'); os.system(cmd)","expect":"deny:D000"}
 {"id":"python-f-expression","lang":"python3","flag":"-c","source":"print(f'{os.system(cmd)}')","expect":"deny:D000"}
 {"id":"python-after-string","lang":"python3","flag":"-c","source":"s = 'os.system(cmd)'; os.system(cmd)","expect":"deny:D000"}

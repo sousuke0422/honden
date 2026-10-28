@@ -30,6 +30,15 @@ describe('independent review probes never lose executable calls', () => {
   });
 });
 
+const pythonCases: { id: string; cmd: string; expect: string; category: string }[] =
+  readFileSync(join(import.meta.dir, 'fixtures/guard-python-source.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line));
+describe('Python source execution descends or rejects unknown source', () => {
+  for (const c of pythonCases) test(`${c.category}:${c.id}`, () => {
+    expect(tag(c.cmd)).toBe(c.expect);
+  });
+});
+
 describe('patch path normalization', () => {
   const plain = readFileSync(join(import.meta.dir, 'fixtures/guard-patches/plain.diff'), 'utf8');
   const fixture = (target: string) => plain.replace(/(?<=a\/|b\/)\S+(?=\n| )/g, target);
