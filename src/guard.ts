@@ -181,8 +181,11 @@ const RULES: Rule[] = [
       // `/*` `/mnt/*` `~/*` の類——**glob による根こそぎ**も同じ罪である。
       // かつては素通しで、settings.json の接頭当てだけが（誤検知混じりに）
       // 拾っておった（実測 2026-08-29）。
-      /(?:^|[;&|]\s*)rm\s+(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*|-[rR]\s+-[fF]|-[fF]\s+-[rR])\s+(?:\/|\/mnt(?:\/\w+)?|\/home(?:\/\w+)?|~)(?:\/?\*+)?\s*(?:$|[;&|])/,
-    head: /^rm\s+(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*|-[rR]\s+-[fF]|-[fF]\s+-[rR])\s+(?:\/|\/mnt(?:\/\w+)?|\/home(?:\/\w+)?|~)(?:\/?\*+)?\s*(?:$|[;&|])/,
+      //
+      // 短い旗の前後と間に長い旗（`--one-file-system=x`・`--no-preserve-root`）を
+      // 挟む形も同じである。挟むだけで紋様が外れておった（bash の物差しの道すがら・2026-10-20）
+      /(?:^|[;&|]\s*)rm\s+(?:--[\w-]+(?:=\S*)?\s+)*(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*|-[rR]\s+(?:--[\w-]+(?:=\S*)?\s+)*-[fF]|-[fF]\s+(?:--[\w-]+(?:=\S*)?\s+)*-[rR])\s+(?:--[\w-]+(?:=\S*)?\s+)*(?:\/|\/mnt(?:\/\w+)?|\/home(?:\/\w+)?|~)(?:\/?\*+)?\s*(?:$|[;&|])/,
+    head: /^rm\s+(?:--[\w-]+(?:=\S*)?\s+)*(?:-\w*[rR]\w*[fF]\w*|-\w*[fF]\w*[rR]\w*|-[rR]\s+(?:--[\w-]+(?:=\S*)?\s+)*-[fF]|-[fF]\s+(?:--[\w-]+(?:=\S*)?\s+)*-[rR])\s+(?:--[\w-]+(?:=\S*)?\s+)*(?:\/|\/mnt(?:\/\w+)?|\/home(?:\/\w+)?|~)(?:\/?\*+)?\s*(?:$|[;&|])/,
     reason: 'OS・ドライブ・ホームを消す形である',
     absolute: true,
   },
@@ -195,7 +198,12 @@ const RULES: Rule[] = [
   },
   {
     id: 'D003',
-    pattern: /git\s+push(?=.*(?:\s--force\b|\s-f\b))(?!.*--force-with-lease)/,
+    // `--force` と `-f` は語として在る時に当てる（`--force-with-lease` の頭に当てぬ）。
+    // lease と並べても force が勝つゆえ、lease が在るだけでは通さぬ
+    // （`git push -f --force-with-lease=main`・bash の物差しの道すがら・2026-10-20）。
+    // 旗を探すのは同じ命の中だけ（`git push --force-with-lease && git worktree remove --force x`
+    // の後ろの `--force` は push の旗ではない）
+    pattern: /git\s+push(?=[^;&|]*\s(?:--force|-f)(?![\w=-]))/,
     reason: '共有履歴を壊す。--force-with-lease を使え',
   },
   {
@@ -205,9 +213,12 @@ const RULES: Rule[] = [
   },
   {
     id: 'D005',
-    pattern: /(?:^|[;&|]\s*)(?:sudo|su)(?![\w.-])|(?:chmod|chown)\s+-R\s+\S*\s*(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd])/,
+    // 根そのもの（`/`・`/*`）へ一括で当てる形も止める。束ねた旗（`-fR`）と長い旗
+    // （`--recursive`）も同じである（bash の物差しの道すがら・2026-10-20）
+    pattern:
+      /(?:^|[;&|]\s*)(?:sudo|su)(?![\w.-])|(?:chmod|chown)\s+(?:-\w*R\w*|--recursive)\s+(?:\S+\s+)?(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd]|\/\**\s*(?:$|[;&|]))/,
     head: /^(?:sudo|su)(?![\w.-])/,
-    loose: /(?:chmod|chown)\s+-R\s+\S*\s*(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd])/,
+    loose: /(?:chmod|chown)\s+(?:-\w*R\w*|--recursive)\s+(?:\S+\s+)?(?:\/etc|\/usr|\/var|\/bin|\/mnt\/[cd]|\/\**\s*(?:$|[;&|]))/,
     reason: '権限昇格・システム経路の一括変更である',
   },
   {
@@ -237,9 +248,13 @@ const RULES: Rule[] = [
   },
   {
     id: 'D007',
-    pattern: /(?:^|[;&|]\s*)(?:mkfs(?:\.[\w-]+)?|fdisk)(?![\w-])|dd\s+if=|(?:^|[;&|]\s*)(?:umount|mount)(?![\w.-])/,
+    // dd は引数の順に依らず、/dev の機器へ書く形（`of=/dev/sda`）を止める。
+    // 前は頭の引数が `if=` の形だけを見ておった（bash の物差しの道すがら・2026-10-20）。
+    // 捨て場と流れ（`/dev/null`・`/dev/stdout` の類）は機器ではないゆえ除く
+    pattern:
+      /(?:^|[;&|]\s*)(?:mkfs(?:\.[\w-]+)?|fdisk)(?![\w-])|dd\s+if=|dd\s[^;&|]*?\bof=\/dev\/(?!(?:null|stdout|stderr|tty)(?:\s|$)|fd\/)|(?:^|[;&|]\s*)(?:umount|mount)(?![\w.-])/,
     head: /^(?:mkfs(?:\.[\w-]+)?|fdisk)(?![\w-])|^(?:umount|mount)(?![\w.-])/,
-    loose: /dd\s+if=/,
+    loose: /dd\s+if=|dd\s[^;&|]*?\bof=\/dev\/(?!(?:null|stdout|stderr|tty)(?:\s|$)|fd\/)/,
     reason: 'ディスク・区画を壊す形である',
     absolute: true,
   },
@@ -476,6 +491,10 @@ export function judgeStructured(cmd: string, run: ParseRunner, raw: string = cmd
   // `sh -c '…'` の引用の中も、`find -exec` の後ろも、包みの中も命である
   // （二度目の監査が釣った・2026-09-01）。
   const scan = execUnits(target, run);
+  for (const text of scan.legacy ?? []) {
+    const verdict = judge(text);
+    if (verdict.permission === 'deny') return verdict;
+  }
   if (scan.unresolved !== undefined) {
     // **解けぬなら通さぬ。** 一度目の直しは候補の上限に達したら通しており、
     // 無害な候補で枠を食い潰す形で素通りできた（実測）。
