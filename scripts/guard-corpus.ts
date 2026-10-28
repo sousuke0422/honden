@@ -11,7 +11,9 @@
  *
  *   <file> は命の字の JSON 配列か、群れと同じ一行一件の JSON。記録は
  *   HONDEN_GUARD_CORPUS_GOLDEN（既定は <file>.golden.jsonl）に置く。これも repo の外に置け。
- *   履歴の命には印が無いゆえ、無害な形（benign）として撃つ。
+ *   JSON 配列の履歴には印が無いゆえ、記録の無い件は無害な形（benign）として撃つ。
+ *   一行一件の JSON は入力の kind と expect を保持する。既存の記録があれば
+ *   その expect を使い、kind が入力と食い違えば書き換えずに断る。
  *
  * **食い違いは命の全文を出す。** 手元の群れの命には、秘密・手元の道・人の名が混じりうる。
  * 出力を貼る先に気をつけよ。
@@ -35,21 +37,29 @@ if (unknown.length > 0) {
   process.exit(2);
 }
 
-/** 手元の群れを読む。記録に在る件はその記録を、無い件は記録なしの benign として足す。 */
+/** 印のある入力を保持し、既存の記録を期待値の正本にする。 */
 function localCases(corpusPath: string, goldenPath: string): Case[] {
   const text = readFileSync(corpusPath, 'utf8');
-  let cmds: string[];
+  let input: Case[];
   const trimmed = text.trimStart();
-  if (trimmed.startsWith('[')) {
+  const labeled = !trimmed.startsWith('[');
+  if (!labeled) {
     const arr = JSON.parse(text) as unknown;
     if (!Array.isArray(arr) || !arr.every((x) => typeof x === 'string')) throw new Error(`${corpusPath} が命の字の配列でない`);
-    cmds = arr as string[];
+    input = arr.map((cmd) => ({ kind: 'benign', cmd }));
   } else {
-    cmds = parseCases(text, corpusPath).map((c) => c.cmd);
+    input = parseCases(text, corpusPath);
   }
   const golden = existsSync(goldenPath) ? loadCases(goldenPath) : [];
   const byCmd = new Map(golden.map((c) => [c.cmd, c]));
-  return [...new Set(cmds)].map((cmd) => byCmd.get(cmd) ?? { kind: 'benign' as const, cmd });
+  return [...new Map(input.map((c) => [c.cmd, c])).values()].map((c) => {
+    const recorded = byCmd.get(c.cmd);
+    if (!recorded) return c;
+    if (labeled && recorded.kind !== c.kind) {
+      throw new Error(`${corpusPath}: kind が記録と食い違う（入力 ${c.kind} / 記録 ${recorded.kind}）。記録は書き換えぬ`);
+    }
+    return recorded;
+  });
 }
 
 const localPath = process.env.HONDEN_GUARD_CORPUS;

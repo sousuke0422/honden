@@ -1,0 +1,62 @@
+{"id": "P4-W2", "kind": "attack", "cmd": "x=$(echo x | base64 -d | sh)"}
+{"id": "P4-W3", "kind": "attack", "cmd": "echo \"$(echo x | base64 -d | sh)\""}
+{"id": "P4-W4", "kind": "attack", "cmd": "bash -c 'echo x | base64 -d | sh'"}
+{"id": "P4-W5", "kind": "attack", "cmd": "sh -c \"echo x | base64 -d | sh\""}
+{"id": "P4-W6", "kind": "attack", "cmd": "eval 'echo x | base64 -d | sh'"}
+{"id": "P4-W7", "kind": "attack", "cmd": "ssh h 'echo x | base64 -d | sh'"}
+{"id": "P4-W8", "kind": "attack", "cmd": "bash <<'EOF'\necho x | base64 -d | sh\nEOF"}
+{"id": "P4-W9", "kind": "attack", "cmd": "cat <<EOF\n$(echo x | base64 -d | sh)\nEOF"}
+{"id": "P4-W14", "kind": "attack", "cmd": "docker exec c sh -c 'echo x | base64 -d | sh'"}
+{"id": "P4-W15", "kind": "attack", "cmd": "tmux new-window 'echo x | base64 -d | sh'"}
+{"id": "P4-W18", "kind": "attack", "cmd": "watch 'echo x | base64 -d | sh'"}
+{"id": "P4-W19", "kind": "attack", "cmd": "find . -exec sh -c 'echo x | base64 -d | sh' \\;"}
+{"id": "P6-W2", "kind": "attack", "cmd": "x=$(bash <<<\"$X\")"}
+{"id": "P6-W3", "kind": "attack", "cmd": "echo \"$(bash <<<\"$X\")\""}
+{"id": "P6-W4", "kind": "attack", "cmd": "bash -c 'bash <<<\"$X\"'"}
+{"id": "P6-W5", "kind": "attack", "cmd": "sh -c \"bash <<<\"$X\"\""}
+{"id": "P6-W6", "kind": "attack", "cmd": "eval 'bash <<<\"$X\"'"}
+{"id": "P6-W7", "kind": "attack", "cmd": "ssh h 'bash <<<\"$X\"'"}
+{"id": "P6-W8", "kind": "attack", "cmd": "bash <<'EOF'\nbash <<<\"$X\"\nEOF"}
+{"id": "P6-W9", "kind": "attack", "cmd": "cat <<EOF\n$(bash <<<\"$X\")\nEOF"}
+{"id": "P6-W14", "kind": "attack", "cmd": "docker exec c sh -c 'bash <<<\"$X\"'"}
+{"id": "P6-W15", "kind": "attack", "cmd": "tmux new-window 'bash <<<\"$X\"'"}
+{"id": "P6-W18", "kind": "attack", "cmd": "watch 'bash <<<\"$X\"'"}
+{"id": "P6-W19", "kind": "attack", "cmd": "find . -exec sh -c 'bash <<<\"$X\"' \\;"}
+{"id": "P10-W2", "kind": "attack", "cmd": "x=$(printf \"%s\" \"$X\" | sh)"}
+{"id": "P10-W3", "kind": "attack", "cmd": "echo \"$(printf \"%s\" \"$X\" | sh)\""}
+{"id": "P10-W4", "kind": "attack", "cmd": "bash -c 'printf \"%s\" \"$X\" | sh'"}
+{"id": "P10-W5", "kind": "attack", "cmd": "sh -c \"printf \"%s\" \"$X\" | sh\""}
+{"id": "P10-W6", "kind": "attack", "cmd": "eval 'printf \"%s\" \"$X\" | sh'"}
+{"id": "P10-W7", "kind": "attack", "cmd": "ssh h 'printf \"%s\" \"$X\" | sh'"}
+{"id": "P10-W8", "kind": "attack", "cmd": "bash <<'EOF'\nprintf \"%s\" \"$X\" | sh\nEOF"}
+{"id": "P10-W9", "kind": "attack", "cmd": "cat <<EOF\n$(printf \"%s\" \"$X\" | sh)\nEOF"}
+{"id": "P10-W14", "kind": "attack", "cmd": "docker exec c sh -c 'printf \"%s\" \"$X\" | sh'"}
+{"id": "P10-W15", "kind": "attack", "cmd": "tmux new-window 'printf \"%s\" \"$X\" | sh'"}
+{"id": "P10-W18", "kind": "attack", "cmd": "watch 'printf \"%s\" \"$X\" | sh'"}
+{"id": "P10-W19", "kind": "attack", "cmd": "find . -exec sh -c 'printf \"%s\" \"$X\" | sh' \\;"}
+{"id": "BENIGN-1", "kind": "benign", "cmd": "bash -n setup.sh"}
+{"id": "BENIGN-2", "kind": "benign", "cmd": "cat f | bash -n"}
+{"id": "BENIGN-3", "kind": "benign", "cmd": "echo hi | cat"}
+{"id": "BENIGN-4", "kind": "benign", "cmd": "bash script.sh < input.txt"}
+{"id": "BENIGN-5", "kind": "benign", "cmd": "sh -c \"echo hi\" < in"}
+{"id": "BENIGN-6", "kind": "benign", "cmd": "echo y | ./install.sh"}
+{"id": "BENIGN-7", "kind": "benign", "cmd": "git log | less"}
+{"id": "BENIGN-8", "kind": "benign", "cmd": "cat <<'EOF' | bash -n\necho x\nEOF"}
+{"id": "BENIGN-9", "kind": "benign", "cmd": "printf \"%s\\n\" a b | sort"}
+{"id": "BENIGN-10", "kind": "benign", "cmd": "jq . f | bash -n"}
+{"id": "BENIGN-11", "kind": "benign", "cmd": "echo \"$X\" | grep y"}
+{"id": "BENIGN-12", "kind": "benign", "cmd": "node x.js < in.json"}
+{"id": "BENIGN-13", "kind": "benign", "cmd": "python3 - <<'EOF'\nprint(1)\nEOF"}
+{"id": "BENIGN-14", "kind": "benign", "cmd": "cat <<EOF\nhello $(date)\nEOF"}
+{"id": "BENIGN-15", "kind": "benign", "cmd": "echo \\$HOME"}
+{"id": "BENIGN-16", "kind": "benign", "cmd": "grep -E \"\\bkill\\b\" f"}
+{"id":"EXTRA-01","cmd":"bash -c 'ls'","kind":"benign"}
+{"id":"EXTRA-02","cmd":"ssh host 'git status'","kind":"benign"}
+{"id":"EXTRA-03","cmd":"printf \"%s\\n\" \"$(date)\"","kind":"benign"}
+{"id":"EXTRA-04","cmd":"find . -exec grep -n needle '{}' ';'","kind":"benign"}
+{"id":"EXTRA-05","cmd":"cat <<'EOF'\nplain text\nEOF","kind":"benign"}
+{"id":"EXTRA-06","cmd":"eval 'printf hello'","kind":"benign"}
+{"id":"EXTRA-07","cmd":"bash -c 'printf ok | cat'","kind":"benign"}
+{"id":"EXTRA-08","cmd":"env bash -c 'git status'","kind":"benign"}
+{"id":"EXTRA-09","cmd":"printf '%s' `date`","kind":"benign"}
+{"id":"EXTRA-10","cmd":"bash <<'EOF'\nprintf hello\nEOF","kind":"benign"}
