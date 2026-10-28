@@ -1,0 +1,33 @@
+{"id":"py-exec-literal","cmd":"python3 -c 'exec(\"import os; os.system(\\\"kill -9 1\\\")\")'","expect":"deny:D006","category":"regression"}
+{"id":"py-exec-compile","cmd":"python3 -c 'exec(compile(\"import os; os.system(\\\"kill -9 1\\\")\", \"x\", \"exec\"))'","expect":"deny:D006","category":"regression"}
+{"id":"py-exec-bytes","cmd":"python3 -c 'exec(b\"import os; os.system(\\\"kill -9 1\\\")\")'","expect":"deny:D006","category":"regression"}
+{"id":"py-eval-literal","cmd":"python3 -c 'eval(\"__import__(\\\"os\\\").system(\\\"kill -9 1\\\")\")'","expect":"deny:D006","category":"existing-hole"}
+{"id":"ctrl-py-print","cmd":"python3 -c 'print(\"os.system(cmd)\")'","expect":"allow","category":"control"}
+{"id":"ctrl-py-direct","cmd":"python3 -c 'import os; os.system(\"kill -9 1\")'","expect":"deny:D006","category":"control"}
+{"id":"ctrl-py-exec-benign","cmd":"python3 -c 'exec(\"print(1)\")'","expect":"allow","category":"control"}
+{"id":"perl-dollar-hash","cmd":"perl -e '$#ary; system(\"kill -9 1\")'","expect":"deny:D006","category":"control"}
+{"id":"ruby-char-hash","cmd":"ruby -e 'c = ?#; system(\"kill -9 1\")'","expect":"deny:D006","category":"control"}
+{"id":"benign-compile","cmd":"python3 -c 'exec(compile(\"print(1)\", \"sample\", \"exec\"))'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"benign-bytes","cmd":"python3 -c 'exec(b\"print(1)\")'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"benign-nested","cmd":"python3 -c 'exec(\"exec('\"'\"'print(1)'\"'\"')\")'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"benign-eval","cmd":"python3 -c 'eval(\"1+1\")'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"benign-parenthesized","cmd":"python3 -c 'exec((\"print(1)\"))'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"benign-concat","cmd":"python3 -c 'exec(\"print(\" \"1)\")'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"opaque-exec","cmd":"python3 -c 'exec(source)'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-eval","cmd":"python3 -c 'eval(source)'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-compile","cmd":"python3 -c 'compile(source,\"sample\",\"exec\")'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-builtins","cmd":"python3 -c 'builtins.exec(source)'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-alias","cmd":"python3 -c 'run = exec; run(source)'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-addition","cmd":"python3 -c 'exec(\"print(1)\" + source)'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-unknown-inner","cmd":"python3 -c 'exec(\"unknown()\")'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-encoding","cmd":"python3 -c 'exec(b\"# coding: utf-7\\nprint(1)\")'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-escape","cmd":"python3 -c 'exec(\"\\x70rint(1)\")'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"display-execution-name","cmd":"python3 -c 'print(\"exec(source)\")'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"comment-execution-name","cmd":"python3 -c '# exec(source)\nprint(1)'","expect":"allow","category":"bounded-decoding-control"}
+{"id":"opaque-depth-limit","cmd":"python3 -c 'exec('\"'\"'exec(\\'\"'\"'exec(\\\\\\'\"'\"'exec(\\\\\\\\\\\\\\'\"'\"'exec(\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\'\"'\"'exec(\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\'\"'\"'exec(\"exec(\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\'\"'\"'print(1)\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\'\"'\"')\")\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\'\"'\"')\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\'\"'\"')\\\\\\\\\\\\\\'\"'\"')\\\\\\'\"'\"')\\'\"'\"')'\"'\"')'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-encoded-program","cmd":"python3 -c 'exec(\"\\x69\\x6d\\x70\\x6f\\x72\\x74\\x20\\x6f\\x73\\x3b\\x20\\x6f\\x73\\x2e\\x73\\x79\\x73\\x74\\x65\\x6d\\x28\\x22\\x6b\\x69\\x6c\\x6c\\x20\\x2d\\x39\\x20\\x31\\x22\\x29\")'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-encoded-inner-command","cmd":"python3 -c 'exec('\"'\"'import os; os.system(\"\\\\x6b\\\\x69\\\\x6c\\\\x6c\\\\x20\\\\x2d\\\\x39\\\\x20\\\\x31\")'\"'\"')'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-globals","cmd":"python3 -c 'exec(\"print(1)\", {})'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-global-rebinding","cmd":"python3 -c 'print = unknown; exec(\"print(1)\")'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-reflection","cmd":"python3 -c 'globals()[\"print\"] = getattr(builtins,\"exec\"); print(\"os.system(cmd)\")'","expect":"deny:D000","category":"bounded-decoding-control"}
+{"id":"opaque-custom-context","cmd":"python3 -c 'exec(\"print(1)\", globals())'","expect":"deny:D000","category":"bounded-decoding-control"}
