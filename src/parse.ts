@@ -762,11 +762,113 @@ function readArg(src: string, at: number, quotes: string): string | undefined {
  * 取りこぼす形: 口を別の名で呼ぶ（`from os import system as s`）、源を file や heredoc から
  * 読む、字を組み立てる（`'ki' + 'll'`）、eval や exec で源を作る。
  */
+/** Keep executable positions, with literal/comment contents blanked at the same offsets. */
+function executableSource(lang: string, src: string): string {
+  const chars = src.split('');
+  const blank = (a: number, b: number) => { for (let k = a; k < b; k++) if (src[k] !== '\n') chars[k] = ' '; };
+  const quoted = (start: number, delimiter: string, interpolate: boolean): number => {
+    const triple = lang === 'python' && src.startsWith(delimiter.repeat(3), start);
+    const end = triple ? delimiter.repeat(3) : delimiter;
+    let i = start + end.length;
+    blank(start, i);
+    while (i < src.length) {
+      if (src[i] === '\\') { blank(i, Math.min(i + 2, src.length)); i += 2; continue; }
+      if (src.startsWith(end, i)) { blank(i, i + end.length); return i + end.length; }
+      const marker = lang === 'node' ? '${' : lang === 'ruby' ? '#{' : lang === 'perl' ? src.slice(i, i + 2) : '{';
+      if (interpolate && (lang !== 'perl' || marker === '${' || marker === '@{') && src.startsWith(marker, i)) {
+        if (lang === 'python' && src[i + 1] === '{') { blank(i, i + 2); i += 2; continue; }
+        blank(i, i + marker.length);
+        i = code(i + marker.length, true);
+        continue;
+      }
+      blank(i, i + 1); i++;
+    }
+    return i;
+  };
+  const code = (start: number, stopAtBrace = false): number => {
+    let depth = 0;
+    for (let i = start; i < src.length;) {
+      const c = src[i]!;
+      if (stopAtBrace && c === '}' && depth === 0) { blank(i, i + 1); return i + 1; }
+      if (c === '{') depth++;
+      if (c === '}') depth--;
+      // Perl's q/qq/qx and Ruby's percent literals may use paired delimiters.
+      const special = lang === 'perl'
+        ? /^(q[qxrw]?)(\s*)([^\w\s])/u.exec(src.slice(i))
+        : lang === 'ruby' ? /^(%[qQwWiIrx])(\s*)([^\w\s])/u.exec(src.slice(i)) : null;
+      if (special && (i === 0 || !/[\w.$@%]/.test(src[i - 1]!)) && !/(?:->|::)$/.test(src.slice(0, i))) {
+        const opener = special[3]!;
+        const closer = ({ '(': ')', '[': ']', '{': '}', '<': '>' } as Record<string, string>)[opener] ?? opener;
+        let j = i + special[0].length, nesting = 0;
+        blank(i, j);
+        for (; j < src.length; j++) {
+          if (src[j] === '\\') { blank(j, Math.min(j + 2, src.length)); j++; continue; }
+          const marker = lang === 'ruby' ? '#{' : src.slice(j, j + 2);
+          const interpolates = lang === 'ruby' ? /[QWrI]/.test(special[1]!) : /^(?:qq|qr)$/.test(special[1]!);
+          if (interpolates && (lang === 'ruby' || marker === '${' || marker === '@{') && src.startsWith(marker, j)) {
+            blank(j, j + 2); j = code(j + 2, true) - 1; continue;
+          }
+          if (opener !== closer && src[j] === opener) nesting++;
+          blank(j, j + 1);
+          if (src[j] === closer) { if (nesting-- === 0) { j++; break; } }
+        }
+        const runs = special[1] === 'qx' || special[1] === '%x';
+        // ticks() recognizes the executable forms; other quote forms are data.
+        if (runs) for (let k = i; k < i + special[1]!.length; k++) chars[k] = src[k]!;
+        i = j; continue;
+      }
+      const hashComment = lang !== 'node' && c === '#';
+      const slashComment = lang === 'node' && src.startsWith('//', i);
+      if (hashComment || slashComment) {
+        const end = src.indexOf('\n', i); const j = end < 0 ? src.length : end;
+        blank(i, j); i = j; continue;
+      }
+      if (lang === 'node' && src.startsWith('/*', i)) {
+        const end = src.indexOf('*/', i + 2); const j = end < 0 ? src.length : end + 2;
+        blank(i, j); i = j; continue;
+      }
+      if (lang === 'ruby' && (i === 0 || src[i - 1] === '\n') && src.startsWith('=begin', i) && /\s/.test(src[i + 6] ?? '')) {
+        const m = /^=end(?:\s|$)/m.exec(src.slice(i + 6));
+        const j = m ? i + 6 + m.index + m[0].length : src.length;
+        blank(i, j); i = j; continue;
+      }
+      if (c === "'" || c === '"' || (c === '`' && lang !== 'python')) {
+        const prefix = lang === 'python' ? /\b([rbuf]{0,3})$/i.exec(src.slice(0, i))?.[1] ?? '' : '';
+        const interpolate = lang === 'python' ? /f/i.test(prefix) : lang === 'node' ? c === '`' : (lang === 'ruby' || lang === 'perl') && c !== "'";
+        const start = i; i = quoted(i, c, interpolate);
+        // Perl/Ruby backticks run a command. Preserve their opening position for ticks().
+        if (c === '`' && (lang === 'perl' || lang === 'ruby')) chars[start] = '`';
+        continue;
+      }
+      // JavaScript regexp literals have no callable source in their contents.
+      if (lang === 'node' && c === '/') {
+        const before = src.slice(0, i).trimEnd();
+        if (!before || /[=(:,!&|?;{\[]$/.test(before) || /\b(?:return|throw|case|yield)\s*$/.test(before)) {
+          let j = i + 1, bracket = false;
+          for (; j < src.length; j++) {
+            if (src[j] === '\\') { j++; continue; }
+            if (src[j] === '[') bracket = true;
+            if (src[j] === ']') bracket = false;
+            if (src[j] === '/' && !bracket) { j++; break; }
+            if (src[j] === '\n') break;
+          }
+          blank(i, j); i = j; continue;
+        }
+      }
+      i++;
+    }
+    return src.length;
+  };
+  code(0);
+  return chars.join('');
+}
+
 function shellCallsIn(lang: string, src: string): { cmds: string[]; opaque: number } {
   const cmds: string[] = [];
   let opaque = 0;
+  const executable = executableSource(lang, src);
   const take = (re: RegExp, quotes: string) => {
-    for (const m of src.matchAll(re)) {
+    for (const m of executable.matchAll(re)) {
       const at = (m.index ?? 0) + m[0].length;
       const a = readArg(src, at, quotes);
       if (a === undefined) opaque++;
@@ -776,6 +878,7 @@ function shellCallsIn(lang: string, src: string): { cmds: string[]; opaque: numb
   };
   const ticks = (re: RegExp) => {
     for (const m of src.matchAll(re)) {
+      if (executable[m.index ?? 0] !== src[m.index ?? 0]) continue;
       const t = m[1] ?? '';
       if (/\$\{|#\{|[$@][a-zA-Z_{]/.test(t)) opaque++;
       else cmds.push(t);
@@ -811,16 +914,35 @@ const MAX_READ_BYTES = 1 << 20;
 /** patch が書き換える file の道。`--- a/x`・`+++ b/x`・`diff --git a/x b/y`・rename・copy。 */
 export function patchTargets(text: string): string[] {
   const out = new Set<string>();
+  const add = (path: string) => {
+    if (path === '/dev/null') return;
+    // Strip only the conventional diff prefix for the bounds check. Keep it in
+    // the returned spelling: downstream matching also accepts prefixed paths.
+    const relative = path.replace(/^[ab]\//, '');
+    let depth = 0;
+    if (relative.startsWith('/')) throw new Error('patch の道が repo の外を指す');
+    for (const part of relative.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') { if (--depth < 0) throw new Error('patch の道が repo の外へ出る'); }
+      else depth++;
+    }
+    const parts: string[] = [];
+    for (const part of path.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') parts.pop(); else parts.push(part);
+    }
+    out.add(parts.join('/'));
+  };
   for (const line of text.split('\n')) {
     let m = /^(?:---|\+\+\+)\s+(\S+)/.exec(line);
-    if (m && m[1] !== '/dev/null') out.add(m[1]!);
+    if (m) add(m[1]!);
     m = /^diff --git (\S+) (\S+)/.exec(line);
     if (m) {
-      out.add(m[1]!);
-      out.add(m[2]!);
+      add(m[1]!);
+      add(m[2]!);
     }
     m = /^(?:rename|copy) (?:from|to) (.+)$/.exec(line);
-    if (m) out.add(m[1]!.trim());
+    if (m) add(m[1]!.trim());
   }
   return [...out];
 }
@@ -962,12 +1084,20 @@ function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { t
   }
   if (dynamic !== undefined) return { unreadable: `${dynamic} は道が展開に依る` };
   const targets: string[] = [];
+  const appendTargets = (text: string): string | undefined => {
+    try { targets.push(...patchTargets(text)); }
+    catch { return 'patch の道が repo の外へ出る'; }
+    return undefined;
+  };
   // 同じ命の中で作ってから当てる形（`printf … > late.diff; git apply late.diff`）は、
   // 門が読む時にはまだ無いか、読んだ物と当てる物が違う。readSource が拒む
   const add = (f: string) => {
     const r = readSource(f, ctx.current, base || undefined);
     if ('unreadable' in r) return r.unreadable;
-    for (const t of r.texts) targets.push(...patchTargets(t));
+    for (const t of r.texts) {
+      const bad = appendTargets(t);
+      if (bad) return bad;
+    }
     return undefined;
   };
   for (const f of files) {
@@ -976,7 +1106,10 @@ function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { t
   }
   if (fromStdin && stdin) {
     if ('opaque' in stdin) return { unreadable: '標準入力から読む patch の中身が見えぬ' };
-    if ('text' in stdin) targets.push(...patchTargets(stdin.text));
+    if ('text' in stdin) {
+      const bad = appendTargets(stdin.text);
+      if (bad) return { unreadable: bad };
+    }
     if ('file' in stdin) {
       const bad = add(stdin.file);
       if (bad) return { unreadable: bad };
