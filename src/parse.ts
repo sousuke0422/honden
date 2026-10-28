@@ -762,104 +762,37 @@ function readArg(src: string, at: number, quotes: string): string | undefined {
  * 取りこぼす形: 口を別の名で呼ぶ（`from os import system as s`）、源を file や heredoc から
  * 読む、字を組み立てる（`'ki' + 'll'`）、eval や exec で源を作る。
  */
-/** Keep executable positions, with literal/comment contents blanked at the same offsets. */
+/** Mask only Python's unambiguous strings/comments, preserving UTF-16 offsets.
+ * Other languages keep the original conservative scan. Their sigils, quoting
+ * operators and regexp delimiters require their own complete lexical rules.
+ */
 function executableSource(lang: string, src: string): string {
+  if (lang !== 'python') return src;
   const chars = src.split('');
-  const blank = (a: number, b: number) => { for (let k = a; k < b; k++) if (src[k] !== '\n') chars[k] = ' '; };
-  const quoted = (start: number, delimiter: string, interpolate: boolean): number => {
-    const triple = lang === 'python' && src.startsWith(delimiter.repeat(3), start);
-    const end = triple ? delimiter.repeat(3) : delimiter;
-    let i = start + end.length;
-    blank(start, i);
-    while (i < src.length) {
-      if (src[i] === '\\') { blank(i, Math.min(i + 2, src.length)); i += 2; continue; }
-      if (src.startsWith(end, i)) { blank(i, i + end.length); return i + end.length; }
-      const marker = lang === 'node' ? '${' : lang === 'ruby' ? '#{' : lang === 'perl' ? src.slice(i, i + 2) : '{';
-      if (interpolate && (lang !== 'perl' || marker === '${' || marker === '@{') && src.startsWith(marker, i)) {
-        if (lang === 'python' && src[i + 1] === '{') { blank(i, i + 2); i += 2; continue; }
-        blank(i, i + marker.length);
-        i = code(i + marker.length, true);
-        continue;
-      }
-      blank(i, i + 1); i++;
-    }
-    return i;
+  const blank = (a: number, b: number) => {
+    for (let k = a; k < b; k++) if (src[k] !== '\n' && src[k] !== '\r') chars[k] = ' ';
   };
-  const code = (start: number, stopAtBrace = false): number => {
-    let depth = 0;
-    for (let i = start; i < src.length;) {
-      const c = src[i]!;
-      if (stopAtBrace && c === '}' && depth === 0) { blank(i, i + 1); return i + 1; }
-      if (c === '{') depth++;
-      if (c === '}') depth--;
-      // Perl's q/qq/qx and Ruby's percent literals may use paired delimiters.
-      const special = lang === 'perl'
-        ? /^(q[qxrw]?)(\s*)([^\w\s])/u.exec(src.slice(i))
-        : lang === 'ruby' ? /^(%[qQwWiIrx])(\s*)([^\w\s])/u.exec(src.slice(i)) : null;
-      if (special && (i === 0 || !/[\w.$@%]/.test(src[i - 1]!)) && !/(?:->|::)$/.test(src.slice(0, i))) {
-        const opener = special[3]!;
-        const closer = ({ '(': ')', '[': ']', '{': '}', '<': '>' } as Record<string, string>)[opener] ?? opener;
-        let j = i + special[0].length, nesting = 0;
-        blank(i, j);
-        for (; j < src.length; j++) {
-          if (src[j] === '\\') { blank(j, Math.min(j + 2, src.length)); j++; continue; }
-          const marker = lang === 'ruby' ? '#{' : src.slice(j, j + 2);
-          const interpolates = lang === 'ruby' ? /[QWrI]/.test(special[1]!) : /^(?:qq|qr)$/.test(special[1]!);
-          if (interpolates && (lang === 'ruby' || marker === '${' || marker === '@{') && src.startsWith(marker, j)) {
-            blank(j, j + 2); j = code(j + 2, true) - 1; continue;
-          }
-          if (opener !== closer && src[j] === opener) nesting++;
-          blank(j, j + 1);
-          if (src[j] === closer) { if (nesting-- === 0) { j++; break; } }
-        }
-        const runs = special[1] === 'qx' || special[1] === '%x';
-        // ticks() recognizes the executable forms; other quote forms are data.
-        if (runs) for (let k = i; k < i + special[1]!.length; k++) chars[k] = src[k]!;
-        i = j; continue;
-      }
-      const hashComment = lang !== 'node' && c === '#';
-      const slashComment = lang === 'node' && src.startsWith('//', i);
-      if (hashComment || slashComment) {
-        const end = src.indexOf('\n', i); const j = end < 0 ? src.length : end;
-        blank(i, j); i = j; continue;
-      }
-      if (lang === 'node' && src.startsWith('/*', i)) {
-        const end = src.indexOf('*/', i + 2); const j = end < 0 ? src.length : end + 2;
-        blank(i, j); i = j; continue;
-      }
-      if (lang === 'ruby' && (i === 0 || src[i - 1] === '\n') && src.startsWith('=begin', i) && /\s/.test(src[i + 6] ?? '')) {
-        const m = /^=end(?:\s|$)/m.exec(src.slice(i + 6));
-        const j = m ? i + 6 + m.index + m[0].length : src.length;
-        blank(i, j); i = j; continue;
-      }
-      if (c === "'" || c === '"' || (c === '`' && lang !== 'python')) {
-        const prefix = lang === 'python' ? /\b([rbuf]{0,3})$/i.exec(src.slice(0, i))?.[1] ?? '' : '';
-        const interpolate = lang === 'python' ? /f/i.test(prefix) : lang === 'node' ? c === '`' : (lang === 'ruby' || lang === 'perl') && c !== "'";
-        const start = i; i = quoted(i, c, interpolate);
-        // Perl/Ruby backticks run a command. Preserve their opening position for ticks().
-        if (c === '`' && (lang === 'perl' || lang === 'ruby')) chars[start] = '`';
-        continue;
-      }
-      // JavaScript regexp literals have no callable source in their contents.
-      if (lang === 'node' && c === '/') {
-        const before = src.slice(0, i).trimEnd();
-        if (!before || /[=(:,!&|?;{\[]$/.test(before) || /\b(?:return|throw|case|yield)\s*$/.test(before)) {
-          let j = i + 1, bracket = false;
-          for (; j < src.length; j++) {
-            if (src[j] === '\\') { j++; continue; }
-            if (src[j] === '[') bracket = true;
-            if (src[j] === ']') bracket = false;
-            if (src[j] === '/' && !bracket) { j++; break; }
-            if (src[j] === '\n') break;
-          }
-          blank(i, j); i = j; continue;
-        }
-      }
+  for (let i = 0; i < src.length;) {
+    if (src[i] === '#') {
+      const offset = src.slice(i).search(/[\r\n]/);
+      const end = offset < 0 ? src.length : i + offset;
+      blank(i, end); i = end; continue;
+    }
+    const quote = src[i];
+    if (quote !== "'" && quote !== '"') { i++; continue; }
+    const prefix = /\b([rbuft]{0,3})$/i.exec(src.slice(0, i))?.[1] ?? '';
+    // Expressions in f-/t-strings are executable. Do not mask any of this
+    // source when present; retaining the original scan cannot hide a call.
+    if (/[ft]/i.test(prefix)) return src;
+    const delimiter = src.startsWith(quote.repeat(3), i) ? quote.repeat(3) : quote;
+    const start = i; i += delimiter.length;
+    while (i < src.length) {
+      if (src[i] === '\\') { i = Math.min(i + 2, src.length); continue; }
+      if (src.startsWith(delimiter, i)) { i += delimiter.length; break; }
       i++;
     }
-    return src.length;
-  };
-  code(0);
+    blank(start, i);
+  }
   return chars.join('');
 }
 

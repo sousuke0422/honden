@@ -1,0 +1,43 @@
+{"id": "gunshi:py-plain", "cmd": "python3 -c 'import os; os.system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:py-after-hash-in-str", "cmd": "python3 -c 'x=\"#\"; import os; os.system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:py-after-comment-line", "cmd": "python3 -c '# c\nimport os; os.system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:py-fstring-call", "cmd": "python3 -c 'import os; print(f\"{os.system('\\''kill 1'\\'')}\")'", "expect": "deny:D006"}
+{"id": "gunshi:py-triple", "cmd": "python3 -c 'import os\nx=\"\"\"a\"\"\"\nos.system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-plain", "cmd": "perl -e 'system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-dollar-hash", "cmd": "perl -e 'print $#ARGV; system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-dollar-hash-brace", "cmd": "perl -e 'my @a=(1); print $#{a}; system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-s-hash", "cmd": "perl -e '$_=\"a\"; s#a#b#; system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-tr-hash", "cmd": "perl -e '$_=\"a\"; tr#a#b#; system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-qw-then-call", "cmd": "perl -e 'my @a=qw(a b); system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-regex-quote", "cmd": "perl -e '$_ =~ m/'\\''/; system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:perl-backtick", "cmd": "perl -e '`kill 1`'", "expect": "deny:D006"}
+{"id": "gunshi:perl-heredoc-then", "cmd": "perl -e 'print <<\"E\";\nhi\nE\nsystem(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:ruby-plain", "cmd": "ruby -e 'system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:ruby-char-hash", "cmd": "ruby -e 'x = ?#; system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:ruby-regex-quote", "cmd": "ruby -e 'x = /'\\''/; system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:ruby-interp-call", "cmd": "ruby -e 'puts \"#{system('\\''kill 1'\\'')}\"'", "expect": "deny:D006"}
+{"id": "gunshi:ruby-percent-q", "cmd": "ruby -e 'x = %q(a); system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:ruby-backtick", "cmd": "ruby -e '`kill 1`'", "expect": "deny:D006"}
+{"id": "gunshi:node-plain", "cmd": "node -e 'require(\"child_process\").execSync(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:node-div-then", "cmd": "node -e 'var a = 4 / 2, b = 1 / 1; require(\"child_process\").execSync(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:node-regex-then", "cmd": "node -e 'var r = /a/; require(\"child_process\").execSync(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:node-div-paren", "cmd": "node -e 'var a = (4) / 2; var b = 1 / 1; require(\"child_process\").execSync(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:node-tpl-call", "cmd": "node -e 'console.log(`${require(\"child_process\").execSync(\"kill 1\")}`)'", "expect": "deny:D006"}
+{"id": "gunshi:node-comment-slash", "cmd": "node -e 'var u = \"http://x\"; require(\"child_process\").execSync(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:node-regex-quote", "cmd": "node -e 'var r = /'\\''/g; require(\"child_process\").execSync(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:node-if-regex", "cmd": "node -e 'if (1) /x/.test(\"a\"); require(\"child_process\").execSync(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "gunshi:py-str-only", "cmd": "python3 -c 'print(\"os.system(cmd)\")'", "expect": "allow"}
+{"id": "gunshi:py-comment-only", "cmd": "python3 -c '# os.system(\"kill 1\")\nprint(1)'", "expect": "allow"}
+{"id": "shogun:perl-dollar-hash", "cmd": "perl -e '$#ary; system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:perl-subst-hash", "cmd": "perl -e 's#a#b#; system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:perl-tr-hash", "cmd": "perl -e 'tr#a#b#; system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:perl-regex-quote", "cmd": "perl -e '$x =~ /\"/; system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:ruby-char-hash", "cmd": "ruby -e 'c = ?#; system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:ruby-regex-quote", "cmd": "ruby -e 'r = /\"/; system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:ruby-percent-regex", "cmd": "ruby -e 'r = %r{\"}; system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:ctrl-plain-perl", "cmd": "perl -e 'system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:ctrl-plain-ruby", "cmd": "ruby -e 'system(\"kill -9 1\")'", "expect": "deny:D006"}
+{"id": "shogun:ctrl-benign-python", "cmd": "python3 -c 'print(\"os.system(cmd)\")'", "expect": "allow"}
+{"id": "extra:python-cr-comment", "cmd": "python3 -c '# note\rimport os; os.system(\"kill 1\")'", "expect": "deny:D006"}
+{"id": "extra:python-f-backslash", "cmd": "python3 -c 'import os; print(f\"\"\"\\{os.system(\"kill 1\")}\"\"\")'", "expect": "deny:D006"}
+{"id": "extra:python-t-expression", "cmd": "python3 -c 'import os; print(t\"\"\"{os.system(\"kill 1\")}\"\"\")'", "expect": "deny:D006"}

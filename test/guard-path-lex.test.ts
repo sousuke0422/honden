@@ -15,9 +15,18 @@ const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
 const cases: { id: string; lang: string; flag: string; source: string; expect: string }[] =
   readFileSync(join(import.meta.dir, 'fixtures/guard-source-literals.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
 
-describe('embedded source uses executable positions', () => {
+describe('Python literal correction and conservative legacy language scans', () => {
   for (const c of cases) test(c.id, () => {
     expect(tag(`${c.lang} ${c.flag} ${quote(c.source)}`)).toBe(c.expect);
+  });
+});
+
+const reviewCases: { id: string; cmd: string; expect: string }[] =
+  readFileSync(join(import.meta.dir, 'fixtures/guard-source-review.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line));
+describe('independent review probes never lose executable calls', () => {
+  for (const c of reviewCases) test(c.id, () => {
+    expect(tag(c.cmd)).toBe(c.expect);
   });
 });
 

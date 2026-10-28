@@ -1,29 +1,29 @@
-{"id": "python-string", "lang": "python3", "flag": "-c", "source": "print(\"os.system(cmd)\")", "expect": "allow"}
-{"id": "python-comment", "lang": "python3", "flag": "-c", "source": "# os.system(cmd)\nprint(1)", "expect": "allow"}
-{"id": "python-triple", "lang": "python3", "flag": "-c", "source": "s = '''os.system(cmd)'''; print(s)", "expect": "allow"}
-{"id": "python-unicode", "lang": "python3", "flag": "-c", "source": "print('😀'); os.system(cmd)", "expect": "deny:D000"}
-{"id": "python-f-expression", "lang": "python3", "flag": "-c", "source": "print(f'{os.system(cmd)}')", "expect": "deny:D000"}
-{"id": "python-after-string", "lang": "python3", "flag": "-c", "source": "s = 'os.system(cmd)'; os.system(cmd)", "expect": "deny:D000"}
-{"id": "node-string", "lang": "node", "flag": "-e", "source": "console.log('child_process execSync(cmd)')", "expect": "allow"}
-{"id": "node-comment", "lang": "node", "flag": "-e", "source": "/* child_process execSync(cmd) */ console.log(1)", "expect": "allow"}
-{"id": "node-line-comment", "lang": "node", "flag": "-e", "source": "// child_process execSync(cmd)\nconsole.log(1)", "expect": "allow"}
-{"id": "node-template-data", "lang": "node", "flag": "-e", "source": "console.log(`child_process execSync(cmd)`)", "expect": "allow"}
-{"id": "node-template-expression", "lang": "node", "flag": "-e", "source": "const cp=require('child_process'); console.log(`${cp.execSync(cmd)}`)", "expect": "deny:D000"}
-{"id": "node-regexp", "lang": "node", "flag": "-e", "source": "const child_process = 1; const r=/execSync(cmd)/; console.log(r)", "expect": "allow"}
-{"id": "node-after-string", "lang": "node", "flag": "-e", "source": "const cp=require('child_process'); console.log('execSync(cmd)'); cp.execSync(cmd)", "expect": "deny:D000"}
-{"id": "perl-string", "lang": "perl", "flag": "-e", "source": "print 'system(cmd)'", "expect": "allow"}
-{"id": "perl-comment", "lang": "perl", "flag": "-e", "source": "# system(cmd)\nprint 1", "expect": "allow"}
-{"id": "perl-q", "lang": "perl", "flag": "-e", "source": "print q{system(cmd)}", "expect": "allow"}
-{"id": "perl-after-string", "lang": "perl", "flag": "-e", "source": "print 'system(cmd)'; system($cmd)", "expect": "deny:D000"}
-{"id": "perl-interpolation", "lang": "perl", "flag": "-e", "source": "print \"${\\system($cmd)}\"", "expect": "deny:D000"}
-{"id": "perl-qq-interpolation", "lang": "perl", "flag": "-e", "source": "print qq{${\\system($cmd)}}", "expect": "deny:D000"}
-{"id": "perl-q-hash-variable", "lang": "perl", "flag": "-e", "source": "print $q{system($cmd)}", "expect": "deny:D000"}
-{"id": "ruby-string", "lang": "ruby", "flag": "-e", "source": "puts 'system(cmd)'", "expect": "allow"}
-{"id": "ruby-comment", "lang": "ruby", "flag": "-e", "source": "# system(cmd)\nputs 1", "expect": "allow"}
-{"id": "ruby-percent", "lang": "ruby", "flag": "-e", "source": "puts %q{system(cmd)}", "expect": "allow"}
-{"id": "ruby-interpolation", "lang": "ruby", "flag": "-e", "source": "puts \"#{system(cmd)}\"", "expect": "deny:D000"}
-{"id": "ruby-percent-interpolation", "lang": "ruby", "flag": "-e", "source": "puts %Q{#{system(cmd)}}", "expect": "deny:D000"}
-{"id": "ruby-percent-symbol-data", "lang": "ruby", "flag": "-e", "source": "puts %i{system(cmd)}", "expect": "allow"}
-{"id": "ruby-percent-symbol-interpolation", "lang": "ruby", "flag": "-e", "source": "puts %I{#{system(cmd)}}", "expect": "deny:D000"}
-{"id": "ruby-modulo", "lang": "ruby", "flag": "-e", "source": "puts value % (system(cmd))", "expect": "deny:D000"}
-{"id": "ruby-after-string", "lang": "ruby", "flag": "-e", "source": "puts 'system(cmd)'; system(cmd)", "expect": "deny:D000"}
+{"id":"python-string","lang":"python3","flag":"-c","source":"print(\"os.system(cmd)\")","expect":"allow"}
+{"id":"python-comment","lang":"python3","flag":"-c","source":"# os.system(cmd)\nprint(1)","expect":"allow"}
+{"id":"python-triple","lang":"python3","flag":"-c","source":"s = '''os.system(cmd)'''; print(s)","expect":"allow"}
+{"id":"python-unicode","lang":"python3","flag":"-c","source":"print('😀'); os.system(cmd)","expect":"deny:D000"}
+{"id":"python-f-expression","lang":"python3","flag":"-c","source":"print(f'{os.system(cmd)}')","expect":"deny:D000"}
+{"id":"python-after-string","lang":"python3","flag":"-c","source":"s = 'os.system(cmd)'; os.system(cmd)","expect":"deny:D000"}
+{"id":"node-string","lang":"node","flag":"-e","source":"console.log('child_process execSync(cmd)')","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"node-comment","lang":"node","flag":"-e","source":"/* child_process execSync(cmd) */ console.log(1)","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"node-line-comment","lang":"node","flag":"-e","source":"// child_process execSync(cmd)\nconsole.log(1)","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"node-template-data","lang":"node","flag":"-e","source":"console.log(`child_process execSync(cmd)`)","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"node-template-expression","lang":"node","flag":"-e","source":"const cp=require('child_process'); console.log(`${cp.execSync(cmd)}`)","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"node-regexp","lang":"node","flag":"-e","source":"const child_process = 1; const r=/execSync(cmd)/; console.log(r)","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"node-after-string","lang":"node","flag":"-e","source":"const cp=require('child_process'); console.log('execSync(cmd)'); cp.execSync(cmd)","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"perl-string","lang":"perl","flag":"-e","source":"print 'system(cmd)'","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"perl-comment","lang":"perl","flag":"-e","source":"# system(cmd)\nprint 1","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"perl-q","lang":"perl","flag":"-e","source":"print q{system(cmd)}","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"perl-after-string","lang":"perl","flag":"-e","source":"print 'system(cmd)'; system($cmd)","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"perl-interpolation","lang":"perl","flag":"-e","source":"print \"${\\system($cmd)}\"","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"perl-qq-interpolation","lang":"perl","flag":"-e","source":"print qq{${\\system($cmd)}}","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"perl-q-hash-variable","lang":"perl","flag":"-e","source":"print $q{system($cmd)}","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-string","lang":"ruby","flag":"-e","source":"puts 'system(cmd)'","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-comment","lang":"ruby","flag":"-e","source":"# system(cmd)\nputs 1","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-percent","lang":"ruby","flag":"-e","source":"puts %q{system(cmd)}","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-interpolation","lang":"ruby","flag":"-e","source":"puts \"#{system(cmd)}\"","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-percent-interpolation","lang":"ruby","flag":"-e","source":"puts %Q{#{system(cmd)}}","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-percent-symbol-data","lang":"ruby","flag":"-e","source":"puts %i{system(cmd)}","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-percent-symbol-interpolation","lang":"ruby","flag":"-e","source":"puts %I{#{system(cmd)}}","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-modulo","lang":"ruby","flag":"-e","source":"puts value % (system(cmd))","expect":"deny:D000","scope":"legacy-conservative"}
+{"id":"ruby-after-string","lang":"ruby","flag":"-e","source":"puts 'system(cmd)'; system(cmd)","expect":"deny:D000","scope":"legacy-conservative"}
