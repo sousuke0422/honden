@@ -314,6 +314,27 @@ main の tip はほぼ常に merge commit ゆえ、「`git log` で tip 確認�
 何かを「無い」「変わらぬ」「通った」と報告する前に、
 その道具が**在る物を見せられる**ことを確かめよ（陽性対照）。
 
+## 実行権を持てぬ file system の木で commit する時
+
+**file system が実行権を持てぬと、git はすべての file を実行権つきと読む。** `core.fileMode` が true では、
+**内容を変えずに `mode change` だけが commit に載る**。新しく足す file は `100755` で入る。
+
+踏む所は一つではない。WSL から Windows の drive を見る木（`/mnt/c`）、Windows に直に置いた木、
+network 越しに mount した木、container へ bind した木、exFAT や FAT の drive。
+**己の木がどれかは `ls -l` の見た目では決まらぬ。** `git config core.fileMode` と
+`git diff --staged --summary` で確かめよ。
+
+**旗を当てる所を違えるな。** mode は `git add` の時に index へ焼かれる。
+`git -c core.fileMode=false commit` を打っても、**index は既に焼けておるゆえ効かぬ**（実測で確かめた）。
+当てるなら `git -c core.fileMode=false add` である。
+
+- commit の前に `git diff --staged --summary` で `mode change` と `create mode 100755` を見よ
+- 実行される script でなければ `git update-index --chmod=-x <file>` で落とす
+- **木がすべて同じ file system に在る repo では**、共有の `.git/config` に `core.fileMode false` を置くのが筋である
+  （実行権は file system の産物で、書いた者の意図ではない）
+- **持てる木と持てぬ木が混ざる時だけ** `git -c core.fileMode=false add` を使え
+- `git config --worktree` は `extensions.worktreeConfig` が有効な時のみ、その木に限って効く
+
 ## File Operation Rule
 
 **Always Read before Write/Edit.** Claude Code rejects Write/Edit on unread files.
