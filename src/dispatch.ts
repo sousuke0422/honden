@@ -44,6 +44,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
+import { externalWorkers } from './external';
 import { deliver, signal } from './inbox';
 import { take as takeClaim, type Kind, type Source } from './claim';
 import { workRootOf } from './projects';
@@ -214,7 +215,7 @@ export function assignTask(
   // ここまで来た時点で selfId は ASSIGNER か CMD_AUTHOR のいずれか。
   const actor: string = selfId!;
 
-  const known = roster(db);
+  const known = [...roster(db), ...externalWorkers(db)];
   if (known.length === 0) return { ok: false, message: '名簿が空である。honden roster sync で入れられよ。' };
 
   const schema: Schema = { ...ASSIGN_SCHEMA, agent: { ...ASSIGN_SCHEMA['agent'], oneOf: known.map((k) => k.id) } };

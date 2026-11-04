@@ -8,6 +8,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
+import { externalAgent } from './external';
 import { readFileSync } from 'node:fs';
 import { journal } from './store';
 
@@ -132,7 +133,7 @@ export function roster(db: Database): RosterEntry[] {
 /** 名簿に載っている名か。 */
 export function isKnown(db: Database, id: string): boolean {
   return (
-    (db.query('SELECT count(*) c FROM roster WHERE id = ?').get(id) as { c: number }).c > 0
+    (db.query('SELECT count(*) c FROM roster WHERE id = ?').get(id) as { c: number }).c > 0 || externalAgent(db, id)
   );
 }
 
