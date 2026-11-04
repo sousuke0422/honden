@@ -97,6 +97,8 @@ import { collect as collectStatus, render as renderStatus, coreCheck, corePaths 
 import { collect as denialCollect, tally as denialTally, render as denialRender } from './denials';
 import { exportAll } from './export';
 import { serve as serveHttp, LOOPBACK, DASHBOARD_PORT } from './serve';
+import { networkCli } from './network-cli';
+import { peerStatus } from './external';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
 import { judge as guardJudge, judgeStructured as guardJudgeStructured, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS, type GateCheck } from './guard';
@@ -2116,7 +2118,8 @@ export function runStatus(dbPath: string | undefined, json: boolean): RunResult 
   }
   return {
     code: EXIT_OK,
-    out: renderStatus(rows) + (tail.length > 0 ? `\n\n  ${tail.join(' / ')}` : ''),
+    out: renderStatus(rows) + (tail.length > 0 ? `\n\n  ${tail.join(' / ')}` : '') +
+      (peerStatus(db).length ? `\n\n外の相手: ${JSON.stringify(peerStatus(db))}` : ''),
   };
 }
 
@@ -3804,6 +3807,13 @@ function notifyAfterNudge(dbPath: string | undefined): void {
     });
   }
 
+  if (rest[0] === 'network') {
+    try {
+      return await networkCli(openStore({ path: dbPath }), selfId(), rest, flags);
+    } catch (e) {
+      return emit({ code: EXIT_INVALID, err: e instanceof Error ? e.message : String(e) });
+    }
+  }
   if (rest[0] === 'dashboard') {
     // 形式は旧 dashboard.md のまま（殿の指定・上流 L456-525 の節構成）。
     // --serve でブラウザ配信もする——旧 dashboard-viewer.py の後継。
