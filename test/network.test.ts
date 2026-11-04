@@ -11,7 +11,9 @@ import { BODY_LIMIT, networkHandler, serveNetwork, type Envelope } from '../src/
 let db: Database;
 let key: string;
 let handle: ReturnType<typeof networkHandler>;
+let now: number;
 beforeEach(() => {
+  now = Date.parse('2026-01-01T00:00:00.000Z');
   db = openStore({ path: ':memory:' });
   syncRoster(db, [
     { id: 'shogun', role: 'commander', cli: null, model: null },
@@ -21,7 +23,7 @@ beforeEach(() => {
   ]);
   key = issuePeer(db, 'shogun', { name: 'visitor', kind: 'agent', direction: 'pull',
     capabilities: ['inbox.read', 'inbox.write', 'report.submit'], destinations: ['gunshi','karo'] });
-  handle = networkHandler(db);
+  handle = networkHandler(db, { now: () => now });
 });
 afterEach(() => db.close());
 const request = (path: string, data?: unknown, token: string | null = key, method?: string) => handle(new Request(`http://localhost${path}`, {
@@ -33,7 +35,7 @@ function send(agent: string, id: string) {
   tx(db, () => deliver(db, { id, agent, at: new Date().toISOString(), sender: 'karo', type: 'message', body: `for ${agent}` }));
 }
 function envelope(id = 'visitor/one', recipient = 'gunshi'): Envelope {
-  return { id, origin: 'visitor', sender: 'visitor', recipient, type: 'message', body: 'hello', at: new Date().toISOString() };
+  return { id, origin: 'visitor', sender: 'visitor', recipient, type: 'message', body: 'hello', at: new Date(now).toISOString() };
 }
 
 test('keys require shogun, are hashed, rotate once and revoke immediately', async () => {
@@ -115,6 +117,43 @@ test('inbound envelopes preserve provenance, deduplicate, and never become inter
   expect((await request('/v1/inbox/write', { ...envelope('visitor/spoof'), sender: 'shogun' })).status).toBe(403);
 });
 
+for (const [offset, expected] of [[-301000, 400], [-300001, 400], [-300000, 200], [0, 200], [300000, 200], [300001, 400], [301000, 400]] as const) {
+  test(`envelope clock window: ${offset}ms returns ${expected} and records the result`, async () => {
+    const e = { ...envelope(), at: new Date(now + offset).toISOString() };
+    const response = await request('/v1/inbox/write', e);
+    expect(response.status).toBe(expected);
+    if (expected === 400) {
+      expect(await response.json()).toEqual({ error: 'timestamp must be within 5 minutes of receipt' });
+      expect(db.query('SELECT count(*) n FROM network_envelope').get()).toEqual({ n: 0 });
+      expect(db.query('SELECT count(*) n FROM inbox').get()).toEqual({ n: 0 });
+    }
+    expect(db.query("SELECT actor,detail FROM ledger WHERE action = 'network.request' ORDER BY id DESC LIMIT 1").get())
+      .toEqual({ actor: 'visitor', detail: `POST /v1/inbox/write status=${expected}` });
+  });
+}
+
+test('envelope clock rejects malformed timestamps and stale report envelopes', async () => {
+  for (const at of ['', 'not-a-date', '2026-99-99T00:00:00Z']) {
+    expect((await request('/v1/inbox/write', { ...envelope(), at })).status).toBe(400);
+  }
+  const report = { ...envelope(), type: 'report.submit', at: new Date(now - 301000).toISOString(),
+    body: JSON.stringify({ task_id: 'unassigned', status: 'done', summary: '照合した' }) };
+  expect((await request('/v1/report/submit', report)).status).toBe(400);
+  expect(db.query('SELECT count(*) n FROM report').get()).toEqual({ n: 0 });
+});
+
+test('envelope clock validation precedes duplicate checking without redelivering stale retries', async () => {
+  const e = envelope();
+  expect((await request('/v1/inbox/write', e)).status).toBe(200);
+  expect((await (await request('/v1/inbox/write', e)).json()).duplicate).toBe(true);
+  now += 301000;
+  expect((await request('/v1/inbox/write', e)).status).toBe(400);
+  expect(db.query('SELECT count(*) n FROM inbox').get()).toEqual({ n: 1 });
+  expect(db.query('SELECT count(*) n FROM network_envelope').get()).toEqual({ n: 1 });
+  expect(db.query("SELECT detail FROM ledger WHERE action = 'network.request' ORDER BY id DESC LIMIT 1").get())
+    .toEqual({ detail: 'POST /v1/inbox/write status=400' });
+});
+
 test('honden addresses are parsed without enabling an outbound sender or delegated reads', async () => {
   expect(address('karo@other')).toEqual({ name: 'karo', peer: 'other' });
   expect(address('gunshi')).toEqual({ name: 'gunshi', peer: null });
@@ -157,7 +196,7 @@ test('listener defaults closed and rejects wildcard IP representations', () => {
 
 test('real HTTP listener can be explicitly enabled, polled and disabled', async () => {
   configureListener(db, 'shogun', '127.0.0.1', 0);
-  const server = serveNetwork(db);
+  const server = serveNetwork(db, { now: () => now });
   try {
     const response = await fetch(`http://127.0.0.1:${server.port}/v1/inbox/unread`, { headers: { authorization: `Bearer ${key}` } });
     expect(response.status).toBe(200);
@@ -172,7 +211,7 @@ test('real HTTP client reads assignment, acknowledges, writes notice and submits
   const assigned = assignTask(db, 'karo', { agent: 'visitor', cmd_id: cmd.id!, title: '資料を調べよ' });
   expect(assigned.ok).toBe(true);
   configureListener(db, 'shogun', '127.0.0.1', 0);
-  const server = serveNetwork(db);
+  const server = serveNetwork(db, { now: () => now });
   try {
     const call = (path: string, data?: unknown) => fetch(`http://127.0.0.1:${server.port}/v1${path}`, {
       method: data === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },

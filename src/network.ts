@@ -6,6 +6,8 @@ import { submitReport } from './report';
 import { address, authenticate, instanceId, listenerAddress, NetworkError, type Capability, type Peer } from './external';
 
 export const BODY_LIMIT = 64 * 1024;
+export const ENVELOPE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+type NetworkOptions = { now?: () => number };
 export type Envelope = { id: string; origin: string; sender: string; recipient: string; type: string; body: string; at: string };
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 function requireCapability(peer: Peer, capability: Capability) {
@@ -39,7 +41,7 @@ async function body(req: Request): Promise<Record<string, unknown>> {
     throw new NetworkError(400, 'invalid JSON');
   } finally { reader.releaseLock(); }
 }
-function envelope(input: Record<string, unknown>, peer: Peer): Envelope {
+function envelope(input: Record<string, unknown>, peer: Peer, now: number): Envelope {
   for (const key of ['id','origin','sender','recipient','type','body','at']) {
     if (typeof input[key] !== 'string') throw new NetworkError(400, `invalid envelope ${key}`);
   }
@@ -48,7 +50,9 @@ function envelope(input: Record<string, unknown>, peer: Peer): Envelope {
     throw new NetworkError(403, 'envelope origin denied');
   const sender = address(e.sender);
   if (peer.kind === 'agent' ? e.sender !== peer.name : sender.peer !== peer.name) throw new NetworkError(403, 'sender denied');
-  if (e.type.length < 1 || e.type.length > 64 || !Number.isFinite(Date.parse(e.at))) throw new NetworkError(400, 'invalid type or timestamp');
+  const at = Date.parse(e.at);
+  if (e.type.length < 1 || e.type.length > 64 || !Number.isFinite(at)) throw new NetworkError(400, 'invalid type or timestamp');
+  if (Math.abs(at - now) > ENVELOPE_CLOCK_SKEW_MS) throw new NetworkError(400, 'timestamp must be within 5 minutes of receipt');
   address(e.recipient);
   // Canonical field order makes retries independent of JSON key order.
   return { id: e.id, origin: e.origin, sender: e.sender, recipient: e.recipient, type: e.type, body: e.body, at: e.at };
@@ -62,8 +66,9 @@ function remember(db: Database, peer: Peer, e: Envelope, inboxId: string) {
   db.prepare('INSERT INTO network_envelope(id,peer,payload,inbox_id) VALUES (?,?,?,?)').run(e.id, peer.name, JSON.stringify(e), inboxId);
 }
 
-export function networkHandler(db: Database): (req: Request) => Promise<Response> {
+export function networkHandler(db: Database, opts: NetworkOptions = {}): (req: Request) => Promise<Response> {
   const local = instanceId(db);
+  const now = opts.now ?? Date.now;
   return async (req) => {
     let peer: Peer | undefined;
     let operation = 'unknown';
@@ -117,7 +122,8 @@ export function networkHandler(db: Database): (req: Request) => Promise<Response
         return done({ changed: result.changed.map((id) => `${local}/${id}`) });
       }
       if (path === '/v1/inbox/write' || path === '/v1/report/submit') {
-        const e = envelope(input, peer);
+        // Validate freshness even for retries. Stale envelopes never bypass the receipt window.
+        const e = envelope(input, peer, now());
         target = e.recipient;
         const recipient = address(e.recipient);
         if (recipient.peer) throw new NetworkError(403, 'outbound forwarding is not enabled');
@@ -159,9 +165,9 @@ export function networkHandler(db: Database): (req: Request) => Promise<Response
   };
 }
 
-export function serveNetwork(db: Database) {
+export function serveNetwork(db: Database, opts: NetworkOptions = {}) {
   const configured = db.query('SELECT host,port FROM network_listener WHERE singleton = 1').get() as { host: string; port: number } | null;
   if (!configured) throw new NetworkError(403, 'network listener is disabled; configure an explicit IP first');
   const { host, port } = listenerAddress(configured.host, configured.port);
-  return Bun.serve({ hostname: host, port, idleTimeout: 10, maxRequestBodySize: BODY_LIMIT, fetch: networkHandler(db) });
+  return Bun.serve({ hostname: host, port, idleTimeout: 10, maxRequestBodySize: BODY_LIMIT, fetch: networkHandler(db, opts) });
 }
