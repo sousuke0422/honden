@@ -54,6 +54,17 @@ describe('旗の解き方', () => {
       to: 'karo',
     });
   });
+
+  test('確認の旗は次の語を食わず、位置引数が残る', () => {
+    const r = parseFlags(['--ack-unknown-model', 'ashigaru1', '--ack-no-bloom', 'x', '--title', 't']);
+    expect(r.flags).toEqual({ 'ack-unknown-model': 'true', 'ack-no-bloom': 'true', title: 't' });
+    expect(r.rest).toEqual(['ashigaru1', 'x']);
+  });
+
+  test('確認の旗の =false は値のまま残り、=true は付けた扱い', () => {
+    expect(parseFlags(['--ack-no-bloom=false', 'a']).flags).toEqual({ 'ack-no-bloom': 'false' });
+    expect(parseFlags(['--ack-no-bloom=true']).flags).toEqual({ 'ack-no-bloom': 'true' });
+  });
 });
 
 describe('入口の選び方', () => {

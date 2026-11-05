@@ -9,6 +9,7 @@
 import { expect, test, describe } from 'bun:test';
 import { openStore, tx, search as searchDocs, SearchError } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { submitReport, submitQc, cmdDone, coverageOf } from '../src/report';
 import { plan, record, markSince, startClocks, LEVEL_3_AFTER_MS, REPEAT_MS, ATTENDED_SILENT } from '../src/nudge';
@@ -41,6 +42,7 @@ function seeded() {
       { id: 'ashigaru2', role: 'worker', cli: 'copilot', model: null },
     ]),
   );
+  trustRosterModels(db);
   const c = createCmd(db, 'shogun', {
     north_star: 'x',
     purpose: 'y',
