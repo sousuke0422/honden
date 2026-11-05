@@ -272,6 +272,71 @@ describe('難度と能力', () => {
     }
   });
 
+  describe('bloom_routing の設定が読めぬ時', () => {
+    const withSettings = (body: string | null, run: (db: ReturnType<typeof seeded>, cmdId: string) => void) => {
+      const dir = mkdtempSync(join(tmpdir(), 'honden-bloom-cfg-'));
+      try {
+        const settings = join(dir, 'settings.yaml');
+        if (body !== null) writeFileSync(settings, body);
+        const { db, cmdId } = withCmd();
+        tx(db, () => setSetting(db, SETTINGS_PATH_KEY, settings, 'test'));
+        run(db, cmdId);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    const count = (db: ReturnType<typeof seeded>) =>
+      (db.query('SELECT COUNT(*) AS n FROM task WHERE task_id IS NOT NULL').get() as { n: number }).n;
+
+    test('file が消えておれば設定の誤りとして断り、何も書かぬ', () => {
+      withSettings(null, (db, cmdId) => {
+        const before = count(db);
+        const r = assign(db, cmdId, { agent: 'ashigaru2' });
+        expect(r.ok).toBe(false);
+        expect(r.message).toContain('設定の誤り');
+        expect(r.message).toContain('settings.yaml');
+        expect(count(db)).toBe(before);
+      });
+    });
+
+    test('YAML が壊れておれば断る', () => {
+      withSettings('bloom_routing: [strict\n  : :', (db, cmdId) => {
+        const r = assign(db, cmdId, { agent: 'ashigaru2' });
+        expect(r.ok).toBe(false);
+        expect(r.message).toContain('設定の誤り');
+      });
+    });
+
+    test('値が枝なら断る', () => {
+      withSettings('bloom_routing:\n  mode: strict\n', (db, cmdId) => {
+        const r = assign(db, cmdId, { agent: 'ashigaru2' });
+        expect(r.ok).toBe(false);
+        expect(r.message).toContain('設定の誤り');
+      });
+    });
+
+    test('難度を付ければ設定が壊れていても振れる', () => {
+      withSettings(null, (db, cmdId) => {
+        expect(assign(db, cmdId, { agent: 'ashigaru2', bloom: 'L3' }).ok).toBe(true);
+      });
+    });
+
+    test('鍵が無い時は従前どおり警告して通る', () => {
+      withSettings('other: 1\n', (db, cmdId) => {
+        const r = assign(db, cmdId, { agent: 'ashigaru2' });
+        expect(r.ok).toBe(true);
+        expect(r.message).toContain('既定の警告運用');
+      });
+    });
+
+    test('在り処が未登録の時も警告して通る', () => {
+      const { db, cmdId } = withCmd();
+      const r = assign(db, cmdId, { agent: 'ashigaru2' });
+      expect(r.ok).toBe(true);
+      expect(r.message).toContain('既定の警告運用');
+    });
+  });
+
   test('司令の難度を既定にし、任の難度で上書きする', () => {
     const inherited = withCmd({ bloom: 'L4' });
     const inheritedResult = assign(inherited.db, inherited.cmdId, { agent: 'ashigaru2' });

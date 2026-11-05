@@ -49,7 +49,7 @@ import { take as takeClaim, type Kind, type Source } from './claim';
 import { workRootOf } from './projects';
 import { readNorms, select, forTask } from './norms';
 import { normsRoot } from './settings';
-import { get as configGet } from './config';
+import { load as configLoad, dig as configDig } from './config';
 import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
@@ -80,6 +80,40 @@ function parseBloom(value: unknown): number | null {
   if (value === undefined || value === null || value === '') return null;
   const bloom = Number(String(value).replace(/^[Ll]/, ''));
   return Number.isInteger(bloom) && bloom >= 1 && bloom <= 6 ? bloom : Number.NaN;
+}
+
+/**
+ * bloom_routing を読む。設定が無い（在り処が未登録）か鍵が無い時だけ、既定の警告の運用とする。
+ * file が読めぬ・YAML が解けぬ・値が文でない時は設定の誤りとして断る。
+ * 全てを「strict でない」と読むと、strict の運用中に設定が壊れた時、難度の無い振りが
+ * --ack-no-bloom なしで通ってしまう。
+ */
+function bloomRouting(db: Database): { ok: true; strict: boolean } | { ok: false; message: string } {
+  const doc = configLoad(db);
+  if (!doc.ok) {
+    if (doc.reason === 'unset') return { ok: true, strict: false };
+    return {
+      ok: false,
+      message: `設定の誤りで bloom_routing を読めぬ。strict か確かめられぬまま難度なしでは振れぬ。\n  ${doc.message}\n  設定を直されよ。書き込みは行っておらぬ。`,
+    };
+  }
+  const found = configDig(doc.doc, 'bloom_routing');
+  if (found.kind === 'none') {
+    if (doc.doc === null || typeof doc.doc !== 'object' || Array.isArray(doc.doc)) {
+      return {
+        ok: false,
+        message: `設定の誤りである。${doc.path} の最上段が写像でない。\n  設定を直されよ。書き込みは行っておらぬ。`,
+      };
+    }
+    return { ok: true, strict: false };
+  }
+  if (found.kind === 'branch') {
+    return {
+      ok: false,
+      message: `設定の誤りである。${doc.path} の bloom_routing は文で書かれよ（枝になっておる）。\n  書き込みは行っておらぬ。`,
+    };
+  }
+  return { ok: true, strict: ['strict', 'enforce'].includes(found.value.toLowerCase()) };
 }
 
 function flag(input: Record<string, unknown>, name: string): boolean {
@@ -279,8 +313,11 @@ export function assignTask(
         '  それでも振るなら --ack-unknown-model を付けられよ。書き込みは行っておらぬ。',
     };
   }
-  const routing = configGet(db, 'bloom_routing');
-  const strictNoBloom = routing.ok && ['strict', 'enforce'].includes((routing.value ?? '').toLowerCase());
+  const routing = bloomRouting(db);
+  if (bloom === null && !routing.ok) {
+    return { ok: false, message: routing.message };
+  }
+  const strictNoBloom = routing.ok && routing.strict;
   if (bloom === null && strictNoBloom && !ackNoBloom) {
     return {
       ok: false,
