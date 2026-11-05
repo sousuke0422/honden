@@ -272,6 +272,41 @@ honden-kill <pid> [--signal TERM|INT|HUP]
 系譜を辿るのは「いま」を見る仕事で、紋様の層は静のまま置きたい。
 門に動を持たせると、門の側に検めと実行の隙が生まれる。
 
+### 判じの群れ（golden）
+
+門の直しや解き手の上げは、どこかの命の判じを黙って替えうる。
+そこで、命の群れを撃って前の判じと比べる。
+
+群れは `test/fixtures/guard-corpus.jsonl` に一行一件で置いてある。
+各件は、攻撃の形（`attack`）か無害な形（`benign`）かの印と、記録した判じ（`allow` か `deny:<札>`）を持つ。
+`bun test` の中で撃ち、記録と食い違えば落ちる。
+落ちるときは、止める側に変わった件と通す側に変わった件を分けて挙げる。
+
+```bash
+bun run test:guard-corpus              # 群れを撃って記録と比べる
+bun run test:guard-corpus --update     # 正しい変化なら、記録を今の判じで書き換える
+```
+
+攻撃の形が通す側に変わったときは、`--update` でも書き換えない。
+門を緩める変更は、群れの件を手で書き換えて、差分で人に見せる。
+
+手元の群れ（実際に打った命の履歴など）は repo に入れない。
+在処を環境変数で渡すと、同じ仕組みで撃てる。
+
+```bash
+HONDEN_GUARD_CORPUS=~/guard-history.json bun run test:guard-corpus --update   # 記録を作る
+HONDEN_GUARD_CORPUS=~/guard-history.json bun run test:guard-corpus            # 比べる
+```
+
+群れは命の字の JSON 配列か、上と同じ一行一件の形で置く。
+記録は既定で `<群れ>.golden.jsonl` に書く（`HONDEN_GUARD_CORPUS_GOLDEN` で替えられる）。
+これも repo の外に置くこと。
+環境変数が無ければ手元の群れは撃たないので、CI では落ちない。
+
+**食い違いは命の全文を出す。**
+手元の群れの命には、秘密や手元の道や人の名が混じりうる。
+出力を貼る先に気をつけること。
+
 ---
 
 ## 携帯から（ntfy）

@@ -1,0 +1,56 @@
+{"id": "P1-W4", "cmd": "bash -c 'echo kill 1 | sh'", "expect": "deny:D006"}
+{"id": "P1-W5", "cmd": "sh -c \"echo kill 1 | sh\"", "expect": "deny:D006"}
+{"id": "P1-W6", "cmd": "eval 'echo kill 1 | sh'", "expect": "deny:D006"}
+{"id": "P1-W7", "cmd": "ssh h 'echo kill 1 | sh'", "expect": "deny:D006"}
+{"id": "P1-W14", "cmd": "docker exec c sh -c 'echo kill 1 | sh'", "expect": "deny:D006"}
+{"id": "P1-W15", "cmd": "tmux new-window 'echo kill 1 | sh'", "expect": "deny:D006"}
+{"id": "P1-W18", "cmd": "watch 'echo kill 1 | sh'", "expect": "deny:D006"}
+{"id": "P1-W19", "cmd": "find . -exec sh -c 'echo kill 1 | sh' \\;", "expect": "deny:D006"}
+{"id": "EXP-D001-echo-W4", "cmd": "bash -c 'echo \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-echo-W5", "cmd": "sh -c \"echo \\(rm\\ -rf\\ /\\) | sh\"", "expect": "deny:D001"}
+{"id": "EXP-D001-echo-W6", "cmd": "eval 'echo \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-echo-W7", "cmd": "ssh h 'echo \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-echo-W14", "cmd": "docker exec c sh -c 'echo \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-echo-W15", "cmd": "tmux new-window 'echo \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-echo-W18", "cmd": "watch 'echo \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-echo-W19", "cmd": "find . -exec sh -c 'echo \\(rm\\ -rf\\ /\\) | sh' \\;", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W4", "cmd": "bash -c 'printf \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W5", "cmd": "sh -c \"printf \\(rm\\ -rf\\ /\\) | sh\"", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W6", "cmd": "eval 'printf \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W7", "cmd": "ssh h 'printf \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W14", "cmd": "docker exec c sh -c 'printf \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W15", "cmd": "tmux new-window 'printf \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W18", "cmd": "watch 'printf \\(rm\\ -rf\\ /\\) | sh'", "expect": "deny:D001"}
+{"id": "EXP-D001-printf-W19", "cmd": "find . -exec sh -c 'printf \\(rm\\ -rf\\ /\\) | sh' \\;", "expect": "deny:D001"}
+{"id": "EXP-D007-echo-W4", "cmd": "bash -c 'echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-echo-W5", "cmd": "sh -c \"echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh\"", "expect": "deny:D007"}
+{"id": "EXP-D007-echo-W6", "cmd": "eval 'echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-echo-W7", "cmd": "ssh h 'echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-echo-W14", "cmd": "docker exec c sh -c 'echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-echo-W15", "cmd": "tmux new-window 'echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-echo-W18", "cmd": "watch 'echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-echo-W19", "cmd": "find . -exec sh -c 'echo dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh' \\;", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W4", "cmd": "bash -c 'printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W5", "cmd": "sh -c \"printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh\"", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W6", "cmd": "eval 'printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W7", "cmd": "ssh h 'printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W14", "cmd": "docker exec c sh -c 'printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W15", "cmd": "tmux new-window 'printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W18", "cmd": "watch 'printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh'", "expect": "deny:D007"}
+{"id": "EXP-D007-printf-W19", "cmd": "find . -exec sh -c 'printf dd\\ bs\\=1M\\ of\\=/dev/sda\\ if\\=/dev/zero | sh' \\;", "expect": "deny:D007"}
+{"id": "EXP-D004-echo-W4", "cmd": "bash -c 'echo git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-echo-W5", "cmd": "sh -c \"echo git\\ checkout\\ --\\ . | sh\"", "expect": "deny:D004"}
+{"id": "EXP-D004-echo-W6", "cmd": "eval 'echo git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-echo-W7", "cmd": "ssh h 'echo git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-echo-W14", "cmd": "docker exec c sh -c 'echo git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-echo-W15", "cmd": "tmux new-window 'echo git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-echo-W18", "cmd": "watch 'echo git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-echo-W19", "cmd": "find . -exec sh -c 'echo git\\ checkout\\ --\\ . | sh' \\;", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W4", "cmd": "bash -c 'printf git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W5", "cmd": "sh -c \"printf git\\ checkout\\ --\\ . | sh\"", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W6", "cmd": "eval 'printf git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W7", "cmd": "ssh h 'printf git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W14", "cmd": "docker exec c sh -c 'printf git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W15", "cmd": "tmux new-window 'printf git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W18", "cmd": "watch 'printf git\\ checkout\\ --\\ . | sh'", "expect": "deny:D004"}
+{"id": "EXP-D004-printf-W19", "cmd": "find . -exec sh -c 'printf git\\ checkout\\ --\\ . | sh' \\;", "expect": "deny:D004"}
