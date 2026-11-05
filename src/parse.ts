@@ -760,15 +760,223 @@ function readArg(src: string, at: number, quotes: string): string | undefined {
  * **源を完全には解かぬ。** 口の名の後ろに、字どおりの文字列（か、字どおりの文字列の列）が
  * 来る時だけ、その字を命として返す。字どおりでない（変数・式・字の中の展開）時は opaque。
  * 取りこぼす形: 口を別の名で呼ぶ（`from os import system as s`）、源を file や heredoc から
- * 読む、字を組み立てる（`'ki' + 'll'`）、eval や exec で源を作る。
+ * 読む、字を組み立てる（`'ki' + 'll'`）、実行口を動的に選ぶ。字どおりの exec/eval/compile の源は、上限付きで降りて判ずる。
  */
-function shellCallsIn(lang: string, src: string): { cmds: string[]; opaque: number } {
+/** Mask only Python's unambiguous strings/comments, preserving UTF-16 offsets.
+ * Other languages keep the original conservative scan. Their sigils, quoting
+ * operators and regexp delimiters require their own complete lexical rules.
+ */
+function executableSource(lang: string, src: string, maskStrings = true): string {
+  if (lang !== 'python') return src;
+  const chars = src.split('');
+  const blank = (a: number, b: number) => {
+    for (let k = a; k < b; k++) if (src[k] !== '\n' && src[k] !== '\r') chars[k] = ' ';
+  };
+  for (let i = 0; i < src.length;) {
+    if (src[i] === '#') {
+      const offset = src.slice(i).search(/[\r\n]/);
+      const end = offset < 0 ? src.length : i + offset;
+      blank(i, end); i = end; continue;
+    }
+    const quote = src[i];
+    if (quote !== "'" && quote !== '"') { i++; continue; }
+    const prefix = /\b([rbuft]{0,3})$/i.exec(src.slice(0, i))?.[1] ?? '';
+    // Expressions in f-/t-strings are executable. Do not mask any of this
+    // source when present; retaining the original scan cannot hide a call.
+    if (/[ft]/i.test(prefix)) return src;
+    const delimiter = src.startsWith(quote.repeat(3), i) ? quote.repeat(3) : quote;
+    const start = i; i += delimiter.length;
+    while (i < src.length) {
+      if (src[i] === '\\') { i = Math.min(i + 2, src.length); continue; }
+      if (src.startsWith(delimiter, i)) { i += delimiter.length; break; }
+      i++;
+    }
+    if (maskStrings) blank(start, i);
+  }
+  return chars.join('');
+}
+
+interface PythonProgram {
+  text: string;
+  end: number;
+  literals: [number, number][];
+}
+
+/** Read a deliberately small, exact subset of Python string/bytes constants. */
+function pythonLiteral(src: string, at: number): (PythonProgram & { bytes: boolean }) | undefined {
+  let i = at;
+  while (/\s/.test(src[i] ?? '')) i++;
+  const start = i;
+  const prefix = /^(?:br|rb|r|u|b)?(?=['"])/i.exec(src.slice(i));
+  if (!prefix) return undefined;
+  const flags = prefix[0].toLowerCase(); i += flags.length;
+  const quote = src[i]!;
+  const delimiter = src.startsWith(quote.repeat(3), i) ? quote.repeat(3) : quote;
+  i += delimiter.length;
+  let text = '', closed = false;
+  const escapes: Record<string, string> = { n: '\n', r: '\r', t: '\t', a: '\x07', b: '\b', f: '\f', v: '\v', '\\': '\\', "'": "'", '"': '"' };
+  while (i < src.length) {
+    if (src.startsWith(delimiter, i)) { i += delimiter.length; closed = true; break; }
+    const c = src[i++]!;
+    if (c !== '\\') { text += c; continue; }
+    const next = src[i++];
+    if (next === undefined) return undefined;
+    if (flags.includes('r')) text += '\\' + next;
+    else if (next === '\n') continue;
+    else if (next === '\r') { if (src[i] === '\n') i++; }
+    else if (Object.hasOwn(escapes, next)) text += escapes[next];
+    else return undefined; // encoding/hex/octal/named escapes need a real decoder
+  }
+  if (!closed || /\\[\r\n]/.test(text)) return undefined;
+  const bytes = flags.includes('b');
+  // Bytes may choose a source encoding. Do not guess at its decoded tokens.
+  if (bytes && (/[^\x00-\x7f]/.test(text) || /coding\s*[:=]/.test(text.split(/\r?\n/).slice(0, 2).join('\n')))) return undefined;
+  return { text, end: i, literals: [[start, i]], bytes };
+}
+
+/** Resolve literal source, parentheses, or compile(literal, ...) without running Python. */
+function pythonProgram(src: string, at: number, depth = 0): PythonProgram | undefined {
+  if (depth > 4) return undefined;
+  let i = at;
+  while (/\s/.test(src[i] ?? '')) i++;
+  if (src[i] === '(') {
+    const inner = pythonProgram(src, i + 1, depth + 1);
+    if (!inner) return undefined;
+    i = inner.end; while (/\s/.test(src[i] ?? '')) i++;
+    return src[i] === ')' ? { ...inner, end: i + 1 } : undefined;
+  }
+  const compile = /^(?:(?:builtins|__builtins__)\.)?compile\s*\(/.exec(src.slice(i));
+  if (compile) {
+    const open = i + compile[0].length - 1;
+    const inner = pythonProgram(src, open + 1, depth + 1);
+    if (!inner) return undefined;
+    let after = inner.end; while (/\s/.test(src[after] ?? '')) after++;
+    if (src[after] !== ',' && src[after] !== ')') return undefined;
+    const code = executableSource('python', src);
+    let nesting = 1;
+    for (let j = open + 1; j < code.length; j++) {
+      if (code[j] === '(') nesting++;
+      if (code[j] === ')' && --nesting === 0) return { ...inner, end: j + 1 };
+    }
+    return undefined;
+  }
+  const first = pythonLiteral(src, i);
+  if (!first) return undefined;
+  const literals = [...first.literals];
+  let text = first.text; i = first.end;
+  for (;;) {
+    const next = pythonLiteral(src, i);
+    if (!next) break;
+    if (next.bytes !== first.bytes) return undefined;
+    text += next.text; literals.push(...next.literals); i = next.end;
+  }
+  return { text, end: i, literals };
+}
+
+/** Strict constants for Python's shell-command arguments; never erase unknown escapes. */
+function pythonCommandArg(src: string, at: number): string | undefined {
+  let i = at;
+  const whitespace = () => { while (/\s/.test(src[i] ?? '')) i++; };
+  const value = (): string | undefined => {
+    whitespace();
+    if (src[i] === '[') {
+      i++; const items: string[] = [];
+      for (;;) {
+        whitespace();
+        if (src[i] === ']') { i++; return items.join(' '); }
+        const item = pythonLiteral(src, i);
+        if (!item) return undefined;
+        items.push(item.text); i = item.end; whitespace();
+        if (src[i] === ',') { i++; continue; }
+        if (src[i] !== ']') return undefined;
+      }
+    }
+    const first = pythonLiteral(src, i);
+    if (!first) return undefined;
+    let text = first.text; i = first.end;
+    for (;;) {
+      const next = pythonLiteral(src, i);
+      if (!next) break;
+      if (first.bytes !== next.bytes) return undefined;
+      text += next.text; i = next.end;
+    }
+    return text;
+  };
+  const first = value();
+  if (first === undefined) return undefined;
+  const parts = [first]; whitespace();
+  while (src[i] === ',') {
+    const saved = i; i++;
+    const next = value();
+    if (next === undefined) { i = saved; break; }
+    parts.push(next); whitespace();
+  }
+  // Operators, formatting, attributes and indexing make the value dynamic.
+  if (src[i] !== ',' && src[i] !== ')') return undefined;
+  return parts.join(' ');
+}
+
+function shellCallsIn(
+  lang: string, src: string, depth = 0, budget = { programs: 0, bytes: 0 },
+): { cmds: string[]; opaque: number } {
+  if (depth > 4 || ++budget.programs > 64 || (budget.bytes += src.length) > (1 << 20)) return { cmds: [], opaque: 1 };
   const cmds: string[] = [];
   let opaque = 0;
+  const knownCalls = new Set<number>();
+  let sourceExecution = false;
+  const executable = executableSource(lang, src);
+  let visible = src;
+  if (lang === 'python') {
+    const chars = executableSource(lang, src, false).split('');
+    const mask = (spans: [number, number][]) => {
+      if (executable === src) return; // f-/t-string fallback: preserve the old scan
+      for (const [a, b] of spans) for (let i = a; i < b; i++) if (src[i] !== '\n' && src[i] !== '\r') chars[i] = ' ';
+    };
+    for (const m of executable.matchAll(/(?<![\w.])(?:(?:builtins|__builtins__)\.)?(?:exec|eval|compile)\b/g)) {
+      sourceExecution = true;
+      let at = m.index! + m[0].length;
+      while (/\s/.test(src[at] ?? '')) at++;
+      if (src[at] !== '(') { opaque++; continue; } // an aliased execution builtin
+      knownCalls.add(m.index!);
+      const program = pythonProgram(src, at + 1);
+      let end = program?.end ?? at;
+      while (/\s/.test(src[end] ?? '')) end++;
+      if (!program || (src[end] !== ',' && src[end] !== ')')) { opaque++; continue; }
+      // Custom globals/locals can replace the apparently harmless builtins.
+      if (!m[0].endsWith('compile') && src[end] === ',') {
+        let extra = end + 1; while (/\s/.test(src[extra] ?? '')) extra++;
+        if (src[extra] !== ')') { opaque++; continue; }
+      }
+      const inner = shellCallsIn('python', program.text, depth + 1, budget);
+      cmds.push(...inner.cmds); opaque += inner.opaque;
+      mask(program.literals);
+    }
+    // Only known display literals may be ignored without descending. Unknown
+    // recipients/assignments retain the old textual scan instead of hiding code.
+    if (!/\bprint\s*=|\bdef\s+print\b|\bimport\b[^\r\n;]*(?:\bprint\b|\*)/.test(executable)) {
+      const display: { literals: [number, number][]; start: number; end: number }[] = [];
+      for (const m of executable.matchAll(/(?<![\w.])print\s*\(/g)) {
+        knownCalls.add(m.index!);
+        const value = pythonLiteral(src, m.index! + m[0].length);
+        if (!value) continue;
+        let end = value.end; while (/\s/.test(src[end] ?? '')) end++;
+        if (src[end] === ')') display.push({ literals: value.literals, start: m.index!, end: end + 1 });
+      }
+      // A separate statement could rebind print or mutate its environment.
+      // Only a source consisting solely of literal display calls is inert.
+      const rest = executable.split('');
+      for (const d of display) for (let i = d.start; i < d.end; i++) rest[i] = ' ';
+      if (!/[^\s;]/.test(rest.join(''))) for (const d of display) mask(d.literals);
+    }
+    visible = chars.join('');
+  }
   const take = (re: RegExp, quotes: string) => {
-    for (const m of src.matchAll(re)) {
+    for (const m of visible.matchAll(re)) {
+      knownCalls.add(m.index!);
+      const terminal = /([A-Za-z_]\w*)\s*\($/.exec(m[0]);
+      if (terminal) knownCalls.add(m.index! + terminal.index);
       const at = (m.index ?? 0) + m[0].length;
-      const a = readArg(src, at, quotes);
+      const a = lang === 'python' ? pythonCommandArg(src, at) : readArg(src, at, quotes);
       if (a === undefined) opaque++;
       else if (/\$\{|#\{|\{[a-zA-Z_]/.test(a) || (lang === 'perl' && /[$@][a-zA-Z_{]/.test(a))) opaque++;
       else cmds.push(a);
@@ -776,6 +984,7 @@ function shellCallsIn(lang: string, src: string): { cmds: string[]; opaque: numb
   };
   const ticks = (re: RegExp) => {
     for (const m of src.matchAll(re)) {
+      if (executable[m.index ?? 0] !== src[m.index ?? 0]) continue;
       const t = m[1] ?? '';
       if (/\$\{|#\{|[$@][a-zA-Z_{]/.test(t)) opaque++;
       else cmds.push(t);
@@ -783,6 +992,15 @@ function shellCallsIn(lang: string, src: string): { cmds: string[]; opaque: numb
   };
   if (lang === 'python') {
     take(/\b(?:os\.(?:system|popen|exec[lv]p?e?)|subprocess\.(?:run|call|check_call|check_output|Popen|getoutput|getstatusoutput))\s*\(/g, '\'"');
+    take(/\b__import__\s*\(\s*(['"])(?:os|subprocess)\1\s*\)\s*\.\s*(?:system|popen|exec[lv]p?e?|run|call|check_call|check_output|Popen|getoutput|getstatusoutput)\s*\(/g, '\'"');
+    if (depth > 0 || sourceExecution) {
+      // A decoded program with an unknown callable is not proved harmless.
+      if (/[^\x00-\x7f]/.test(executable)) opaque++;
+      if (/[=]|\b(?:def|class|from)\b|\bimport\s+(?!(?:os|subprocess)\b)/.test(executable)) opaque++;
+      for (const m of executable.matchAll(/\b[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*\s*\(/g)) {
+        if (!knownCalls.has(m.index!)) opaque++;
+      }
+    }
   } else if (lang === 'node') {
     if (/child_process/.test(src)) take(/\b(?:execSync|execFileSync|spawnSync|execFile|spawn|exec)\s*\(/g, '\'"`');
   } else if (lang === 'perl') {
@@ -811,16 +1029,35 @@ const MAX_READ_BYTES = 1 << 20;
 /** patch が書き換える file の道。`--- a/x`・`+++ b/x`・`diff --git a/x b/y`・rename・copy。 */
 export function patchTargets(text: string): string[] {
   const out = new Set<string>();
+  const add = (path: string) => {
+    if (path === '/dev/null') return;
+    // Strip only the conventional diff prefix for the bounds check. Keep it in
+    // the returned spelling: downstream matching also accepts prefixed paths.
+    const relative = path.replace(/^[ab]\//, '');
+    let depth = 0;
+    if (relative.startsWith('/')) throw new Error('patch の道が repo の外を指す');
+    for (const part of relative.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') { if (--depth < 0) throw new Error('patch の道が repo の外へ出る'); }
+      else depth++;
+    }
+    const parts: string[] = [];
+    for (const part of path.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') parts.pop(); else parts.push(part);
+    }
+    out.add(parts.join('/'));
+  };
   for (const line of text.split('\n')) {
     let m = /^(?:---|\+\+\+)\s+(\S+)/.exec(line);
-    if (m && m[1] !== '/dev/null') out.add(m[1]!);
+    if (m) add(m[1]!);
     m = /^diff --git (\S+) (\S+)/.exec(line);
     if (m) {
-      out.add(m[1]!);
-      out.add(m[2]!);
+      add(m[1]!);
+      add(m[2]!);
     }
     m = /^(?:rename|copy) (?:from|to) (.+)$/.exec(line);
-    if (m) out.add(m[1]!.trim());
+    if (m) add(m[1]!.trim());
   }
   return [...out];
 }
@@ -962,12 +1199,20 @@ function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { t
   }
   if (dynamic !== undefined) return { unreadable: `${dynamic} は道が展開に依る` };
   const targets: string[] = [];
+  const appendTargets = (text: string): string | undefined => {
+    try { targets.push(...patchTargets(text)); }
+    catch { return 'patch の道が repo の外へ出る'; }
+    return undefined;
+  };
   // 同じ命の中で作ってから当てる形（`printf … > late.diff; git apply late.diff`）は、
   // 門が読む時にはまだ無いか、読んだ物と当てる物が違う。readSource が拒む
   const add = (f: string) => {
     const r = readSource(f, ctx.current, base || undefined);
     if ('unreadable' in r) return r.unreadable;
-    for (const t of r.texts) targets.push(...patchTargets(t));
+    for (const t of r.texts) {
+      const bad = appendTargets(t);
+      if (bad) return bad;
+    }
     return undefined;
   };
   for (const f of files) {
@@ -976,7 +1221,10 @@ function patchCommand(name: string, argv: Word[], stdin: Stdin | undefined): { t
   }
   if (fromStdin && stdin) {
     if ('opaque' in stdin) return { unreadable: '標準入力から読む patch の中身が見えぬ' };
-    if ('text' in stdin) targets.push(...patchTargets(stdin.text));
+    if ('text' in stdin) {
+      const bad = appendTargets(stdin.text);
+      if (bad) return { unreadable: bad };
+    }
     if ('file' in stdin) {
       const bad = add(stdin.file);
       if (bad) return { unreadable: bad };
