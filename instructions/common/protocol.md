@@ -339,6 +339,13 @@ exFAT や FAT の drive、一部の network 越しの mount。どう見えるか
 - **信頼できる木とできぬ木が混ざる時だけ** `git -c core.fileMode=false add` を使え
 - `git config --worktree` は `extensions.worktreeConfig` が有効な時のみ、その木に限って効く
 
+## 外の service へ送る字
+
+外の service へ送る物に、殿を示す字を入れぬ。`User-Agent` の連絡先、API の問い合わせ、hook の本文、bug 報せも同じである。名乗りが要るなら役や道具の名で足りる（`honden-shogun` など）。送った字は相手の log に残り、消せぬ——調べ物も publish も外へ送るが、個人を特定する字は載せぬ。
+
+殿のアカウントで動く仕組みが元から載せる字は対象でない。commit の作者（git の `user.name` と `user.email`）、repo の道（`gh api repos/<殿>/…` や clone の URL）、殿の名で書く PR や comment がそれである。
+**これらを書き換えるな、断るな。** 作者を書き換えれば、帳と GitHub の作者が食い違う。戒めるのは、己が字を書き込む所（header、問い合わせの本文、送る log の中身など）である。
+
 ## File Operation Rule
 
 **Always Read before Write/Edit.** Claude Code rejects Write/Edit on unread files.
