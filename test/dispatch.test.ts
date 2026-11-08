@@ -315,6 +315,36 @@ describe('難度と能力', () => {
       });
     });
 
+    test.each([
+      ['false', 'bloom_routing: false\n', '真偽値'],
+      ['123', 'bloom_routing: 123\n', '数'],
+      ['null（値が空）', 'bloom_routing:\n', 'null'],
+      ['並び', 'bloom_routing:\n  - strict\n', '並び'],
+    ])('値が文でない（%s）なら型を示して断る', (_n, body, kind) => {
+      withSettings(body, (db, cmdId) => {
+        const before = count(db);
+        const r = assign(db, cmdId, { agent: 'ashigaru2' });
+        expect(r.ok).toBe(false);
+        expect(r.message).toContain('設定の誤り');
+        expect(r.message).toContain(kind);
+        expect(count(db)).toBe(before);
+      });
+    });
+
+    test.each(['warn', 'strict', 'enforce'])('文字列 %s は従前どおり', (word) => {
+      withSettings(`bloom_routing: ${word}\n`, (db, cmdId) => {
+        const r = assign(db, cmdId, { agent: 'ashigaru2' });
+        if (word === 'warn') {
+          expect(r.ok).toBe(true);
+          expect(r.message).toContain('既定の警告運用');
+        } else {
+          expect(r.ok).toBe(false);
+          expect(r.message).toContain('--ack-no-bloom');
+          expect(assign(db, cmdId, { agent: 'ashigaru2', 'ack-no-bloom': true }).ok).toBe(true);
+        }
+      });
+    });
+
     test('難度を付ければ設定が壊れていても振れる', () => {
       withSettings(null, (db, cmdId) => {
         expect(assign(db, cmdId, { agent: 'ashigaru2', bloom: 'L3' }).ok).toBe(true);

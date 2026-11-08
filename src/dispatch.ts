@@ -49,7 +49,7 @@ import { take as takeClaim, type Kind, type Source } from './claim';
 import { workRootOf } from './projects';
 import { readNorms, select, forTask } from './norms';
 import { normsRoot } from './settings';
-import { load as configLoad, dig as configDig } from './config';
+import { load as configLoad } from './config';
 import { journal, tx } from './store';
 import { roster } from './roster';
 import { acquire, leaseState, DEFAULT_LEASE_MINUTES } from './lease';
@@ -97,23 +97,25 @@ function bloomRouting(db: Database): { ok: true; strict: boolean } | { ok: false
       message: `設定の誤りで bloom_routing を読めぬ。strict か確かめられぬまま難度なしでは振れぬ。\n  ${doc.message}\n  設定を直されよ。書き込みは行っておらぬ。`,
     };
   }
-  const found = configDig(doc.doc, 'bloom_routing');
-  if (found.kind === 'none') {
-    if (doc.doc === null || typeof doc.doc !== 'object' || Array.isArray(doc.doc)) {
-      return {
-        ok: false,
-        message: `設定の誤りである。${doc.path} の最上段が写像でない。\n  設定を直されよ。書き込みは行っておらぬ。`,
-      };
-    }
-    return { ok: true, strict: false };
-  }
-  if (found.kind === 'branch') {
+  // dig() は値を文字列へ変える（false→'false'、123→'123'、null→''）ゆえ、型を見るには使えぬ。
+  // 他の呼び手の振る舞いを変えぬよう dig() には触れず、ここでは YAML の値を直に取る。
+  if (doc.doc === null || typeof doc.doc !== 'object' || Array.isArray(doc.doc)) {
     return {
       ok: false,
-      message: `設定の誤りである。${doc.path} の bloom_routing は文で書かれよ（枝になっておる）。\n  書き込みは行っておらぬ。`,
+      message: `設定の誤りである。${doc.path} の最上段が写像でない。\n  設定を直されよ。書き込みは行っておらぬ。`,
     };
   }
-  return { ok: true, strict: ['strict', 'enforce'].includes(found.value.toLowerCase()) };
+  const top = doc.doc as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(top, 'bloom_routing')) return { ok: true, strict: false };
+  const raw = top['bloom_routing'];
+  if (typeof raw !== 'string') {
+    const kind = raw === null ? 'null（値が空）' : Array.isArray(raw) ? '並び' : typeof raw === 'object' ? '枝（写像）' : typeof raw === 'boolean' ? '真偽値' : typeof raw === 'number' ? '数' : typeof raw;
+    return {
+      ok: false,
+      message: `設定の誤りである。${doc.path} の bloom_routing は文（strict / enforce / warn など）で書かれよ。今は ${kind} である。\n  書き込みは行っておらぬ。`,
+    };
+  }
+  return { ok: true, strict: ['strict', 'enforce'].includes(raw.toLowerCase()) };
 }
 
 function flag(input: Record<string, unknown>, name: string): boolean {
