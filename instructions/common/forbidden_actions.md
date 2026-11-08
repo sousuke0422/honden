@@ -114,6 +114,8 @@ D011（意図で判ずるもの・分解や難読化）は**紋様では捕ま�
 
 **字を組んで門をかいくぐる形も禁ずる。** 命の名・道・旗を連結や変数の連ねで組み立てる形、紋様を避けるためだけの字替え、一つの命を分けて門の目をかいくぐる形（分解の意図は D011-AT と同じ。表に在る）を禁ずる。門は字を見るゆえ、組まれると何が走るか判じられぬ。正当な用があるなら `honden guard appeal` で直訴せよ。
 
+**己の pane 系譜の process を止める道は `honden-kill` である。** 生の `kill`・`pkill`・`killall` は門（D006）が拒む。ここが唯一の道である。己の pane の系譜の下にある process だけ `honden-kill <pid>` で止められる（`--signal TERM|INT|HUP`）。群れを撃つ形（負の pid・0・複数）は受けぬ。pane の外は止められぬ——黙って置かず将軍へ報せよ（親から切り離して起こした見せ物 server が pane の外に居残り、殿の手で止める事態が起きた。止め方を書かなければ足軽は黙って放置する）。`nohup` や `setsid` で背後へ回す起こし方は、己で止められぬ process を作る。起こすなら止め方を先に決めよ。背後で server を起こすなら、必ず `timeout 20m` のように刻限で包め（止め損ねた時の歯止めである）。**pid を控えて後の呼び出しで `honden-kill` を撃つ形は効かぬ。** 命の呼び出しごとに shell を作り直す CLI（Claude Code の Bash など）では、呼び出しが終わると背後の process は親を失って pane の系譜の外へ付け替えられ、`honden-kill` は outside で断る。止める道は二つである。一、同じ呼び出しの中で起こし、使い、止める（`timeout 20m server & pid=$!; trap 'honden-kill "$pid"' EXIT; <使う命>`。`$!` は `timeout` の pid で、`timeout` は受けた信号を server へ回す）。二、CLI が親の shell を生かしたまま持つ背景の仕組み（Claude Code の `run_in_background` など）で起こし、その仕組みの止める口で止める。
+
 **Tier 2 (STOP-and-REPORT):** Toolchain/runtime/global package install needed (D011-AT) → STOP.
 Report what / why / version / method / source URL. Wait for approval before installing.
 Record package, version, URL, command, and install path in report if approved.

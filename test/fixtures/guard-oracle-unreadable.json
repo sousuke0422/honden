@@ -1,0 +1,21 @@
+[
+  {
+    "id": "UNREADABLE-NEW",
+    "cmd": "printf safe",
+    "onlyBash": [],
+    "onlySolver": [],
+    "fragment": "unterminated 'fragment"
+  },
+  {
+    "id": "UNREADABLE-RECORDED",
+    "cmd": "printf prior",
+    "onlyBash": [
+      [
+        "printf",
+        "prior"
+      ]
+    ],
+    "onlySolver": [],
+    "fragment": "unrecognized trace fragment"
+  }
+]

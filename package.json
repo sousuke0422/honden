@@ -1,10 +1,12 @@
 {
   "name": "honden",
-  "version": "0.1.0-rc.4",
+  "version": "0.1.0-rc.5",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "test:guard-corpus": "bun scripts/guard-corpus.ts",
+    "test:guard-bash-oracle": "bun scripts/guard-bash-oracle.ts",
     "honden": "bun run src/main.ts",
     "build": "bun build --compile --outfile=bin/honden src/main.ts && bun build --compile --outfile=bin/honden-bot src/botmain.ts",
     "typecheck": "bunx tsc --noEmit",
