@@ -154,6 +154,7 @@ CREATE TABLE IF NOT EXISTS cmd (
   purpose      TEXT,
   body         TEXT,                      -- command 本文
   project      TEXT,
+  bloom        INTEGER CHECK (bloom IS NULL OR bloom BETWEEN 1 AND 6),
   priority     TEXT NOT NULL DEFAULT 'medium'
                CHECK (priority IN ('high','medium','low')),
   status       TEXT NOT NULL DEFAULT 'pending'
@@ -662,6 +663,7 @@ function migrate(db: Database): void {
   db.run(SCHEMA);
   // 既に走っている正本のための追い足し。新しい正本は SCHEMA 側で足りている。
   addColumn(db, 'report', 'cmd_id', 'TEXT');
+  addColumn(db, 'cmd', 'bloom', 'INTEGER CHECK (bloom IS NULL OR bloom BETWEEN 1 AND 6)');
   addColumn(db, 'claim', 'source', "TEXT NOT NULL DEFAULT 'declared'");
   addColumn(db, 'cmd_acceptance', 'changed_at', 'TEXT');
   addColumn(db, 'report', 'origin', "TEXT NOT NULL DEFAULT 'native'");

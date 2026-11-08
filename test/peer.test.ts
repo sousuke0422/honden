@@ -14,6 +14,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { submitReport } from '../src/report';
 import { peek, history } from '../src/peer';
@@ -40,6 +41,7 @@ function seeded() {
       { id: 'ashigaru2', role: 'worker', cli: 'claude', model: null },
     ]);
   });
+  trustRosterModels(db);
   const c = createCmd(db, 'shogun', CMD);
   return { db, cmdId: c.id! };
 }
@@ -258,6 +260,7 @@ describe('重なっておった時だけ家老へ報せる', () => {
         { id: 'ashigaru2', role: 'worker', cli: 'claude', model: null },
       ]);
     });
+    trustRosterModels(db);
     const c = createCmd(db, 'shogun', CMD);
     assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: c.id!, title: '一' });
     // 振った時点で合図は既に上がっておる。消してから覗く——
