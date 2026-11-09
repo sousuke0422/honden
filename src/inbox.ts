@@ -31,6 +31,7 @@ import type { Database } from 'bun:sqlite';
 import { journal, tx, raiseSignal } from './store';
 import { roleOrNull } from './roster';
 import { checkReason } from './validate';
+import { externalCapabilityProblem, requireExternalCapability } from './external';
 
 export interface Message {
   id: string;
@@ -60,6 +61,7 @@ export const INBOX_ACK_SCAN_LIMIT = 1000;
 
 /** 未読、または全件を古い順に返す。 */
 export function list(db: Database, agent: string, opts: { all?: boolean; limit?: number } = {}): Message[] {
+  requireExternalCapability(db, agent, 'inbox.read');
   const sql = opts.all
     ? 'SELECT * FROM inbox WHERE agent = ? ORDER BY created_at, id LIMIT ?'
     : 'SELECT * FROM inbox WHERE agent = ? AND read = 0 ORDER BY created_at, id LIMIT ?';
@@ -198,6 +200,8 @@ export interface AckResult {
  * 一部だけ通すと、どこまで済んだのか呼んだ側に分からない。
  */
 export function ack(db: Database, selfId: string, ids: string[]): AckResult {
+  const capabilityProblem = externalCapabilityProblem(db, selfId, 'inbox.read');
+  if (capabilityProblem) return { ok: false, changed: [], already: [], message: capabilityProblem };
   if (ids.length === 0) {
     return { ok: false, changed: [], already: [], message: '既読にする報せの id が要る。' };
   }
@@ -263,6 +267,7 @@ function maxInboxRowid(db: Database): number {
 
 /** 直近の inbox read（己の未読）が見せた id と、その境（rowid）を正本に残す。 */
 export function recordReadSnapshot(db: Database, agent: string, shown: Message[], boundary: number): void {
+  requireExternalCapability(db, agent, 'inbox.read');
   db.prepare(
     `INSERT INTO inbox_read_snapshot(agent, ids, boundary) VALUES (?, ?, ?)
      ON CONFLICT(agent) DO UPDATE SET ids = excluded.ids, boundary = excluded.boundary`,
@@ -277,6 +282,7 @@ export function recordReadSnapshot(db: Database, agent: string, shown: Message[]
  * 「読んだ」と数えられる）。onListed は試験から割り込む口で、一覧を引いた直後に呼ぶ。
  */
 export function readOwnUnread(db: Database, agent: string, opts: { onListed?: () => void } = {}): Message[] {
+  requireExternalCapability(db, agent, 'inbox.read');
   return db
     .transaction(() => {
       const boundary = maxInboxRowid(db);
@@ -322,6 +328,8 @@ function clearReadSnapshot(db: Database, agent: string): void {
 export function ackAll(db: Database, selfId: string): AckResult {
   return db
     .transaction((): AckResult => {
+      const capabilityProblem = externalCapabilityProblem(db, selfId, 'inbox.read');
+      if (capabilityProblem) return { ok: false, changed: [], already: [], message: capabilityProblem };
       const snapshot = loadReadSnapshot(db, selfId);
       if (snapshot === null) {
         return {

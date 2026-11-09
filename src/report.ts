@@ -37,7 +37,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
-import { externalAgent } from './external';
+import { externalAgent, externalCapabilityProblem } from './external';
 import { tx, journal } from './store';
 import { validate, explain, checkReason, type Schema } from './validate';
 import { roster, roleOf } from './roster';
@@ -205,6 +205,8 @@ export function submitReport(
         '  名乗りを引数に任せると、他人の報告が書ける。書き込みは行っておらぬ。',
     };
   }
+  const capabilityProblem = externalCapabilityProblem(db, selfId, 'report.submit');
+  if (capabilityProblem) return { ok: false, message: capabilityProblem };
   const known = roster(db);
   const external = externalAgent(db, selfId);
   if (!external && !known.some((k) => k.id === selfId)) {

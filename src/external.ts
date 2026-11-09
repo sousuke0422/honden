@@ -31,6 +31,19 @@ export function externalCliProblem(db: Database, id: string | undefined): string
   if (!id || !db.query('SELECT 1 FROM external_peer WHERE name = ?').get(id)) return null;
   return '外の相手は手元の CLI から名乗れぬ。鍵を持って網の口（/v1/…）から来られよ。';
 }
+/** Core operations consult current policy rather than trusting the transport's earlier check. */
+export function externalCapabilityProblem(db: Database, id: string, capability: Capability): string | null {
+  const peer = db.query('SELECT kind, key_hash IS NOT NULL enabled, capabilities FROM external_peer WHERE name = ?').get(id) as
+    { kind: string; enabled: number; capabilities: string } | null;
+  if (!peer) return null; // Native pane identities retain their existing permissions.
+  if (peer.kind !== 'agent' || !peer.enabled || !(JSON.parse(peer.capabilities) as string[]).includes(capability))
+    return `外の相手 ${id} には ${capability} の能力が許されておらぬ（取消済みの鍵も使えぬ）。`;
+  return null;
+}
+export function requireExternalCapability(db: Database, id: string, capability: Capability): void {
+  const problem = externalCapabilityProblem(db, id, capability);
+  if (problem) throw new NetworkError(403, problem);
+}
 export function externalWorkers(db: Database) {
   return peers(db).filter((p) => p.kind === 'agent' && externalAgent(db, p.name))
     .map((p) => ({ id: p.name, role: 'worker' as const, cli: null, model: null }));
