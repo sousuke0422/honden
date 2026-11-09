@@ -29,6 +29,7 @@
 
 import { openStore, tx, journal } from './store';
 import { roster, isEmpty, roleOf } from './roster';
+import { externalWorkers, externalCliProblem } from './external';
 import { summarize, nudgeText, deliver, signal } from './inbox';
 import { isAutonomous } from './mode';
 import { validate, explain, type Schema } from './validate';
@@ -221,7 +222,7 @@ export function inboxWrite(
   }
   const known = roster(db).map((e) => e.id);
 
-  const problems = validate(inboxSchema(known), picked.value);
+  const problems = validate(inboxSchema([...known, ...externalWorkers(db).map((p) => p.id)]), picked.value);
   if (problems.length > 0) {
     // 宛先が名簿の外である時だけ、言葉を実情へ寄せる。**弾く条件は変えぬ**。
     //
@@ -258,6 +259,8 @@ export function inboxWrite(
   }
 
   const v = picked.value as { to: string; from: string; type: string; body: string };
+  const externalProblem = externalCliProblem(db, ctx.selfId) ?? externalCliProblem(db, v.from);
+  if (externalProblem) return { code: EXIT_INVALID, err: externalProblem };
 
   // 指揮系統を、宛先の検めとして置く。
   //

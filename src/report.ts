@@ -37,6 +37,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
+import { externalAgent, externalCapabilityProblem } from './external';
 import { tx, journal } from './store';
 import { validate, explain, checkReason, type Schema } from './validate';
 import { roster, roleOf } from './roster';
@@ -204,11 +205,14 @@ export function submitReport(
         '  名乗りを引数に任せると、他人の報告が書ける。書き込みは行っておらぬ。',
     };
   }
+  const capabilityProblem = externalCapabilityProblem(db, selfId, 'report.submit');
+  if (capabilityProblem) return { ok: false, message: capabilityProblem };
   const known = roster(db);
-  if (!known.some((k) => k.id === selfId)) {
+  const external = externalAgent(db, selfId);
+  if (!external && !known.some((k) => k.id === selfId)) {
     return { ok: false, message: `${selfId} は名簿に無い。honden roster sync で入れられよ。` };
   }
-  if (roleOf(selfId) !== 'worker' && selfId !== QC_AUTHOR) {
+  if (!external && roleOf(selfId) !== 'worker' && selfId !== QC_AUTHOR) {
     return {
       ok: false,
       message:
@@ -287,7 +291,7 @@ export function submitReport(
       at,
       type: 'report_received',
       sender: selfId,
-      body: `${selfId}、${v.task_id} を ${v.status} として報せる。品質の検めを仰ぐ。\n\n${v.summary}`,
+      body: (external ? `[external:${selfId}]\n` : '') + `${selfId}、${v.task_id} を ${v.status} として報せる。品質の検めを仰ぐ。\n\n${v.summary}`,
     });
     // 納めたら場所を手放す。解かぬと、その worktree が永久に握られたままになり、
     // 次の仕事が振れなくなる。blocked は握ったまま——まだ仕掛かっておるゆえ。

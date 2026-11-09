@@ -325,6 +325,30 @@ CREATE TABLE IF NOT EXISTS task (
 );
 
 -- 受け渡し。read は既定で 0 (未読)。
+CREATE TABLE IF NOT EXISTS external_peer (
+  name TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('agent','honden')),
+  direction TEXT NOT NULL DEFAULT 'pull' CHECK(direction = 'pull'),
+  key_hash TEXT,
+  capabilities TEXT NOT NULL,
+  destinations TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS network_instance (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS network_listener (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS network_envelope (
+  id TEXT PRIMARY KEY,
+  peer TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  inbox_id TEXT NOT NULL UNIQUE
+);
 CREATE TABLE IF NOT EXISTS inbox (
   id         TEXT PRIMARY KEY,
   agent      TEXT NOT NULL,
