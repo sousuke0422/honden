@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openStore } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { syncLimits } from '../src/routing';
 import { createCmd, assignTask } from '../src/dispatch';
 import { readOwnUnread } from '../src/inbox';
 import { changeKey, issuePeer } from '../src/external';
@@ -25,8 +26,9 @@ beforeEach(() => {
     { id: 'shogun', role: 'commander', cli: null, model: null },
     { id: 'karo', role: 'commander', cli: null, model: null },
     { id: 'gunshi', role: 'commander', cli: null, model: null },
-    { id: 'ashigaru1', role: 'worker', cli: null, model: null },
+    { id: 'ashigaru1', role: 'worker', cli: null, model: 'known-test-model' },
   ]);
+  syncLimits(db, [{ model: 'known-test-model', maxBloom: 6, costGroup: null }]);
   // Generate credentials only in memory; no literal bearer keys or real tmux sessions are used.
   issuePeer(db, 'shogun', { name: 'visitor', kind: 'agent', direction: 'pull',
     capabilities: ['inbox.read', 'inbox.write', 'report.submit'], destinations: ['gunshi'] });

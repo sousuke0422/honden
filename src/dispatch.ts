@@ -44,7 +44,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
-import { externalWorkers } from './external';
+import { externalAgent, externalWorkers } from './external';
 import { deliver, signal } from './inbox';
 import { take as takeClaim, type Kind, type Source } from './claim';
 import { workRootOf } from './projects';
@@ -303,10 +303,12 @@ export function assignTask(
     return { ok: false, message: `難度は L1 から L6。受け取った値: ${JSON.stringify(v.bloom)}` };
   }
   const bloom = explicitBloom ?? cmd.bloom;
+  // Peer capabilities are issued by the commander; peers have no local model limit.
+  const external = externalAgent(db, v.agent);
   const limit = entry.model ? modelLimitOf(db, entry.model) : null;
   const ackUnknownModel = flag(input, 'ack-unknown-model');
   const ackNoBloom = flag(input, 'ack-no-bloom');
-  if (!limit && !ackUnknownModel) {
+  if (!external && !limit && !ackUnknownModel) {
     const model = entry.model ?? '模型名なし';
     return {
       ok: false,
@@ -329,7 +331,7 @@ export function assignTask(
         '  それでも難度を定めず振るなら --ack-no-bloom を付けられよ。書き込みは行っておらぬ。',
     };
   }
-  if (bloom !== null && limit && limit.maxBloom < bloom) {
+  if (!external && bloom !== null && limit && limit.maxBloom < bloom) {
     const cap = limit.maxBloom;
     return {
       ok: false,
@@ -527,7 +529,7 @@ export function assignTask(
           ? ` reason=${JSON.stringify(input['reason'])} 引き継いだ仕事=${cur?.task_id ?? '不明'} 期限=${cur?.lease_until ?? 'なし'}`
           : ''),
     });
-      if (!limit && ackUnknownModel) {
+    if (!external && !limit && ackUnknownModel) {
         journal(db, {
           actor,
           action: 'task.assign.ack_unknown_model',
