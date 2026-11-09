@@ -72,6 +72,14 @@ const inboxSchema = (known: readonly string[]): Schema => ({
 /** 差出人名として許す形。空白や制御文字を弾く。 */
 const FROM_SHAPE = /^[A-Za-z0-9_-]{2,40}$/;
 
+/**
+ * 値を取らぬ旗。次の語を値として食わず、`--k` だけで 'true' になる。
+ * 食うと `--ack-unknown-model ashigaru1` の ashigaru1 が旗の値になり、旗が付いておらぬと読まれる。
+ * 値を明に書く `--k=false` は従前どおり値 'false' を持ち、flag() が真と読まぬ（付けぬ扱い）。
+ * `--k=true` は付けた扱い。それ以外の語は書いた通りに残す。
+ */
+export const VALUELESS_FLAGS: ReadonlySet<string> = new Set(['ack-unknown-model', 'ack-no-bloom']);
+
 /** 旗を解く。`--k v` と `--k=v` の両方を受ける。 */
 export function parseFlags(argv: string[]): { flags: Record<string, string>; rest: string[] } {
   const flags: Record<string, string> = {};
@@ -82,6 +90,7 @@ export function parseFlags(argv: string[]): { flags: Record<string, string>; res
     const body = a.slice(2);
     const eq = body.indexOf('=');
     if (eq >= 0) { flags[body.slice(0, eq)] = body.slice(eq + 1); continue; }
+    if (VALUELESS_FLAGS.has(body)) { flags[body] = 'true'; continue; }
     const next = argv[i + 1];
     if (next === undefined || next.startsWith('--')) { flags[body] = 'true'; continue; }
     flags[body] = next;

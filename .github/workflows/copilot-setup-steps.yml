@@ -1,0 +1,109 @@
+# Copilot の cloud agent が動く runner に、honden の release の本体を降ろして門を生かす。
+#
+# 門（.claude/hooks/guard.sh）は bin/honden が居らぬと、検められぬ物は通さぬとして全ての命を断る。
+# 門を外さずに Copilot を働かせるため、Copilot が始まる前に、配った release の本体を降ろして置く。
+# build はせぬ。名指しした版の本体を、SHA256SUMS と、その署名（Sigstore keyless の cosign の bundle）で
+# 照らしてから置く。照らしに落ちれば job を落とし、本体は置かぬ（門は今まで通り全てを断る）。
+#
+# 版を上げる時は、最初の step の HONDEN_VERSION を新しい札に替える（docs/copilot-cloud-agent.md）。
+#
+# GitHub の定め: file はこの道に置き、job の名は copilot-setup-steps にする。変えられるのは
+# steps・permissions・runs-on・services・snapshot・timeout-minutes だけで、既定の枝に在る時に効く
+# （https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/customize-the-agent-environment）。
+name: Copilot Setup Steps
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # 版はここで GITHUB_ENV へ書き出す。Copilot は job の env を引き継がぬゆえ、job の直下には置かぬ
+      - name: 降ろす版を決める
+        shell: bash
+        run: echo 'HONDEN_VERSION=v0.1.0-rc.5' >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # 署名を検める cosign は release.yml と同じ action と版にそろえる（束の形が版で変わるため）
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.3'
+
+      - name: release の本体を降ろす
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/honden"
+          cd "$RUNNER_TEMP/honden"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${HONDEN_VERSION}"
+          # 公開の release ゆえ token は渡さぬ（外へ送らぬ）
+          for f in SHA256SUMS SHA256SUMS.cosign.bundle \
+            honden-linux-x64 honden-bot-linux-x64 honden-watch-linux-x64 \
+            honden-parse-linux-x64 honden-kill-linux-x64 honden-cage-linux-x64; do
+            curl --fail --silent --show-error --location --proto '=https' -o "$f" "$base/$f"
+          done
+
+      # SHA256SUMS が release.yml の署名した物であることを検める。identity は名指しした版の札に当てる
+      - name: SHA256SUMS の署名を検める
+        shell: bash
+        working-directory: ${{ runner.temp }}/honden
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --bundle SHA256SUMS.cosign.bundle \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${HONDEN_VERSION}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            SHA256SUMS
+
+      - name: 本体を SHA256SUMS で照らす
+        shell: bash
+        working-directory: ${{ runner.temp }}/honden
+        run: |
+          set -euo pipefail
+          # 降ろした六本だけを照らす。名ごとに、紙にちょうど一行あることを確かめる
+          # （同じ名の行を重ねた紙で、他の本体が照らされずに通るのを塞ぐ）
+          : > want
+          for n in honden honden-bot honden-watch honden-parse honden-kill honden-cage; do
+            line=$(grep -E "^[0-9a-f]{64}  ${n}-linux-x64\$" SHA256SUMS || true)
+            if [ "$(printf '%s' "$line" | grep -c .)" -ne 1 ]; then
+              echo "SHA256SUMS に ${n}-linux-x64 の行がちょうど一つ無い" >&2
+              exit 1
+            fi
+            printf '%s\n' "$line" >> want
+          done
+          sha256sum --check --strict want
+
+      # 門が探す名（-linux-x64 を外した名）で bin/ に置く。bin/ の中身は git に載らぬ
+      - name: 本体を bin/ に置く
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          for n in honden honden-bot honden-watch honden-parse honden-kill honden-cage; do
+            install -m 0755 "$RUNNER_TEMP/honden/$n-linux-x64" "bin/$n"
+          done
+          ls -la bin
+
+      # 門が生きておることを確かめる。通るはずの命が通り、止まるはずの命が止まること
+      - name: 門の陽性対照と陰性対照
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin/honden guard check --cmd 'git status'
+          if bin/honden guard check --cmd 'git push --force'; then
+            echo '止まるはずの命が通った。門が生きておらぬ' >&2
+            exit 1
+          fi

@@ -69,8 +69,8 @@ export interface ModelLimit {
 /**
  * settings.yaml の capability_tiers を読む。
  *
- * この表は「使ってよいモデルの一覧」ではなく「能力に制限があるモデルの一覧」。
- * 表に無いモデルは制限なしとして扱う。
+ * この表は、振る前に能力を確かめたモデルの一覧である。
+ * 表に無いモデルは上限不明として扱う。
  */
 export function readLimitsFromSettings(path: string): ModelLimit[] {
   const doc = Bun.YAML.parse(readFileSync(path, 'utf8')) as {
@@ -93,12 +93,37 @@ export function syncLimits(db: Database, limits: ModelLimit[], actor = 'routing'
   journal(db, { actor, action: 'limits.sync', target: `${limits.length}件` });
 }
 
-/** そのモデルの上限。表に無ければ制限なし。 */
+/** そのモデルが能力表に載っておれば、その行を返す。 */
+export function modelLimitOf(db: Database, model: string): ModelLimit | null {
+  return db
+    .query('SELECT model, max_bloom maxBloom, cost_group costGroup FROM model_limit WHERE model = ?')
+    .get(model) as ModelLimit | null;
+}
+
+/** そのモデルの上限。旧い呼び手のため、表に無ければ L6 を返す。 */
 export function maxBloomOf(db: Database, model: string): number {
   const r = db.query('SELECT max_bloom FROM model_limit WHERE model = ?').get(model) as
     | { max_bloom: number }
     | null;
   return r ? r.max_bloom : NO_LIMIT;
+}
+
+/** 現在の足軽の顔ぶれと能力表の食い違いを、人が直せる一行へする。 */
+export function routingGaps(db: Database): string[] {
+  const workers = roster(db).filter((e) => e.role === 'worker');
+  const known = workers
+    .map((e) => ({ entry: e, limit: e.model ? modelLimitOf(db, e.model) : null }))
+    .filter((x): x is { entry: RosterEntry & { model: string }; limit: ModelLimit } => x.limit !== null);
+  const unknown = workers.filter((e) => !e.model || modelLimitOf(db, e.model) === null);
+  const missing = [1, 2, 3, 4, 5, 6].filter((bloom) => !known.some((x) => x.limit.maxBloom >= bloom));
+  const lines: string[] = [];
+  if (unknown.length > 0) {
+    lines.push(
+      `能力表に無い模型: ${unknown.map((e) => `${e.id}=${e.model ?? '模型なし'}`).join(', ')}`,
+    );
+  }
+  if (missing.length > 0) lines.push(`L${missing.join(', L')} を振れる足軽が居らぬ`);
+  return lines;
 }
 
 export interface Candidate {
@@ -107,6 +132,8 @@ export interface Candidate {
   cli: string | null;
   provider: string;
   maxBloom: number;
+  /** false なら能力表に無く、上限は確定していない。 */
+  knownLimit: boolean;
 }
 
 export interface RecommendOptions {
@@ -169,8 +196,8 @@ export function recommend(db: Database, opts: RecommendOptions): Recommendation 
   }
 
   // その難度に足りるモデルを、軽い順に並べた品揃え。
-  // 表に載っているものだけを見る。未知のモデルは制限なしだが、
-  // 名を知らぬものを「切り替え先」として勧めることはできない。
+  // 表に載っているものだけを見る。未知のモデルは上限不明であり、
+  // 名を知らぬものを「切り替え先」として勧めることもできない。
   const catalog = (
     db.query('SELECT model, max_bloom FROM model_limit WHERE max_bloom >= ? ORDER BY max_bloom, model').all(
       opts.bloom,
@@ -200,7 +227,8 @@ export function recommend(db: Database, opts: RecommendOptions): Recommendation 
       rejected.push(`${e.id}: 系統が ${provider}（許された系統の外）`);
       continue;
     }
-    const maxBloom = maxBloomOf(db, e.model);
+    const limit = modelLimitOf(db, e.model);
+    const maxBloom = limit?.maxBloom ?? NO_LIMIT;
     if (maxBloom < opts.bloom) {
       rejected.push(`${e.id}: ${e.model} は L${maxBloom} まで（L${opts.bloom} に足りぬ）`);
       // 能力だけで外れた者は、切り替えれば足りる。
@@ -216,7 +244,7 @@ export function recommend(db: Database, opts: RecommendOptions): Recommendation 
       }
       continue;
     }
-    candidates.push({ agent: e.id, model: e.model, cli: e.cli, provider, maxBloom });
+    candidates.push({ agent: e.id, model: e.model, cli: e.cli, provider, maxBloom, knownLimit: limit !== null });
   }
 
   // 足りる中で最も軽い順。同じなら名の順で安定させる。

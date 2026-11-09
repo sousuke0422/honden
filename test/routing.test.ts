@@ -38,7 +38,7 @@ const seeded = () => {
       db,
       FLEET.map(([id, cli, model]) => ({ id, role: roleOf(id), cli, model })),
     );
-    // 制限があるものだけを載せる。他は表に無い＝制限なし。
+    // 旧い maxBloomOf の互換動作と、上限不明の候補表示を併せて見る。
     syncLimits(db, [{ model: 'composer-2.5', maxBloom: 4, costGroup: 'cursor' }]);
   });
   return db;
@@ -67,7 +67,7 @@ describe('系統の割り出し', () => {
 });
 
 describe('能力の制限', () => {
-  test('表に無いモデルは制限なし（新しいモデルが即使える）', () => {
+  test('旧い上限 API は表に無いモデルを L6 として返す', () => {
     const db = seeded();
     expect(maxBloomOf(db, 'claude-opus-9')).toBe(NO_LIMIT);
     expect(maxBloomOf(db, 'まだ無いモデル')).toBe(NO_LIMIT);
@@ -272,7 +272,7 @@ describe('settings.yaml から制限を読む', () => {
     }
   });
 
-  test('capability_tiers が無ければ空（制限なしと同じ）', () => {
+  test('capability_tiers が無ければ空', () => {
     const dir = mkdtempSync(join(tmpdir(), 'honden-lim2-'));
     const p = join(dir, 's.yaml');
     writeFileSync(p, 'language: ja\n', 'utf8');

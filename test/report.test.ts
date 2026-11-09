@@ -12,6 +12,7 @@
 import { expect, test, describe } from 'bun:test';
 import { openStore, tx } from '../src/store';
 import { syncRoster } from '../src/roster';
+import { trustRosterModels } from './model-limits';
 import { createCmd, assignTask } from '../src/dispatch';
 import { acquire } from '../src/lease';
 import {
@@ -45,6 +46,7 @@ function seeded() {
       { id: 'ashigaru2', role: 'worker', cli: 'claude', model: 'claude-fable-5' },
     ]);
   });
+  trustRosterModels(db);
   const c = createCmd(db, 'shogun', CMD);
   const a = assignTask(db, 'karo', { agent: 'ashigaru1', cmd_id: c.id!, title: '実装せよ' });
   return { db, cmdId: c.id!, taskId: a.id! };
