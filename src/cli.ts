@@ -29,7 +29,7 @@
 
 import { openStore, tx, journal } from './store';
 import { roster, isEmpty, roleOf } from './roster';
-import { externalWorkers } from './external';
+import { externalWorkers, externalCliProblem } from './external';
 import { summarize, nudgeText, deliver, signal } from './inbox';
 import { isAutonomous } from './mode';
 import { validate, explain, type Schema } from './validate';
@@ -250,6 +250,8 @@ export function inboxWrite(
   }
 
   const v = picked.value as { to: string; from: string; type: string; body: string };
+  const externalProblem = externalCliProblem(db, ctx.selfId) ?? externalCliProblem(db, v.from);
+  if (externalProblem) return { code: EXIT_INVALID, err: externalProblem };
 
   // 指揮系統を、宛先の検めとして置く。
   //

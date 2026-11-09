@@ -98,7 +98,7 @@ import { collect as denialCollect, tally as denialTally, render as denialRender 
 import { exportAll } from './export';
 import { serve as serveHttp, LOOPBACK, DASHBOARD_PORT } from './serve';
 import { networkCli } from './network-cli';
-import { peerStatus } from './external';
+import { peerStatus, externalCliProblem } from './external';
 import { issueCharter, revokeCharter, listCharters, CHARTER_DEFAULT_TTL_MIN, CHARTER_MAX_TTL_MIN } from './charter';
 import { backup as backupDb, KEEP_DEFAULT } from './backup';
 import { judge as guardJudge, judgeStructured as guardJudgeStructured, issue as guardIssue, verify as guardVerify, normalize as guardNormalize, splitOtp as guardSplitOtp, facts as guardFacts, selftest as guardSelftest, OTP_DEFAULT_TTL_MS, type GateCheck } from './guard';
@@ -492,6 +492,8 @@ export function runInboxRead(
   }
   const db = openStore({ path: dbPath });
   const peeking = target !== undefined && target !== selfId;
+  const externalProblem = externalCliProblem(db, selfId);
+  if (externalProblem) return { code: EXIT_INVALID, err: externalProblem };
   const ownUnreadRead = !all && !peeking && agent === selfId;
   // 己の未読を読む道だけ、見せた範囲を境つきで正本に残す（境の採取・一覧・写しは一つの取引）。
   const msgs = ownUnreadRead ? readOwnUnread(db, agent) : list(db, agent, { all });
@@ -552,6 +554,8 @@ export function runInboxAck(
     };
   }
   const db = openStore({ path: dbPath });
+  const externalProblem = externalCliProblem(db, selfId);
+  if (externalProblem) return { code: EXIT_INVALID, err: externalProblem };
   const r = all ? ackAll(db, selfId) : ack(db, selfId, ids);
   if (!r.ok) return { code: EXIT_INVALID, err: `  ${r.message}` };
   const s = summarize(db, selfId);
@@ -824,6 +828,8 @@ export function runReportSubmit(
     };
   }
   const db = openStore({ path: dbPath });
+  const externalProblem = externalCliProblem(db, selfId);
+  if (externalProblem) return { code: EXIT_INVALID, err: externalProblem };
   const r = submitReport(db, selfId, picked.value);
   return r.ok ? { code: EXIT_OK, out: r.out } : { code: EXIT_INVALID, err: r.message };
 }
@@ -3243,6 +3249,17 @@ export async function main(argv: string[]): Promise<number> {
     if (rest[0] !== undefined && CLOCK_COMMANDS.has(rest[0])) console.log(clockLine());
     return r.code;
   };
+
+  // Peer identities belong to the authenticated transport, not to an environment variable.
+  // Check every command here as well as the reusable CLI entry points below.
+  const cliId = selfId();
+  const cliDbPath = dbPath ?? process.env.HONDEN_DB ?? DEFAULT_DB_PATH;
+  if (cliId && (cliDbPath === ':memory:' || existsSync(cliDbPath))) {
+    const identityDb = openStore({ path: cliDbPath, create: false });
+    let problem: string | null;
+    try { problem = externalCliProblem(identityDb, cliId); } finally { identityDb.close(); }
+    if (problem) { console.error(problem); return EXIT_INVALID; }
+  }
 
   if (rest[0] === 'import') {
     const root = flags['root'] ?? process.cwd();

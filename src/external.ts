@@ -26,6 +26,11 @@ export function peers(db: Database): Peer[] {
 export function externalAgent(db: Database, id: string): boolean {
   return !!db.query("SELECT 1 FROM external_peer WHERE name = ? AND kind = 'agent' AND key_hash IS NOT NULL").get(id);
 }
+/** A peer name is a network identity, including after revocation. It is never a CLI identity. */
+export function externalCliProblem(db: Database, id: string | undefined): string | null {
+  if (!id || !db.query('SELECT 1 FROM external_peer WHERE name = ?').get(id)) return null;
+  return '外の相手は手元の CLI から名乗れぬ。鍵を持って網の口（/v1/…）から来られよ。';
+}
 export function externalWorkers(db: Database) {
   return peers(db).filter((p) => p.kind === 'agent' && externalAgent(db, p.name))
     .map((p) => ({ id: p.name, role: 'worker' as const, cli: null, model: null }));
