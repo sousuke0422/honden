@@ -120,3 +120,38 @@ test('normal worker CLI entry points retain their read, ack and report behavior'
   expect(runInboxAck(path, 'ashigaru1', messages.map((m) => m.id), false).code).toBe(0);
   expect(runReportSubmit(path, 'ashigaru1', { flags: { task_id: assigned.id!, status: 'blocked', summary: '確認を待つ' } }, false).code).toBe(0);
 });
+
+for (const admin of ['shogun', 'karo']) {
+  for (const policy of ['report-only', 'revoked']) {
+    test(`${admin} can peek at a ${policy} peer without acknowledging its messages`, () => {
+      if (policy === 'revoked') changeKey(db, 'shogun', 'visitor', true);
+      else db.prepare('UPDATE external_peer SET capabilities = ? WHERE name = ?').run(JSON.stringify(['report.submit']), 'visitor');
+      const messages = db.query('SELECT * FROM inbox ORDER BY id').all();
+      const snapshots = db.query('SELECT * FROM inbox_read_snapshot ORDER BY agent').all();
+      for (const all of [false, true]) {
+        const result = runInboxRead(path, admin, 'visitor', all);
+        expect(result.code).toBe(0);
+        expect(result.out).toContain('覗いておるだけ');
+        expect(result.out).toContain('資料を調べよ');
+      }
+      const denied = runInboxAck(path, admin, [messageId], false);
+      expect(denied.code).not.toBe(0);
+      expect(denied.err).toContain('他人の報せ');
+      expect(runInboxAck(path, admin, [], true).code).not.toBe(0);
+      expect(db.query('SELECT * FROM inbox ORDER BY id').all()).toEqual(messages);
+      expect(db.query('SELECT * FROM inbox_read_snapshot ORDER BY agent').all()).toEqual(snapshots);
+      expect(db.query("SELECT actor,target FROM ledger WHERE action = 'inbox.peek' ORDER BY id").all())
+        .toEqual([{ actor: admin, target: 'visitor' }, { actor: admin, target: 'visitor' }]);
+      expect(runInboxRead(path, 'visitor', undefined, false).err).toContain('鍵を持って網の口');
+    });
+  }
+}
+
+test('a denied owner read returns EXIT_INVALID rather than escaping as an exception', () => {
+  db.prepare('UPDATE external_peer SET capabilities = ? WHERE name = ?').run(JSON.stringify(['report.submit']), 'visitor');
+  const before = state();
+  const result = runInboxRead(path, undefined, 'visitor', false);
+  expect(result.code).toBe(2);
+  expect(result.err).toContain('inbox.read');
+  expect(state()).toEqual(before);
+});

@@ -31,7 +31,7 @@ import type { Database } from 'bun:sqlite';
 import { journal, tx, raiseSignal } from './store';
 import { roleOrNull } from './roster';
 import { checkReason } from './validate';
-import { externalCapabilityProblem, requireExternalCapability } from './external';
+import { externalAgent, externalCapabilityProblem, requireExternalCapability, NetworkError } from './external';
 
 export interface Message {
   id: string;
@@ -60,8 +60,12 @@ export const INBOX_LIST_DEFAULT_LIMIT = 100;
 export const INBOX_ACK_SCAN_LIMIT = 1000;
 
 /** 未読、または全件を古い順に返す。 */
-export function list(db: Database, agent: string, opts: { all?: boolean; limit?: number } = {}): Message[] {
-  requireExternalCapability(db, agent, 'inbox.read');
+export function list(db: Database, agent: string, opts: { all?: boolean; limit?: number; selfId?: string } = {}): Message[] {
+  // The reader's policy governs the operation, not the destination's policy.
+  // Omitted identity means an owner read; local CLI callers pass their resolved identity when peeking.
+  const reader = opts.selfId ?? agent;
+  requireExternalCapability(db, reader, 'inbox.read');
+  if (reader !== agent && externalAgent(db, reader)) throw new NetworkError(403, '外の相手が読めるのは己の受け箱だけである。');
   const sql = opts.all
     ? 'SELECT * FROM inbox WHERE agent = ? ORDER BY created_at, id LIMIT ?'
     : 'SELECT * FROM inbox WHERE agent = ? AND read = 0 ORDER BY created_at, id LIMIT ?';

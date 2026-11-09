@@ -98,3 +98,19 @@ test('permitted peer core reads and acknowledgements still work', () => {
   expect(readOwnUnread(db, 'reader')).toEqual([]);
   expect(ackAll(db, 'reader').ok).toBe(true);
 });
+
+test('an explicit external reader still needs its own capability and cannot peek at another inbox', () => {
+  peer('reader', ['inbox.read']);
+  peer('reporter', ['report.submit']);
+  send('reader');
+  send('reporter');
+  const before = state();
+  forbidden(() => list(db, 'reporter', { selfId: 'reporter' }));
+  try { list(db, 'reporter', { selfId: 'reader' }); throw new Error('expected an ownership rejection'); }
+  catch (e) {
+    expect(e).toBeInstanceOf(NetworkError);
+    expect((e as NetworkError).status).toBe(403);
+    expect((e as Error).message).toContain('己の受け箱');
+  }
+  expect(state()).toEqual(before);
+});
