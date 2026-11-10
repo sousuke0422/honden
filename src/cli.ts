@@ -29,7 +29,7 @@
 
 import { openStore, tx, journal } from './store';
 import { roster, isEmpty, roleOf } from './roster';
-import { externalWorkers, externalCliProblem } from './external';
+import { externalWorkers, externalCliProblem, externalAgent } from './external';
 import { summarize, nudgeText, deliver, signal } from './inbox';
 import { isAutonomous } from './mode';
 import { validate, explain, type Schema } from './validate';
@@ -416,7 +416,7 @@ export function inboxWrite(
       `${intact ? '（渡した本文と一致）' : '  ★渡した本文と食い違う'}\n` +
       `  ${back.body.split('\n')[0]?.slice(0, 60) ?? ''}\n` +
       `  → ${id}\n` +
-      `  ${v.to} への合図: ${nudgeText(summarize(db, v.to))}`,
+      `  ${v.to} ${externalAgent(db, v.to) ? 'への未読の表示（pane への送信ではない）' : 'への合図'}: ${nudgeText(summarize(db, v.to))}`,
   };
 }
 

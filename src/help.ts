@@ -147,7 +147,7 @@ EOF`,
   },
   network: {
     summary: '外の相手との認証つき inbox。既定では待ち受けない。',
-    usage: 'honden network peers | peer add/rotate/revoke | configure --host IP [--port N] | configure --disable | serve',
+    usage: 'honden network peers | peer add/rotate/revoke | peer webhook --name NAME (--url URL | --disable) | configure --host IP [--port N] | configure --disable | serve',
     notes: ['鍵の発行、更新、取消と待受設定は将軍のみ', '使い方と HTTP の例は docs/network-inbox.md'],
   },
   'report submit': {

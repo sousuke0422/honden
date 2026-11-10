@@ -110,5 +110,7 @@ export function instanceId(db: Database): string {
 export function peerStatus(db: Database) {
   return peers(db).map((p) => ({ ...p, enabled: externalAgent(db, p.name) || !!db.query('SELECT 1 FROM external_peer WHERE name = ? AND key_hash IS NOT NULL').get(p.name),
     unread: (db.query('SELECT count(*) n FROM inbox WHERE agent = ? AND read = 0').get(p.name) as { n: number }).n,
+    webhook: db.query(`SELECT webhook_url IS NOT NULL AS configured, s.last_attempt_at AS lastAt, s.last_result AS result
+      FROM external_peer p LEFT JOIN webhook_state s ON s.peer = p.name WHERE p.name = ?`).get(p.name),
     last: db.query("SELECT at,action,detail FROM ledger WHERE actor = ? AND action LIKE 'network.%' ORDER BY id DESC LIMIT 1").get(p.name) }));
 }
