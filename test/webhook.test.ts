@@ -95,8 +95,23 @@ test('network and 5xx failures retry at 30/60/120s, give up after four attempts 
 test('4xx and redirects stop immediately; disable/revoke prevent sends', async () => {
   for (const status of [400, 302]) {
     configureWebhook(db, 'shogun', 'visitor', 'https://example.test');
-    let calls = 0; const s = worker(async () => { calls++; return new Response(null, { status }); });
-    mail('status-' + status); await s.tick(); now += 60000; await s.tick(); expect(calls).toBe(1); s.stop();
+    let calls = 0;
+    const redirected: { url: string; signed: boolean }[] = [];
+    const receiveRedirect = (url: string, init?: RequestInit) => {
+      redirected.push({ url, signed: new Headers(init?.headers).has('X-Honden-Signature') });
+      return new Response(null, { status: 204 });
+    };
+    const s = worker(async (_, init) => {
+      calls++;
+      const response = new Response(null, { status,
+        headers: status === 302 ? { Location: 'https://redirect-target.example/notify' } : undefined });
+      // Match fetch's default follow behavior, preserving custom signing headers at the next receiver.
+      const location = response.headers.get('Location');
+      return location && init?.redirect !== 'manual' ? receiveRedirect(location, init) : response;
+    });
+    mail('status-' + status); await s.tick(); now += 60000; await s.tick();
+    expect(redirected).toEqual([]);
+    expect(calls).toBe(1); s.stop();
   }
   let calls = 0; const s = worker(async () => { calls++; return new Response(null); });
   configureWebhook(db, 'shogun', 'visitor', null); mail('disabled'); await s.tick(); expect(calls).toBe(0);
