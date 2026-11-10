@@ -157,3 +157,23 @@ test('a denied owner read returns EXIT_INVALID rather than escaping as an except
   expect(result.err).toContain('inbox.read');
   expect(state()).toEqual(before);
 });
+
+test('webhook CLI permits only shogun and never returns the signing key in peer status', () => {
+  const args = ['network', 'peer', 'webhook', '--name', 'visitor', '--url', 'https://example.test/notify'];
+  expect(cli(args, 'karo').exitCode).not.toBe(0);
+  const configured = cli(args, 'shogun');
+  expect(configured.exitCode).toBe(0);
+  const secret = JSON.parse(new TextDecoder().decode(configured.stdout)).key;
+  expect(typeof secret === 'string' && secret.length === 43).toBe(true);
+  const status = cli(['network', 'peers'], 'shogun');
+  expect(status.exitCode).toBe(0);
+  expect(new TextDecoder().decode(status.stdout).includes(secret)).toBe(false);
+  expect(cli(['network', 'peer', 'webhook', '--name', 'visitor', '--disable'], 'karo').exitCode).not.toBe(0);
+  expect(cli(['network', 'peer', 'webhook', '--name', 'visitor', '--disable'], 'shogun').exitCode).toBe(0);
+});
+
+test('external inbox write describes unread display without promising a pane signal', () => {
+  const result = cli(['inbox', 'write', '--to', 'visitor', '--from', 'probe_session', '--type', 'report_received', '--body', 'test notice'], 'karo');
+  expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+  expect(new TextDecoder().decode(result.stdout)).toContain('pane への送信ではない');
+});

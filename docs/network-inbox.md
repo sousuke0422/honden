@@ -184,3 +184,120 @@ honden log --actor visitor
 
 `network peers` では許可、有効か否か、未読数、最後の接続が分かります。
 待受の IP 設定は既存 DB に新しい表として加わり、既存の名簿、台帳、門の判じは変えません。
+
+## 未読の増加を webhook で知らせる
+
+外の相手が取りに来る間隔を短くしたい時は、未読数だけを送る **webhook** を設定できます。
+相手の受け口を将軍が指定し、`network serve` を動かしておきます。
+宛先の設定、変更、無効化を行えるのは将軍だけです。
+
+```sh
+honden network peer webhook --name visitor --url https://receiver.example/notify
+honden network serve
+# URL の再設定で署名鍵も切り直す
+honden network peer webhook --name visitor --url https://receiver.example/notify
+honden network peer webhook --name visitor --disable
+```
+
+URL は HTTP と HTTPS を受け付け、ユーザー名やパスワードを含む URL は拒否します。
+本番では HTTPS を使ってください。
+リダイレクト先へ署名付き要求を転送することはありません。
+
+設定時に返す `key` は一度だけ表示します。
+これは受信 API 用の Bearer 鍵とは別の、HMAC-SHA256 の署名鍵です。
+表示された文字列そのものを UTF-8 の鍵として使い、base64 デコードはしません。
+再設定時には古い署名鍵を削除するため、受信側の鍵も更新してください。
+
+署名を作るには元の鍵が必要なので、鍵の値は DB と同じディレクトリにある `webhook-keys/` の個別ファイルへ保存します。
+ディレクトリの mode は 700、鍵ファイルは 600 とし、送信時も通常ファイルであること、mode、hash を検査します。
+DB の `external_peer` には宛先 URL、鍵ファイルの参照、SHA-256 hash だけを置きます。
+SQLite の状態表示や ledger から鍵の値を取得できないようにするための分離です。
+DB と鍵ディレクトリをそれぞれ秘密として保管し、復元時には両方を揃えてください。
+鍵を失った場合は将軍が URL を再設定します。
+無効化すると DB の参照と鍵ファイルを削除します。
+受信 API の Bearer 鍵を取り消した相手には webhook も送りません。
+
+通知の JSON は次の四項目だけです。
+報せの本文、差出、種別を含めず、受信側は通知をきっかけに既存の受信 API から読みに来ます。
+
+```json
+{"peer":"visitor","unread":3,"at":"2026-01-01T00:00:00.000Z","id":"e640d52c-3a81-4478-a307-21f154167056"}
+```
+
+| HTTP header | 値 |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-Honden-Timestamp` | JSON の `at` と同じ ISO 8601 文字列 |
+| `X-Honden-Signature` | `sha256=` に続く HMAC-SHA256 の小文字 hex |
+
+署名対象は、header の刻、`.`、受信した本文の生バイト列を順につないだものです。
+受信側で JSON を組み直してから署名を検証すると、空白や項目順の違いで一致しなくなります。
+受信側は署名、刻の鮮度、通知 ID の再利用を検めてください。
+次は Bun 用の受信例です。
+`WEBHOOK_KEY` と `WEBHOOK_PEER` を受信側で設定し、TLS を終端する proxy の後ろで動かします。
+複数プロセスや再起動をまたいで古い通知を拒否する場合、`seen` を TTL 付きの共有永続ストアに置き換えてください。
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+const key = process.env.WEBHOOK_KEY;
+const peer = process.env.WEBHOOK_PEER;
+if (!key || !peer) throw new Error('set WEBHOOK_KEY and WEBHOOK_PEER');
+const ttl = 5 * 60_000;
+const seen = new Map<string, number>();
+Bun.serve({
+  hostname: '127.0.0.1', port: 8790, maxRequestBodySize: 4096,
+  async fetch(req) {
+    if (req.method !== 'POST') return new Response(null, { status: 405 });
+    const at = req.headers.get('X-Honden-Timestamp') ?? '';
+    const signature = req.headers.get('X-Honden-Signature') ?? '';
+    const now = Date.now(), time = Date.parse(at);
+    if (!Number.isFinite(time) || Math.abs(now - time) > ttl ||
+        !/^sha256=[a-f0-9]{64}$/.test(signature))
+      return new Response(null, { status: 401 });
+    const raw = Buffer.from(await req.arrayBuffer());
+    const expected = createHmac('sha256', key).update(at + '.').update(raw).digest();
+    if (!timingSafeEqual(expected, Buffer.from(signature.slice(7), 'hex')))
+      return new Response(null, { status: 401 });
+    let value;
+    try { value = JSON.parse(raw.toString('utf8')); }
+    catch { return new Response(null, { status: 400 }); }
+    if (!value || Object.keys(value).sort().join(',') !== 'at,id,peer,unread' ||
+        value.at !== at || value.peer !== peer || !Number.isSafeInteger(value.unread) ||
+        value.unread < 1 || typeof value.id !== 'string' ||
+        !/^[a-f0-9-]{36}$/.test(value.id))
+      return new Response(null, { status: 400 });
+    for (const [id, expires] of seen) if (expires < now) seen.delete(id);
+    if (seen.has(value.id)) return new Response(null, { status: 409 });
+    if (seen.size >= 10_000) return new Response(null, { status: 503 });
+    seen.set(value.id, time + ttl);
+    // ここで未読を読む仕事を投入し、HTTP 応答は速やかに返す。
+    console.log(`unread=${value.unread}`);
+    return new Response(null, { status: 204 });
+  },
+});
+```
+
+送り手は `network serve` の中で約1秒ごとに未読数を調べます。
+0 からの増加と、その後の増加を拾い、初回は次の検査で送ります。
+最後の送信から30秒以内の増加は次の一通へまとめます。
+既読化と新着が検査の間に重なり、未読数が同じになった時も、新しい行を見つければ通知します。
+通知待ちの間に未読が0になった場合は送りを取り消します。
+
+各要求の刻限は10秒です。
+網の失敗と 5xx は30秒、60秒、120秒と間を延ばして再送し、初回を含め最大4回で諦めます。
+3xx と 4xx は即座に諦め、次の未読増加を待ちます。
+再送時には刻と通知 ID を新しくし、その時点の未読数を送るため、受信側の処理は複数回の通知を受けても支障のない形にしてください。
+観測済みの数、通知待ち、再送回数、次の送信刻は `webhook_state` に保存します。
+停止中の増加は再起動後に拾い、集約と再送の待ち時間も引き継ぎます。
+複数の `network serve` を同じ DB に対して同時起動しないでください。
+
+HTTP の送信は inbox への書き込みから独立しています。
+相手が応えなくても `inbox write` や仕事の割り当ては送信完了を待ちません。
+従来の「hermes への合図」という CLI 表示は、未読数の文字列と手元の芯への起床を指しており、相手の pane へ送った証拠ではありませんでした。
+外の相手ではこれを「未読の表示（pane への送信ではない）」と表示します。
+watch の pane 巡回にも外の相手を加えません。
+
+`network peers` と `status` の相手一覧で、webhook の設定有無と最後の結果を確認できます。
+ledger には送信、失敗、集約、諦めを `webhook.*` として記録します。
+宛先は host と port だけを載せ、URL の path や query、鍵、通知本文、網の生エラーは載せません。

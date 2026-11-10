@@ -4,6 +4,7 @@ import { journal, tx } from './store';
 import { ack, ackAll, deliver, readOwnUnread, signal, summarize } from './inbox';
 import { submitReport } from './report';
 import { address, authenticate, instanceId, listenerAddress, NetworkError, type Capability, type Peer } from './external';
+import { startWebhookSender } from './webhook';
 
 export const BODY_LIMIT = 64 * 1024;
 export const ENVELOPE_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -169,5 +170,8 @@ export function serveNetwork(db: Database, opts: NetworkOptions = {}) {
   const configured = db.query('SELECT host,port FROM network_listener WHERE singleton = 1').get() as { host: string; port: number } | null;
   if (!configured) throw new NetworkError(403, 'network listener is disabled; configure an explicit IP first');
   const { host, port } = listenerAddress(configured.host, configured.port);
-  return Bun.serve({ hostname: host, port, idleTimeout: 10, maxRequestBodySize: BODY_LIMIT, fetch: networkHandler(db, opts) });
+  const server = Bun.serve({ hostname: host, port, idleTimeout: 10, maxRequestBodySize: BODY_LIMIT, fetch: networkHandler(db, opts) });
+  const sender = startWebhookSender(db, { now: opts.now });
+  return { hostname: server.hostname, port: server.port,
+    stop(closeActive?: boolean) { sender.stop(); return server.stop(closeActive); } };
 }

@@ -86,6 +86,11 @@ export function signalPathOf(dbPath: string): string {
   return `${dbPath}.signal`;
 }
 
+/** Used for private artifacts that must follow the store, never the current directory. */
+export function databasePath(db: Database): string | undefined {
+  return dbPathOf.get(db);
+}
+
 /** 誰かの未読が増えたことを、常駐している芯へ知らせる。 */
 export function raiseSignal(db: Database): void {
   const path = dbPathOf.get(db);
@@ -337,6 +342,16 @@ CREATE TABLE IF NOT EXISTS external_peer (
 CREATE TABLE IF NOT EXISTS network_instance (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
   id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS webhook_state (
+  peer TEXT PRIMARY KEY REFERENCES external_peer(name) ON DELETE CASCADE,
+  observed_unread INTEGER NOT NULL DEFAULT 0,
+  cursor INTEGER NOT NULL DEFAULT 0,
+  pending INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_result TEXT,
+  next_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS network_listener (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -685,6 +700,9 @@ function addColumn(db: Database, table: string, column: string, decl: string): v
 
 function migrate(db: Database): void {
   db.run(SCHEMA);
+  addColumn(db, 'external_peer', 'webhook_url', 'TEXT');
+  addColumn(db, 'external_peer', 'webhook_key_file', 'TEXT');
+  addColumn(db, 'external_peer', 'webhook_key_hash', 'TEXT');
   // 既に走っている正本のための追い足し。新しい正本は SCHEMA 側で足りている。
   addColumn(db, 'report', 'cmd_id', 'TEXT');
   addColumn(db, 'cmd', 'bloom', 'INTEGER CHECK (bloom IS NULL OR bloom BETWEEN 1 AND 6)');
