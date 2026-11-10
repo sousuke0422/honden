@@ -157,15 +157,18 @@ export class WebhookSender {
     if (this.stopped) return;
     const current = this.db.query('SELECT webhook_key_file,key_hash FROM external_peer WHERE name = ?').get(peer.name) as { webhook_key_file: string | null; key_hash: string | null } | null;
     if (current?.webhook_key_file !== peer.webhook_key_file || !current.key_hash) return;
+    const latest = this.state(peer.name);
+    const more = latest.cursor > state.cursor || latest.observed_unread > state.observed_unread;
     if (success) {
-      const latest = this.state(peer.name);
-      const more = latest.cursor > state.cursor || latest.observed_unread > state.observed_unread;
       this.db.prepare("UPDATE webhook_state SET pending = ?, attempts = 0, last_result = 'success' WHERE peer = ?").run(more ? 1 : 0, peer.name);
       this.log(peer, 'success', result);
     } else {
       const again = retry && attempt < WEBHOOK_MAX_ATTEMPTS;
-      this.db.prepare('UPDATE webhook_state SET pending = ?, next_at = ?, last_result = ? WHERE peer = ?')
-        .run(again ? 1 : 0, now + WEBHOOK_WINDOW_MS * 2 ** (attempt - 1), again ? 'retry' : 'gave_up', peer.name);
+      // Ending this notification must not discard mail observed while its request was in flight.
+      this.db.prepare('UPDATE webhook_state SET pending = ?, attempts = ?, next_at = ?, last_result = ? WHERE peer = ?')
+        .run(again || more ? 1 : 0, !again && more ? 0 : attempt,
+          now + (again ? WEBHOOK_WINDOW_MS * 2 ** (attempt - 1) : WEBHOOK_WINDOW_MS),
+          again ? 'retry' : 'gave_up', peer.name);
       this.log(peer, 'failure', `${result} attempt=${attempt}`);
       if (!again) this.log(peer, 'give_up', result);
     }

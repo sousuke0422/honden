@@ -199,3 +199,32 @@ test('restart after an interrupted fourth attempt preserves the retry limit', as
   await restarted.tick(); expect(calls).toBe(1); expect(state().last_result).toBe('gave_up');
   now += 30000; mail('two'); await restarted.tick(); expect(calls).toBe(2);
 });
+
+for (const status of [400, 302, 503]) for (const arrival of [false, true]) {
+  test(`terminal ${status} preserves in-flight arrivals=${arrival} as a fresh notification`, async () => {
+    let finish!: (response: Response) => void;
+    let calls = 0;
+    const terminalAttempt = status === 503 ? 4 : 1;
+    const counts: number[] = [];
+    const s = worker(async (_, init) => {
+      counts.push(valid(init!).unread);
+      calls++;
+      if (calls < terminalAttempt) return new Response(null, { status: 503 });
+      if (calls === terminalAttempt) return new Promise<Response>(resolve => finish = resolve);
+      return new Response(null, { status: 204 });
+    });
+    mail('one');
+    if (status === 503) for (const delay of [30000, 60000, 120000]) { await s.tick(); now += delay; }
+    const pending = s.tick();
+    expect(calls).toBe(terminalAttempt);
+    if (arrival) { mail('two'); await s.tick(); }
+    finish(new Response(null, { status })); await pending;
+    expect(state().last_result).toBe('gave_up');
+    expect(state().pending).toBe(arrival ? 1 : 0);
+    expect(state().attempts).toBe(arrival ? 0 : terminalAttempt);
+    now += 29999; await s.tick(); expect(calls).toBe(terminalAttempt);
+    now++; await s.tick(); expect(calls).toBe(terminalAttempt + (arrival ? 1 : 0));
+    expect(counts.at(-1)).toBe(arrival ? 2 : 1);
+    now += 600000; await s.tick(); expect(calls).toBe(terminalAttempt + (arrival ? 1 : 0));
+  });
+}
