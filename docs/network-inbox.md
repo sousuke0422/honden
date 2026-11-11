@@ -70,9 +70,10 @@ curl -H "Authorization: Bearer $HONDEN_KEY" "$HONDEN_URL/v1/inbox/read"
 
 | 口 | 必要な能力 | 結果 |
 | --- | --- | --- |
-| `GET /v1` | 有効な鍵 | 版、instance ID、許された能力と宛先、poll 間隔、本文上限 |
+| `GET /v1` | 有効な鍵 | 版、instance ID、許された能力と宛先、追加機能、poll 間隔、本文上限 |
 | `GET /v1/inbox/unread` | `inbox.read` | 己の未読数 |
 | `GET /v1/inbox/read` | `inbox.read` | 己の未読を最大 100 件と、既読にできる ID の写し |
+| `GET /v1/inbox/recent` | `inbox.read` | 己の最近の報せを既読も含め新しい順に返す。既読と ack の写しを変えない |
 | `POST /v1/inbox/ack` | `inbox.read` | 直近に読んだ己の ID を既読にする |
 | `POST /v1/inbox/write` | `inbox.write` と宛先許可 | 封筒を手元の宛先へ一度だけ届ける |
 | `POST /v1/report/submit` | `report.submit` | 己が握る仕事の報告を軍師へ届ける |
@@ -90,6 +91,44 @@ curl -H "Authorization: Bearer $HONDEN_KEY" "$HONDEN_URL/v1/inbox/read"
 curl -H "Authorization: Bearer $HONDEN_KEY" -H 'Content-Type: application/json' \
   -d '{"all":true}' "$HONDEN_URL/v1/inbox/ack"
 ```
+
+## 既読も含めて最近の報せを読み返す
+
+別の仕事が先に報せを既読にした場合など、未読が0でも返事を探したい時は `recent` を使います。
+`GET /v1` の `features` に `inbox.recent` があれば、この口を使えます。
+追加の能力名を発行する必要はなく、`inbox.read` を持つ一人の agent に開きます。
+認証した相手の受け箱だけを返し、宛先を選び直す引数はありません。
+
+```sh
+curl -H "Authorization: Bearer $HONDEN_KEY" --get \
+  --data-urlencode 'limit=20' \
+  --data-urlencode 'since=2026-11-01T00:00:00Z' \
+  "$HONDEN_URL/v1/inbox/recent"
+```
+
+`limit` は省略時20、1から100までの整数です。
+範囲外や整数でない値は400で断ります。
+`since` は省略でき、指定する場合はタイムゾーン付き ISO 8601 の刻を使います。
+その刻より後に作られた報せを絞ってから件数を制限します。
+並びは作成刻の新しい順で、同じ刻なら後から inbox に入った物が先です。
+再読に使う際は、同じ刻の報せを取りこぼさないよう、前回の刻より少し前から読み、封筒 ID で重複を除いてください。
+
+応答の `messages` は `read` と同じ封筒に `read` と `readAt` を加えた形です。
+`at` は報せの作成刻、`read` は既読か否か、`readAt` は既読にした刻を示します。
+未読の `readAt` は `null` です。
+過去の既読や取り込み元に刻の記録が無い物も `null` とし、推測した刻では埋めません。
+今後の ack と代理の既読化では、初めて既読にした刻を記録します。
+同じ ID の ack を繰り返しても刻は更新しません。
+
+```json
+{"messages":[{"id":"INSTANCE/MESSAGE","origin":"INSTANCE","sender":"karo","recipient":"visitor","type":"message","body":"返事の本文","at":"2026-11-01T01:00:00.000Z","read":true,"readAt":"2026-11-01T01:01:00.000Z"}]}
+```
+
+`recent` は既読の状態を変更せず、ack 用の写しも作成、更新しません。
+この結果だけを根拠に ack することはできません。
+`ack all` が使うのは、引き続き直近の未読の `read` が見せた範囲です。
+読み返した後でも、`read` 後に新着があれば `ack all` は断ります。
+この口の読み取りも、他の HTTP 要求と同じく本文や鍵を含めず ledger に残します。
 
 ## 封筒を届ける
 

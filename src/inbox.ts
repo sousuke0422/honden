@@ -75,6 +75,23 @@ export function list(db: Database, agent: string, opts: { all?: boolean; limit?:
   );
 }
 
+/** Read-only history: never record an acknowledgement snapshot here. */
+export function recent(db: Database, agent: string, opts: { limit?: number; since?: string } = {}): (Message & { readAt: string | null })[] {
+  requireExternalCapability(db, agent, 'inbox.read');
+  const limit = opts.limit ?? 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new NetworkError(400, 'limit must be an integer from 1 to 100');
+  let since: string | null = null;
+  if (opts.since !== undefined) {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(opts.since) || !Number.isFinite(Date.parse(opts.since)))
+      throw new NetworkError(400, 'since must be an ISO 8601 timestamp with timezone');
+    since = new Date(opts.since).toISOString();
+  }
+  return (db.query(`SELECT * FROM inbox WHERE agent = ?
+    AND (? IS NULL OR julianday(created_at) > julianday(?))
+    ORDER BY julianday(created_at) DESC, rowid DESC LIMIT ?`).all(agent, since, since, limit) as Record<string, unknown>[])
+    .map(r => ({ ...toMessage(r), readAt: r['read_at'] === null ? null : String(r['read_at']) }));
+}
+
 export interface Summary {
   total: number;
   /** type ごとの内訳。多い順。 */
@@ -230,8 +247,8 @@ export function ack(db: Database, selfId: string, ids: string[]): AckResult {
 
   if (toMark.length > 0) {
     tx(db, () => {
-      db.prepare(`UPDATE inbox SET read = 1 WHERE id IN (${toMark.map(() => '?').join(',')})`).run(
-        ...toMark,
+      db.prepare(`UPDATE inbox SET read = 1, read_at = ? WHERE read = 0 AND id IN (${toMark.map(() => '?').join(',')})`).run(
+        new Date().toISOString(), ...toMark,
       );
       journal(db, {
         actor: selfId,
@@ -427,7 +444,7 @@ export function ackFor(
   if (ids.length === 0) return { ok: true, changed: [], already: [] };
 
   tx(db, () => {
-    db.prepare(`UPDATE inbox SET read = 1 WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+    db.prepare(`UPDATE inbox SET read = 1, read_at = ? WHERE read = 0 AND id IN (${ids.map(() => '?').join(',')})`).run(new Date().toISOString(), ...ids);
     journal(db, {
       actor: opts.by,
       action: 'inbox.ack.force',

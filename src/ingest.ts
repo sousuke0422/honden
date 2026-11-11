@@ -64,7 +64,8 @@ export function ingestInbox(db: Database, path: string, doc: unknown): number {
      ON CONFLICT(id) DO UPDATE SET
        agent = excluded.agent, created_at = excluded.created_at,
        msg_type = excluded.msg_type, sender = excluded.sender,
-       body = excluded.body, read = excluded.read
+       body = excluded.body, read = excluded.read,
+       read_at = CASE WHEN inbox.read = excluded.read THEN inbox.read_at ELSE NULL END
      WHERE inbox.origin = 'import'`,
   );
   let n = 0;
