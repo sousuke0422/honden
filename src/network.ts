@@ -1,7 +1,7 @@
 /** Authenticated pull transport; never dispatches commands or launches processes. */
 import type { Database } from 'bun:sqlite';
 import { journal, tx } from './store';
-import { ack, ackAll, deliver, readOwnUnread, signal, summarize } from './inbox';
+import { ack, ackAll, deliver, readOwnUnread, recent, signal, summarize } from './inbox';
 import { submitReport } from './report';
 import { address, authenticate, instanceId, listenerAddress, NetworkError, type Capability, type Peer } from './external';
 import { startWebhookSender } from './webhook';
@@ -77,8 +77,9 @@ export function networkHandler(db: Database, opts: NetworkOptions = {}): (req: R
     let status = 500;
     try {
       peer = authenticate(db, req.headers.get('authorization'));
-      const path = new URL(req.url).pathname;
-      const knownPath = ['/v1', '/v1/', '/v1/inbox/unread', '/v1/inbox/read', '/v1/inbox/ack', '/v1/inbox/write', '/v1/report/submit'].includes(path);
+      const url = new URL(req.url);
+      const path = url.pathname;
+      const knownPath = ['/v1', '/v1/', '/v1/inbox/unread', '/v1/inbox/read', '/v1/inbox/recent', '/v1/inbox/ack', '/v1/inbox/write', '/v1/report/submit'].includes(path);
       operation = knownPath ? `${req.method} ${path}` : 'unsupported';
       const info = path === '/v1' || path === '/v1/';
       const capability: Capability | undefined = path.startsWith('/v1/inbox/')
@@ -88,12 +89,23 @@ export function networkHandler(db: Database, opts: NetworkOptions = {}): (req: R
       if (capability) requireCapability(peer, capability);
       const done = (value: unknown) => { status = 200; return json(value); };
       if (info && req.method === 'GET') return done({ version: 1, instance: local, peer: peer.name, kind: peer.kind,
-        capabilities: peer.capabilities, destinations: peer.destinations, direction: 'pull', pollSeconds: 5, bodyLimit: BODY_LIMIT });
+        capabilities: peer.capabilities, destinations: peer.destinations, direction: 'pull', pollSeconds: 5, bodyLimit: BODY_LIMIT,
+        features: peer.kind === 'agent' && peer.capabilities.includes('inbox.read') ? ['inbox.recent'] : [] });
       // A honden peer can exchange envelopes. Multi-agent inbox delegation needs a future protocol.
       if (peer.kind !== 'agent' && path !== '/v1/inbox/write') throw new NetworkError(403, 'agent operation required');
       if (req.method === 'GET' && path === '/v1/inbox/unread') {
         target = peer.name;
         return done({ unread: summarize(db, peer.name).total });
+      }
+      if (req.method === 'GET' && path === '/v1/inbox/recent') {
+        target = peer.name;
+        const limit = url.searchParams.get('limit');
+        if (url.searchParams.getAll('limit').length > 1 || url.searchParams.getAll('since').length > 1 ||
+            (limit !== null && !/^[1-9]\d*$/.test(limit))) throw new NetworkError(400, 'invalid recent parameters');
+        const messages = recent(db, peer.name, { limit: limit === null ? undefined : Number(limit), since: url.searchParams.get('since') ?? undefined })
+          .map(m => ({ id: `${local}/${m.id}`, origin: local, sender: m.sender, recipient: peer!.name,
+            type: m.type, body: m.body, at: m.createdAt, read: m.read, readAt: m.readAt }));
+        return done({ messages });
       }
       if (req.method === 'GET' && path === '/v1/inbox/read') {
         target = peer.name;
