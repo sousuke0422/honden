@@ -78,7 +78,10 @@ import { createCmd, assignTask, CMD_AUTHOR, ASSIGNER } from './dispatch';
 import {
   submitReport, submitQc, cmdDone, coverageOf, criteriaOf, listPendingReviews, formatPendingReview,
 } from './report';
-import { plan, send, record, startClocks, withNudgeLock, revive, holdForReview, HOLD_RECHECK_MS, markLimited } from './nudge';
+import {
+  plan, send, record, startClocks, nudgeSnapshot, withNudgeLock, revive,
+  holdForReview, HOLD_RECHECK_MS, markLimited,
+} from './nudge';
 import { findAbandoned, notifyAbandoned } from './abandoned';
 import { depMark, depSummary, needsOf, notifyBlocked } from './deps';
 import { findStalled, notifyStalled } from './stalled';
@@ -1082,10 +1085,14 @@ async function runNudgeInner(
   // 未読が 0 から増えた者に、続き始めを刻む。
   // 刻む前に段を数えると、初回がいきなり段 1 の「経ち 0」でなく
   // 前回の残りから始まってしまう。
-  startClocks(db, now, { wakeShogun });
+  // 時計を進める判じは一括で読んだ写しを使う。pane の列挙中に ack が
+  // 入ることはあるので、撃つ計画にはこの写しを使い回さない。
+  const autonomous = getMode(db, now).mode === 'autonomous';
+  startClocks(db, now, { wakeShogun, autonomous, snapshot: nudgeSnapshot(db) });
 
   const paneMap = paneReader();
-  let plans = plan(db, now, { wakeShogun, panes: paneMap });
+  let snapshot = nudgeSnapshot(db);
+  let plans = plan(db, now, { wakeShogun, autonomous, panes: paneMap, snapshot });
   // 段 3 の的が手すきかを見る。busy の相手に文脈消しを撃っても拒まれる
   // （codex 実測）ゆえ、塞がっておる者は素の合図へ降ろして延期する。
   // 画面だけでは見逃す（cursor は長い命の間 'ctrl+c to stop' を出さぬ）ゆえ、
@@ -1103,7 +1110,12 @@ async function runNudgeInner(
       busyReason.set(p.agent, '画面が処理中');
     }
   }
-  if (busy.size > 0) plans = plan(db, now, { wakeShogun, busy, busyReason, panes: paneMap });
+  if (busy.size > 0) {
+    // capture 中にも ack や保留解除は起こりうる。旧い未読数・状態で撃たぬよう、
+    // 再 plan の直前だけは正本を読み直す。
+    snapshot = nudgeSnapshot(db);
+    plans = plan(db, now, { wakeShogun, autonomous, busy, busyReason, panes: paneMap, snapshot });
+  }
   // 枠切れを先に読む。時刻付きは既存の待ち、時刻無しは上役の判断へ回す。
   // 未知の通知を含む無応答は、文脈を消す直前に保留する。
   for (const p of plans) {

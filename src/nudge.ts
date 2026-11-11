@@ -40,8 +40,8 @@
 
 import type { Database } from 'bun:sqlite';
 import { journal, tx } from './store';
-import { deliver, summarize, nudgeText, type Summary } from './inbox';
-import { roster, roleOrNull } from './roster';
+import { deliver, summarize, nudgeText, URGENT_TYPES, type Summary } from './inbox';
+import { roster, roleOrNull, type RosterEntry } from './roster';
 import { panes, type Pane } from './pane';
 import { isAutonomous } from './mode';
 import { checkReason } from './validate';
@@ -151,7 +151,7 @@ export interface Plan {
   holdResend?: boolean;
 }
 
-interface State {
+export interface State {
   since: string | null;
   last_at: string | null;
   last_level: number | null;
@@ -164,11 +164,92 @@ interface State {
   hold_resent_at: string | null;
 }
 
+/**
+ * 一巡の判じに使う正本の写し。
+ *
+ * 時計を進める時と計画を立てる時に、一人ずつ SQLite を引き直さぬために
+ * 持つ。写しをいつ読み直すかは runNudge が決める。
+ */
+export interface NudgeSnapshot {
+  entries: RosterEntry[];
+  summaries: Map<string, Summary>;
+  states: Map<string, State>;
+  /** いま残る未読のうち最古の created_at。山の入れ替わり判定に使う。 */
+  oldestUnread: Map<string, string>;
+}
+
+function emptyState(): State {
+  return {
+    since: null,
+    last_at: null,
+    last_level: null,
+    last_reset_at: null,
+    reset_count: 0,
+    limited_until: null,
+    hold_reason: null,
+    hold_at: null,
+    hold_resend_count: 0,
+    hold_resent_at: null,
+  };
+}
+
+/** 名簿・全員の未読集計・全員の nudge 状態を一本の query で引く。 */
+export function nudgeSnapshot(db: Database): NudgeSnapshot {
+  const rows = db.query(
+    `SELECT r.id, r.role, r.cli, r.model,
+       n.since, n.last_at, n.last_level, n.last_reset_at,
+       COALESCE(n.reset_count, 0) reset_count, n.limited_until,
+       n.hold_reason, n.hold_at,
+       COALESCE(n.hold_resend_count, 0) hold_resend_count, n.hold_resent_at,
+       i.msg_type, count(i.id) c, MIN(i.created_at) oldest
+     FROM roster r
+     LEFT JOIN nudge n ON n.agent = r.id
+     LEFT JOIN inbox i ON i.agent = r.id AND i.read = 0
+     GROUP BY r.id, i.msg_type
+     ORDER BY r.id, c DESC, i.msg_type`,
+  ).all() as (RosterEntry & State & { msg_type: string | null; c: number; oldest: string | null })[];
+
+  const entries: RosterEntry[] = [];
+  const summaries = new Map<string, Summary>();
+  const states = new Map<string, State>();
+  const oldestUnread = new Map<string, string>();
+  for (const row of rows) {
+    let summary = summaries.get(row.id);
+    if (!summary) {
+      entries.push({ id: row.id, role: row.role, cli: row.cli, model: row.model });
+      summary = { total: 0, byType: [], urgent: false };
+      summaries.set(row.id, summary);
+      states.set(row.id, {
+        since: row.since,
+        last_at: row.last_at,
+        last_level: row.last_level,
+        last_reset_at: row.last_reset_at,
+        reset_count: row.reset_count,
+        limited_until: row.limited_until,
+        hold_reason: row.hold_reason,
+        hold_at: row.hold_at,
+        hold_resend_count: row.hold_resend_count,
+        hold_resent_at: row.hold_resent_at,
+      });
+    }
+    if (row.msg_type !== null) {
+      summary.total += row.c;
+      summary.byType.push({ type: row.msg_type, count: row.c });
+      if (URGENT_TYPES.has(row.msg_type)) summary.urgent = true;
+      const oldest = oldestUnread.get(row.id);
+      if (row.oldest !== null && (oldest === undefined || row.oldest < oldest)) {
+        oldestUnread.set(row.id, row.oldest);
+      }
+    }
+  }
+  return { entries, summaries, states, oldestUnread };
+}
+
 export function stateOf(db: Database, agent: string): State {
   return (
     (db.query('SELECT since, last_at, last_level, last_reset_at, COALESCE(reset_count, 0) reset_count, limited_until, hold_reason, hold_at, COALESCE(hold_resend_count, 0) hold_resend_count, hold_resent_at FROM nudge WHERE agent = ?').get(agent) as
       | State
-      | null) ?? { since: null, last_at: null, last_level: null, last_reset_at: null, reset_count: 0, limited_until: null, hold_reason: null, hold_at: null, hold_resend_count: 0, hold_resent_at: null }
+      | null) ?? emptyState()
   );
 }
 
@@ -225,6 +306,8 @@ export function plan(
     busy?: Set<string>;
     /** 塞がっておると見た根拠（画面か、台帳か、lease か）。台帳へ残すため。 */
     busyReason?: Map<string, string>;
+    /** 同じ判じの中で読み取った正本の写し。 */
+    snapshot?: NudgeSnapshot;
   } = {},
 ): Plan[] {
   const p = opts.panes ?? panes();
@@ -232,9 +315,10 @@ export function plan(
   const autonomous = opts.autonomous ?? isAutonomous(db, now);
   const out: Plan[] = [];
 
-  for (const entry of roster(db)) {
-    const s: Summary = summarize(db, entry.id);
-    const st = stateOf(db, entry.id);
+  const snapshot = opts.snapshot ?? nudgeSnapshot(db);
+  for (const entry of snapshot.entries) {
+    const s = snapshot.summaries.get(entry.id)!;
+    const st = snapshot.states.get(entry.id) ?? emptyState();
 
     if (s.total === 0) continue;
 
@@ -603,15 +687,16 @@ export async function send(p: Plan): Promise<{ ok: boolean; err?: string }> {
 export function startClocks(
   db: Database,
   now: Date,
-  opts: { autonomous?: boolean; wakeShogun?: boolean } = {},
+  opts: { autonomous?: boolean; wakeShogun?: boolean; snapshot?: NudgeSnapshot } = {},
 ): { live: string[]; quiet: string[] } {
   const autonomous = opts.autonomous ?? isAutonomous(db, now);
   const silent = autonomous || opts.wakeShogun ? new Set<string>() : new Set([ATTENDED_SILENT]);
   const live: string[] = [];
   const quiet: string[] = [];
-  for (const e of roster(db)) {
-    if (summarize(db, e.id).total > 0) {
-      if (!silent.has(e.id)) markSince(db, e.id, now);
+  const snapshot = opts.snapshot ?? nudgeSnapshot(db);
+  for (const e of snapshot.entries) {
+    if (snapshot.summaries.get(e.id)!.total > 0) {
+      if (!silent.has(e.id)) markSinceSnapshot(db, e.id, now, snapshot);
       live.push(e.id);
     } else {
       quiet.push(e.id);
@@ -620,6 +705,33 @@ export function startClocks(
   // 片付いた者の覚えは消す。残すと次の未読がいきなり段 3 から始まる。
   forget(db, quiet);
   return { live, quiet };
+}
+
+/** markSince と同じ判じを、既に引いた state と最古未読から行う。 */
+function markSinceSnapshot(db: Database, agent: string, now: Date, snapshot: NudgeSnapshot): void {
+  const st = snapshot.states.get(agent) ?? emptyState();
+  const oldest = snapshot.oldestUnread.get(agent);
+  const at = now.toISOString();
+  if (st.since && oldest && oldest > st.since) {
+    db.prepare(
+      `UPDATE nudge SET since = ?, last_level = NULL, hold_reason = NULL, hold_at = NULL,
+         hold_resend_count = 0, hold_resent_at = NULL WHERE agent = ?`,
+    ).run(at, agent);
+    st.since = at;
+    st.last_level = null;
+    st.hold_reason = null;
+    st.hold_at = null;
+    st.hold_resend_count = 0;
+    st.hold_resent_at = null;
+    snapshot.states.set(agent, st);
+    return;
+  }
+  db.prepare(
+    `INSERT INTO nudge(agent, since) VALUES (?,?)
+     ON CONFLICT(agent) DO UPDATE SET since = COALESCE(nudge.since, excluded.since)`,
+  ).run(agent, at);
+  if (st.since === null) st.since = at;
+  snapshot.states.set(agent, st);
 }
 
 

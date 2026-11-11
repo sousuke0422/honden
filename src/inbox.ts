@@ -89,7 +89,7 @@ export interface Summary {
  * `clear_command` と `cmd_new` は手を止めるべきもの。
  * `report_received` は区切りまで待てる。
  */
-const URGENT_TYPES = new Set([
+export const URGENT_TYPES = new Set([
   'clear_command',
   'cmd_new',
   'cmd_update',
