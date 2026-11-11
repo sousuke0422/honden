@@ -158,3 +158,96 @@ describe('nudge の一巡写し', () => {
 function summarizeFromRows(count: number, type: string): Summary {
   return { total: count, byType: [{ type, count }], urgent: true };
 }
+
+type ClockSeed = {
+  unreadAt: Date;
+  state?: {
+    since: Date;
+    lastLevel?: number;
+    holdReason?: 'undated-limit' | 'unresponsive';
+    holdAt?: Date;
+    holdResendCount?: number;
+    holdResentAt?: Date;
+  };
+};
+
+function clockDb(seed: ClockSeed) {
+  const db = seeded();
+  deliver(db, {
+    id: 'clock-mail',
+    agent: 'ashigaru1',
+    at: seed.unreadAt.toISOString(),
+    type: 'cmd_update',
+    sender: 'karo',
+    body: '時計の比較',
+  });
+  if (seed.state) {
+    db.prepare(
+      `INSERT INTO nudge(
+         agent, since, last_at, last_level, last_reset_at, reset_count,
+         limited_until, hold_reason, hold_at, hold_resend_count, hold_resent_at
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      'ashigaru1',
+      seed.state.since.toISOString(),
+      T0.toISOString(),
+      seed.state.lastLevel ?? 2,
+      T0.toISOString(),
+      1,
+      null,
+      seed.state.holdReason ?? null,
+      seed.state.holdAt?.toISOString() ?? null,
+      seed.state.holdResendCount ?? 0,
+      seed.state.holdResentAt?.toISOString() ?? null,
+    );
+  }
+  return db;
+}
+
+function nudgeRow(db: ReturnType<typeof seeded>) {
+  return db.query('SELECT * FROM nudge WHERE agent = ?').get('ashigaru1');
+}
+
+function expectSnapshotClockToMatchMarkSince(seed: ClockSeed) {
+  const oldPath = clockDb(seed);
+  const snapshotPath = clockDb(seed);
+  markSince(oldPath, 'ashigaru1', NOW);
+  startClocks(snapshotPath, NOW, {
+    autonomous: true,
+    snapshot: nudgeSnapshot(snapshotPath),
+  });
+  expect(nudgeRow(snapshotPath)).toEqual(nudgeRow(oldPath));
+}
+
+describe('snapshot の時計更新は markSince と同じ', () => {
+  test('since が無ければ同じ刻を始点にする', () => {
+    expectSnapshotClockToMatchMarkSince({ unreadAt: T0 });
+  });
+
+  test('最古未読が since より新しければ時計を戻す', () => {
+    expectSnapshotClockToMatchMarkSince({
+      unreadAt: new Date(T0.getTime() + 60_000),
+      state: { since: T0 },
+    });
+  });
+
+  test('最古未読が since と同じか古ければ時計を保つ', () => {
+    expectSnapshotClockToMatchMarkSince({
+      unreadAt: T0,
+      state: { since: new Date(T0.getTime() + 60_000) },
+    });
+  });
+
+  test('新しい未読の山では保留を消す', () => {
+    expectSnapshotClockToMatchMarkSince({
+      unreadAt: new Date(T0.getTime() + 60_000),
+      state: {
+        since: T0,
+        holdReason: 'undated-limit',
+        holdAt: T0,
+        holdResendCount: 2,
+        holdResentAt: new Date(T0.getTime() + 30_000),
+      },
+    });
+  });
+});
