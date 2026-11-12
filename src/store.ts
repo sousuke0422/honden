@@ -373,6 +373,8 @@ CREATE TABLE IF NOT EXISTS inbox (
   body       TEXT NOT NULL,
   read       INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0,1)),
   read_at    TEXT,
+  in_reply_to TEXT,
+  written_by TEXT,
   -- report と同じ理由。影が実運用の報せを上書きせぬため。
   origin     TEXT NOT NULL DEFAULT 'native' CHECK (origin IN ('native','import'))
 );
@@ -712,6 +714,9 @@ function migrate(db: Database): void {
   addColumn(db, 'report', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'inbox', 'origin', "TEXT NOT NULL DEFAULT 'native'");
   addColumn(db, 'inbox', 'read_at', 'TEXT');
+  addColumn(db, 'inbox', 'in_reply_to', 'TEXT');
+  addColumn(db, 'inbox', 'written_by', 'TEXT');
+  db.run('CREATE INDEX IF NOT EXISTS ix_inbox_reply ON inbox(in_reply_to)');
   addColumn(db, 'nudge', 'reset_count', 'INTEGER NOT NULL DEFAULT 0');
   addColumn(db, 'nudge', 'limited_until', 'TEXT');
   addColumn(db, 'nudge', 'hold_reason', 'TEXT');

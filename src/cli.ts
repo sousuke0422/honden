@@ -30,6 +30,7 @@
 import { openStore, tx, journal } from './store';
 import { roster, isEmpty, roleOf } from './roster';
 import { externalWorkers, externalCliProblem, externalAgent } from './external';
+import { replyTarget } from './mail';
 import { summarize, nudgeText, deliver, signal } from './inbox';
 import { isAutonomous } from './mode';
 import { validate, explain, type Schema } from './validate';
@@ -67,6 +68,7 @@ const inboxSchema = (known: readonly string[]): Schema => ({
   from: { required: true, about: '差出人。布陣外なら review_session など、役職を騙らぬ名' },
   type: { required: true, oneOf: TYPES, about: '相手が処理を知っている種別' },
   body: { required: true, about: '本文。長いものは EOF 側で渡すとよい' },
+  'reply-to': { about: '返事の元の報せ。己が受けた物か認証した己が送った物だけ' },
 });
 
 /** 差出人名として許す形。空白や制御文字を弾く。 */
@@ -258,7 +260,7 @@ export function inboxWrite(
     };
   }
 
-  const v = picked.value as { to: string; from: string; type: string; body: string };
+  const v = picked.value as { to: string; from: string; type: string; body: string; 'reply-to'?: string };
   const externalProblem = externalCliProblem(db, ctx.selfId) ?? externalCliProblem(db, v.from);
   if (externalProblem) return { code: EXIT_INVALID, err: externalProblem };
 
@@ -374,6 +376,15 @@ export function inboxWrite(
 
   const at = new Date().toISOString();
   const id = `msg_${at.replace(/[-:.TZ]/g, '')}_${Bun.hash(v.body + at).toString(16).slice(0, 8)}`;
+  let parent: string | undefined;
+  let local = '';
+  if (v['reply-to'] !== undefined) {
+    try {
+      if (!ctx.insideFormation || !ctx.selfId) throw new Error('unknown writer');
+      local = (db.query('SELECT id FROM network_instance WHERE singleton = 1').get() as { id: string } | null)?.id ?? '';
+      parent = replyTarget(db, { kind: 'native', id: ctx.selfId, local }, v['reply-to']);
+    } catch { return { code: EXIT_INVALID, err: '返事の元を参照できぬ。書き込みは行っておらぬ。' }; }
+  }
   const summary =
     `  宛: ${v.to}  差出: ${v.from}  種: ${v.type}\n` +
     `  本文 ${[...v.body].length} 文字 / ${v.body.replace(/\n$/, '').split('\n').length} 行\n` +
@@ -382,7 +393,9 @@ export function inboxWrite(
   if (dryRun) return { code: EXIT_OK, out: `${summary}\n  → 書き込んでおらぬ (--dry-run)` };
 
   tx(db, () => {
-    deliver(db, { id, agent: v.to, at, type: v.type, sender: v.from, body: v.body });
+    if (v['reply-to'] !== undefined) parent = replyTarget(db, { kind: 'native', id: ctx.selfId!, local }, v['reply-to']);
+    deliver(db, { id, agent: v.to, at, type: v.type, sender: v.from, body: v.body, inReplyTo: parent,
+      writtenBy: ctx.insideFormation ? ctx.selfId : undefined });
     journal(db, { actor: v.from, action: 'inbox.write', target: v.to, detail: v.type });
   });
   // 取引を出てから合図を上げる。常駐しておる芯 (core/watch) が起きる。

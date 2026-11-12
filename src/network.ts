@@ -5,11 +5,12 @@ import { ack, ackAll, deliver, readOwnUnread, recent, signal, summarize } from '
 import { submitReport } from './report';
 import { address, authenticate, instanceId, listenerAddress, NetworkError, type Capability, type Peer } from './external';
 import { startWebhookSender } from './webhook';
+import { mailList, mailMessage, mailThread, replyTarget, sentMail } from './mail';
 
 export const BODY_LIMIT = 64 * 1024;
 export const ENVELOPE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 type NetworkOptions = { now?: () => number };
-export type Envelope = { id: string; origin: string; sender: string; recipient: string; type: string; body: string; at: string };
+export type Envelope = { id: string; origin: string; sender: string; recipient: string; type: string; body: string; at: string; inReplyTo?: string };
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 function requireCapability(peer: Peer, capability: Capability) {
   if (!peer.capabilities.includes(capability)) throw new NetworkError(403, 'capability denied');
@@ -56,7 +57,9 @@ function envelope(input: Record<string, unknown>, peer: Peer, now: number): Enve
   if (Math.abs(at - now) > ENVELOPE_CLOCK_SKEW_MS) throw new NetworkError(400, 'timestamp must be within 5 minutes of receipt');
   address(e.recipient);
   // Canonical field order makes retries independent of JSON key order.
-  return { id: e.id, origin: e.origin, sender: e.sender, recipient: e.recipient, type: e.type, body: e.body, at: e.at };
+  if (input.inReplyTo !== undefined && (typeof input.inReplyTo !== 'string' || input.inReplyTo.length > 512)) throw new NetworkError(400, 'invalid inReplyTo');
+  return { id: e.id, origin: e.origin, sender: e.sender, recipient: e.recipient, type: e.type, body: e.body, at: e.at,
+    ...(input.inReplyTo !== undefined ? { inReplyTo: input.inReplyTo as string } : {}) };
 }
 function duplicate(db: Database, peer: Peer, e: Envelope) {
   const old = db.query('SELECT peer,payload FROM network_envelope WHERE id = ?').get(e.id) as { peer: string; payload: string } | null;
@@ -80,7 +83,8 @@ export function networkHandler(db: Database, opts: NetworkOptions = {}): (req: R
       const url = new URL(req.url);
       const path = url.pathname;
       const knownPath = ['/v1', '/v1/', '/v1/inbox/unread', '/v1/inbox/read', '/v1/inbox/recent', '/v1/inbox/ack', '/v1/inbox/write', '/v1/report/submit'].includes(path);
-      operation = knownPath ? `${req.method} ${path}` : 'unsupported';
+      const mailPath = path.startsWith('/v1/inbox/messages/') ? '/v1/inbox/messages/:id' : path.startsWith('/v1/inbox/thread/') ? '/v1/inbox/thread/:id' : null;
+      operation = mailPath ? `${req.method} ${mailPath}` : (knownPath || ['/v1/inbox/messages', '/v1/inbox/sent'].includes(path)) ? `${req.method} ${path}` : 'unsupported';
       const info = path === '/v1' || path === '/v1/';
       const capability: Capability | undefined = path.startsWith('/v1/inbox/')
         ? (path === '/v1/inbox/write' ? 'inbox.write' : 'inbox.read')
@@ -90,9 +94,21 @@ export function networkHandler(db: Database, opts: NetworkOptions = {}): (req: R
       const done = (value: unknown) => { status = 200; return json(value); };
       if (info && req.method === 'GET') return done({ version: 1, instance: local, peer: peer.name, kind: peer.kind,
         capabilities: peer.capabilities, destinations: peer.destinations, direction: 'pull', pollSeconds: 5, bodyLimit: BODY_LIMIT,
-        features: peer.kind === 'agent' && peer.capabilities.includes('inbox.read') ? ['inbox.recent'] : [] });
+        features: [...(peer.kind === 'agent' && peer.capabilities.includes('inbox.read') ? ['inbox.recent', 'inbox.messages', 'inbox.sent', 'inbox.thread'] : []),
+          ...(peer.capabilities.includes('inbox.write') ? ['inbox.inReplyTo'] : [])] });
       // A honden peer can exchange envelopes. Multi-agent inbox delegation needs a future protocol.
       if (peer.kind !== 'agent' && path !== '/v1/inbox/write') throw new NetworkError(403, 'agent operation required');
+      if (req.method === 'GET' && (mailPath || path === '/v1/inbox/messages' || path === '/v1/inbox/sent')) {
+        target = peer.name;
+        const actor = { kind: 'network' as const, id: peer.name, local };
+        if (path === '/v1/inbox/messages') return done(mailList(db, actor, url.searchParams));
+        if (path === '/v1/inbox/sent') return done(sentMail(db, actor, url.searchParams));
+        let ref: string;
+        try { ref = decodeURIComponent(path.slice(mailPath === '/v1/inbox/messages/:id' ? '/v1/inbox/messages/'.length : '/v1/inbox/thread/'.length)); }
+        catch { throw new NetworkError(404, 'message unavailable'); }
+        if (mailPath === '/v1/inbox/messages/:id') return done(mailMessage(db, actor, ref));
+        return done(mailThread(db, actor, ref, url.searchParams));
+      }
       if (req.method === 'GET' && path === '/v1/inbox/unread') {
         target = peer.name;
         return done({ unread: summarize(db, peer.name).total });
@@ -137,6 +153,7 @@ export function networkHandler(db: Database, opts: NetworkOptions = {}): (req: R
       if (path === '/v1/inbox/write' || path === '/v1/report/submit') {
         // Validate freshness even for retries. Stale envelopes never bypass the receipt window.
         const e = envelope(input, peer, now());
+        if (path === '/v1/report/submit' && e.inReplyTo !== undefined) throw new NetworkError(400, 'inReplyTo is not supported for reports');
         target = e.recipient;
         const recipient = address(e.recipient);
         if (recipient.peer) throw new NetworkError(403, 'outbound forwarding is not enabled');
@@ -157,9 +174,10 @@ export function networkHandler(db: Database, opts: NetworkOptions = {}): (req: R
           } else {
             if (!db.query('SELECT 1 FROM roster WHERE id = ?').get(e.recipient)) throw new NetworkError(403, 'destination no longer exists');
             const id = `external:${e.id}`;
+            const inReplyTo = e.inReplyTo === undefined ? undefined : replyTarget(db, { kind: 'network', id: peer!.name, local }, e.inReplyTo);
             // Caller-selected event types never reach the internal command/event namespace.
             deliver(db, { id, agent: e.recipient, at: e.at, sender: e.sender, type: 'external_notice',
-              body: `[external:${peer!.name} type:${e.type} id:${e.id}]\n${e.body}` });
+              body: `[external:${peer!.name} type:${e.type} id:${e.id}]\n${e.body}`, inReplyTo });
             remember(db, peer!, e, id);
           }
           return { duplicate: false };

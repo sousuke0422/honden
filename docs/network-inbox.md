@@ -74,6 +74,10 @@ curl -H "Authorization: Bearer $HONDEN_KEY" "$HONDEN_URL/v1/inbox/read"
 | `GET /v1/inbox/unread` | `inbox.read` | 己の未読数 |
 | `GET /v1/inbox/read` | `inbox.read` | 己の未読を最大 100 件と、既読にできる ID の写し |
 | `GET /v1/inbox/recent` | `inbox.read` | 己の最近の報せを既読も含め新しい順に返す。既読と ack の写しを変えない |
+| `GET /v1/inbox/messages` | `inbox.read` | 己の送受信の一覧。本文は返さない |
+| `GET /v1/inbox/messages/<id>` | `inbox.read` | 己が受けた物か、認証した己が送った物の本文を一通返す |
+| `GET /v1/inbox/sent` | `inbox.read` | 認証した己が網の口で送った報せの一覧と、宛先の既読 |
+| `GET /v1/inbox/thread/<id>` | `inbox.read` | 返信 ID を辿った根から、見える報せの鎖を古い順で返す |
 | `POST /v1/inbox/ack` | `inbox.read` | 直近に読んだ己の ID を既読にする |
 | `POST /v1/inbox/write` | `inbox.write` と宛先許可 | 封筒を手元の宛先へ一度だけ届ける |
 | `POST /v1/report/submit` | `report.submit` | 己が握る仕事の報告を軍師へ届ける |
@@ -129,6 +133,81 @@ curl -H "Authorization: Bearer $HONDEN_KEY" --get \
 `ack all` が使うのは、引き続き直近の未読の `read` が見せた範囲です。
 読み返した後でも、`read` 後に新着があれば `ack all` は断ります。
 この口の読み取りも、他の HTTP 要求と同じく本文や鍵を含めず ledger に残します。
+
+## 一覧から本文と返事の鎖を読む
+
+メールのように送受信を見渡す時は `GET /v1/inbox/messages` を使います。
+`limit` は既定20、上限100で、`with=相手名` で相手を絞れます。
+送った物は宛先、受けた物は差出人で絞り、作成刻の新しい順に返します。
+`GET /v1/inbox/sent` は送った物だけを同じ順で返し、`limit`、`with` に加え、`recent` と同じ意味の `since` を使えます。
+`with` は己に見える履歴の絞り込みであり、見える範囲を増やしません。
+過去の宛先が現在の `destinations` から外れていても己の送信履歴は読めます。
+形式の正しい未知の相手名では空の一覧を返します。
+
+```sh
+curl -H "Authorization: Bearer $HONDEN_KEY" "$HONDEN_URL/v1/inbox/messages?limit=20&with=karo"
+curl -H "Authorization: Bearer $HONDEN_KEY" "$HONDEN_URL/v1/inbox/sent?limit=20&with=karo"
+```
+
+一覧の各行は `id`、`direction`、`sender`、`recipient`、`type`、`at`、`preview`、`read`、`readAt`、`inReplyTo` です。
+`direction` は `received` または `sent`。
+`preview` は本文の冒頭一行を Unicode の符号位置で200文字までに切った物で、本文の `body` は一覧に含めません。
+`read` と `readAt` は、その報せの宛先が既読にしたかと、その刻を示します。
+本文は `GET /v1/inbox/messages/<id>` で一通ずつ取り、一覧の欄に `origin` と `body` を加えた形で返します。
+`origin` は既存の受信の返しと同じく、履歴を返す手元の instance ID です。
+
+新しい口の `id` は、受信箱に保存した報せの `instance ID/手元の ID` です。
+差出を表す名前ではなく不透明な ID として扱い、URL の一部分へ載せる時は全体を符号化してください。
+送信時の元の封筒 ID（`visitor/…`）も、己の送信分に限って本文取得、鎖、返事の元の参照に使えます。
+本文取得は、存在しない ID と見られない ID に同じ404と `message unavailable` を返します。
+
+```sh
+# HONDEN_MESSAGE_ID は一覧などで得た ID
+encoded="$(python3 -c 'import sys; from urllib.parse import quote; print(quote(sys.argv[1], safe=""))' "$HONDEN_MESSAGE_ID")"
+curl -H "Authorization: Bearer $HONDEN_KEY" "$HONDEN_URL/v1/inbox/messages/$encoded"
+curl -H "Authorization: Bearer $HONDEN_KEY" "$HONDEN_URL/v1/inbox/thread/$encoded?limit=100"
+```
+
+送った物の判定には `network_envelope.peer` と `inbox_id` を使い、認証した相手が `POST /v1/inbox/write` で受信箱へ配った記録だけを返します。
+差出人の文字列や封筒 ID の接頭辞では判定しないため、同名の差出人を持つ手元の報せや他の相手の物は送信履歴へ入りません。
+送信分の本文と種別は、受信箱へ格納した `external_notice` の包みではなく、元の封筒の値を返します。
+
+`thread/<id>` は `inReplyTo` を辿って根を求め、根から繋がる返事を作成刻の古い順で返します。
+同じ刻は inbox への到着順です。
+鎖の中でも、己が受けた物か、認証した己が送った物だけを返します。
+見られない物は省き、見られない親を指す `inReplyTo` も `null` にして、その ID や差出人を漏らしません。
+選んだ起点自体が見られなければ本文取得と同じ404です。
+
+鎖の深さは64段、探索する件数は1000件、返す件数は `limit` の既定20、上限100です。
+件数や下への探索の上限で切れた場合は `truncated: true` を付けます。
+起点から根までが64段を超えた場合は413、保存された鎖に自身や祖先への輪があれば409で止めます。
+上限で切れた物も、見える ID が分かれば本文を一通ずつ取得できます。
+
+どの読み取りも既読と ack の写しを変えません。
+`read` と `recent` の返しの形は変えず、従来の未読処理はそのまま使えます。
+一覧や鎖を読んだことを根拠に `ack all` はできません。
+必要な能力は `inbox.read` で、`GET /v1` の `features` に `inbox.messages`、`inbox.sent`、`inbox.thread` が載ります。
+ledger は口と結果を記録し、ID を含む可変の道は `:id` に置き換え、本文や鍵は残しません。
+
+## 返事の元を付ける
+
+`POST /v1/inbox/write` の封筒に任意の `inReplyTo` を付けられます。
+必要な能力は通常の書き込みと同じ `inbox.write` で、対応する `features` は `inbox.inReplyTo` です。
+付けられるのは己が受けた物か、認証した己が送った物の ID だけです。
+他者の物と存在しない物は、どちらも403と `reply target unavailable` で断ります。
+省略した書き込みは従来どおりで、同じ封筒 ID の内容や返事の元を後から変更することはできません。
+
+```json
+{"id":"visitor/reply-1","origin":"visitor","sender":"visitor","recipient":"karo","type":"message","body":"先の問いへの返事です。","at":"2026-11-12T00:00:00.000Z","inReplyTo":"INSTANCE/MESSAGE"}
+```
+
+手元の者は `honden inbox write --to visitor --from karo --type cmd_update --body '返事' --reply-to ID` のように付けます。
+手元の ID と網の口の ID を使えます。
+布陣内で確かめた書き手を `written_by` に記録し、差出人名だけで己の送信分とは判じません。
+過去の手元の送信で書き手の証しが無い物を、名前の一致で後から補うこともしません。
+そのような物や布陣外で書き手を確かめられない場合は、返事の元への参照を断ります。
+己が受けた物は古い記録でも参照できます。
+返事の元は既存の報せだけを指し、保存済みの参照先を更新する口はありません。
 
 ## 封筒を届ける
 
