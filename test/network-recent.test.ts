@@ -120,7 +120,7 @@ test('recent requires authentication and inbox.read, including discovery and rev
   expect((await request('/v1/inbox/recent', undefined, null)).status).toBe(401);
   expect((await request('/v1/inbox/recent', undefined, 'invalid-test-token')).status).toBe(401);
   expect((await request('/v1/inbox/recent', undefined, writer)).status).toBe(403);
-  expect((await (await request('/v1', undefined, writer)).json()).features).toEqual([]);
+  expect((await (await request('/v1', undefined, writer)).json()).features).toEqual(['inbox.inReplyTo']);
   changeKey(db, 'shogun', 'visitor', true);
   expect((await request('/v1/inbox/recent')).status).toBe(401);
 });

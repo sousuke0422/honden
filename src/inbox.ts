@@ -465,15 +465,17 @@ export function ackFor(
  */
 export function deliver(
   db: Database,
-  msg: { id: string; agent: string; at: string; type: string; sender: string; body: string },
+  msg: { id: string; agent: string; at: string; type: string; sender: string; body: string; inReplyTo?: string; writtenBy?: string },
 ): void {
-  db.prepare('INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read) VALUES (?,?,?,?,?,?,0)').run(
+  db.prepare('INSERT INTO inbox(id, agent, created_at, msg_type, sender, body, read, in_reply_to, written_by) VALUES (?,?,?,?,?,?,0,?,?)').run(
     msg.id,
     msg.agent,
     msg.at,
     msg.type,
     msg.sender,
     msg.body,
+    msg.inReplyTo ?? null,
+    msg.writtenBy ?? null,
   );
 }
 
