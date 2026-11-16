@@ -27,6 +27,11 @@ Codex CLI provides tools for file operations, code execution, and system interac
 5. **名乗りは pane から来る**: `.codex/hooks/session-start.sh` reads `@agent_id` off `$TMUX_PANE` and injects it.
    It is a determined fact, not a guess — do not re-derive it from `HONDEN_AGENT_ID` or from the task text.
    Inside the 布陣, pane wins over the environment variable; when the two disagree honden takes the pane and says so.
+6. **長い命を背景に回して見回るな**: build・試験・install のように数分かかる命は、背景の terminal に回して
+   `write_stdin` を空の文字で撃ち「まだか」と覗く形を取らぬ。覗く一回ごとに、それまでの文脈を丸ごと送り直す。
+   2026-11 の codex の足軽二人の記録では、model の呼び出しの約四割がこの見回りで、待つだけのために一日で
+   15M〜35M の入力を食い、共有の枠を枯らした。数分かかる命は `timeout` で包んで前で撃ち、終わるまで一度で待て
+   （`yield_time` を命の見込みの時間より長く取る）。どうしても背景に回す時は、見回りの間合いを数分ずつ空けよ。
 
 ## Permission Model
 
